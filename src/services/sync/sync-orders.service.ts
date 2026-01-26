@@ -1,5 +1,6 @@
 import prisma from '../../lib/prisma';
 import { PrestaShopClient } from '../prestashop/prestashop-client';
+import { decrypt } from '../../lib/encryption';
 
 export interface SyncResult {
   success: boolean;
@@ -51,9 +52,12 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
     const config = (shop.configJson as any) || {};
     const authType = config.authType || 'WEB_SERVICE';
 
+    // Odszyfruj klucze API przed użyciem
+    const apiKey = decrypt(shop.apiKey);
+
     const client = new PrestaShopClient({
       baseUrl: shop.baseUrl,
-      apiKey: shop.apiKey,
+      apiKey: apiKey,
       authType,
       adminApiConfig: authType === 'ADMIN_API' ? config.adminApi : undefined,
     });

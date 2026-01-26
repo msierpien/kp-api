@@ -17,38 +17,14 @@ export const syncLogsQuerySchema = z.object({
 });
 
 // Shops / integrations
-export const shopConfigSchema = z.object({
-  orderSync: z.object({
-    enabled: z.boolean().default(true),
-    intervalMinutes: z.coerce.number().int().min(1).max(1440).default(10),
-    orderStatus: z.string().min(1).default('PAID'),
-  }),
-  adminApi: z
-    .object({
-      clientId: z.string().optional().nullable(),
-      clientSecret: z.string().optional().nullable(),
-      scopes: z.array(z.string()).default([]),
-    })
-    .optional()
-    .default({ clientId: null, clientSecret: null, scopes: [] }),
-});
-
 export const shopBaseSchema = z.object({
   name: z.string().min(1),
-  platform: z.enum(['PRESTASHOP', 'WOOCOMMERCE', 'SHOPIFY', 'MAGENTO', 'OTHER']).default('PRESTASHOP'),
-  baseUrl: z.string().url(),
-  apiKey: z.string().optional().nullable(),
+  platform: z.enum(['PRESTASHOP', 'WOOCOMMERCE', 'SHOPIFY', 'MAGENTO', 'MANUAL', 'CUSTOM_API', 'OTHER']).default('PRESTASHOP'),
+  baseUrl: z.string().default(''), // Opcjonalny dla MANUAL
+  apiKey: z.string().optional().nullable().default(''),
   apiSecret: z.string().optional().nullable(),
   status: z.enum(['ACTIVE', 'INACTIVE']).default('ACTIVE'),
-  authType: z.enum(['WEB_SERVICE', 'ADMIN_API']).default('WEB_SERVICE'),
-  config: shopConfigSchema.default({
-    orderSync: {
-      enabled: true,
-      intervalMinutes: 10,
-      orderStatus: 'PAID',
-    },
-    adminApi: { clientId: null, clientSecret: null, scopes: [] },
-  }),
+  config: z.any().optional().default({}), // Elastyczna konfiguracja JSON
 });
 
 export const createShopSchema = shopBaseSchema;
@@ -139,3 +115,27 @@ export type TemplateFormInput = z.infer<typeof templateFormSchema>;
 export type TemplateIdParams = z.infer<typeof templateIdParamsSchema>;
 export type CreateTemplateInput = z.infer<typeof createTemplateSchema>;
 export type UpdateTemplateMetadataInput = z.infer<typeof updateTemplateMetadataSchema>;
+
+// Manual Orders
+export const createManualOrderItemSchema = z.object({
+  sku: z.string().min(1),
+  productName: z.string().min(1),
+  quantity: z.number().int().positive().default(1),
+  unitPrice: z.number().positive().optional(),
+});
+
+export const createManualOrderSchema = z.object({
+  shopId: z.string().min(1),
+  orderReference: z.string().min(1),
+  customerEmail: z.string().email(),
+  customerName: z.string().optional().nullable(),
+  totalPaid: z.number().positive(),
+  currency: z.string().default('PLN'),
+  language: z.string().default('pl'),
+  createdAtShop: z.string().datetime().optional(), // ISO string
+  items: z.array(createManualOrderItemSchema).min(1),
+  notes: z.string().optional(),
+});
+
+export type CreateManualOrderInput = z.infer<typeof createManualOrderSchema>;
+export type CreateManualOrderItemInput = z.infer<typeof createManualOrderItemSchema>;

@@ -47,11 +47,17 @@
 - [ ] Endpoint `PUT /admin/cases/:id/status` - zarządzanie workflow
 - [ ] Endpoint `POST /admin/cases/:id/notes` - notatki wewnętrzne
 
-### 2. Templates Management - pełny CRUD
-- [ ] Endpoint `POST /admin/templates` - tworzenie nowego szablonu
-- [ ] Endpoint `PUT /admin/templates/:id` - edycja metadanych
-- [ ] Endpoint `DELETE /admin/templates/:id` - usuwanie szablonu
-- [ ] Endpoint `POST /admin/templates/:id/duplicate` - duplikacja
+### 2. Templates Management - pełny CRUD ✅ UKOŃCZONE
+- [x] Endpoint `POST /admin/templates` - tworzenie nowego szablonu
+- [x] Endpoint `PUT /admin/templates/:id` - edycja metadanych
+- [x] Endpoint `DELETE /admin/templates/:id` - usuwanie szablonu
+- [x] Frontend: modal tworzenia, edycji, usuwania szablonów
+
+### 3. Manual Orders - ręczne zamówienia ✅ UKOŃCZONE
+- [x] Rozszerzenie `ShopPlatform` o MANUAL i CUSTOM_API
+- [x] Endpoint `POST /admin/orders/manual` - tworzenie ręcznego zamówienia
+- [x] Walidacja: tylko dla sklepów typu MANUAL
+- [x] Automatyczne tworzenie cases dla personalizowanych produktów
 
 ## 🚧 DO ZROBIENIA - Priorytet 2 (Frontend Admin)
 
@@ -62,16 +68,20 @@
 - [ ] Workflow statusów z przyciskami akcji
 - [ ] Historia zmian i notatki
 
-### 4. Zarządzanie integracjami - wiele sklepów
-- [ ] Lista wszystkich sklepów w tabeli
-- [ ] Modal dodawania nowego sklepu
-- [ ] Edycja i usuwanie sklepów
+### 4. Zarządzanie integracjami - wiele sklepów ✅ UKOŃCZONE
+- [x] Lista wszystkich sklepów w tabeli
+- [x] Modal dodawania nowego sklepu (wszystkie platformy)
+- [x] Edycja i usuwanie sklepów
+- [x] Elastyczna konfiguracja per platforma (JSON)
+- [x] Badge platform i statusów
+- [x] Akcje: Test/Sync dla API sklepów
+- [x] Akcja: Dodaj zamówienie dla sklepów MANUAL
 
-### 5. Zarządzanie szablonami - pełny CRUD
-- [ ] Przycisk "Dodaj szablon"
-- [ ] Modal tworzenia szablonu
-- [ ] Edycja metadanych szablonu
-- [ ] Duplikacja i usuwanie
+### 5. Zarządzanie szablonami - pełny CRUD ✅ UKOŃCZONE
+- [x] Przycisk "Dodaj szablon"
+- [x] Modal tworzenia szablonu
+- [x] Edycja metadanych szablonu
+- [x] Usuwanie szablonów
 
 ## 🚧 DO ZROBIENIA - Priorytet 3
 

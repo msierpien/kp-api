@@ -1,5 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import prisma from '../../lib/prisma';
+import { createManualOrder } from '../../services/admin/orders.service';
+import { createManualOrderSchema, type CreateManualOrderInput } from '../../schemas/admin.schema';
 
 interface OrderParams {
   id: string;
@@ -118,6 +120,32 @@ export async function ordersRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           error: 'Internal Server Error',
           message: 'Nie udało się pobrać zamówienia',
+        });
+      }
+    }
+  );
+
+  // POST /admin/orders/manual - Create manual order
+  fastify.post<{ Body: CreateManualOrderInput }>(
+    '/manual',
+    async (request: FastifyRequest<{ Body: CreateManualOrderInput }>, reply: FastifyReply) => {
+      const bodyParsed = createManualOrderSchema.safeParse(request.body);
+      if (!bodyParsed.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: bodyParsed.error.errors[0].message,
+          details: bodyParsed.error.errors,
+        });
+      }
+
+      try {
+        const result = await createManualOrder(bodyParsed.data);
+        return reply.status(201).send(result);
+      } catch (error: any) {
+        fastify.log.error(error);
+        return reply.status(400).send({
+          error: 'Create Failed',
+          message: error.message || 'Nie udało się utworzyć zamówienia',
         });
       }
     }

@@ -1,5 +1,6 @@
 /// <reference lib="dom" />
 import prisma from '../../lib/prisma';
+import { encrypt, decrypt } from '../../lib/encryption';
 import type { CreateShopInput, UpdateShopInput } from '../../schemas/admin.schema';
 import type { ShopItem } from '../../types';
 
@@ -10,8 +11,8 @@ const mapShop = (shop: any): ShopItem => ({
   baseUrl: shop.baseUrl,
   status: shop.status,
   lastSyncAt: shop.lastSyncAt,
-  apiKey: shop.apiKey,
-  apiSecret: shop.apiSecret,
+  apiKey: decrypt(shop.apiKey), // Deszyfruj przed zwróceniem
+  apiSecret: shop.apiSecret ? decrypt(shop.apiSecret) : null, // Deszyfruj jeśli istnieje
   authType: (shop.configJson as any)?.authType || 'WEB_SERVICE',
   config: (shop.configJson as any) || {
     orderSync: {
@@ -41,13 +42,10 @@ export async function createShop(input: CreateShopInput): Promise<ShopItem> {
       name: input.name,
       platform: input.platform,
       baseUrl: input.baseUrl,
-      apiKey: input.apiKey || '',
-      apiSecret: input.apiSecret || null,
+      apiKey: input.apiKey ? encrypt(input.apiKey) : '', // Szyfruj przed zapisem
+      apiSecret: input.apiSecret ? encrypt(input.apiSecret) : null, // Szyfruj jeśli istnieje
       status: input.status,
-      configJson: {
-        ...input.config,
-        authType: input.authType,
-      },
+      configJson: input.config || {},
     },
   });
 
@@ -61,13 +59,10 @@ export async function updateShop(id: string, input: UpdateShopInput): Promise<Sh
       name: input.name,
       platform: input.platform,
       baseUrl: input.baseUrl,
-      apiKey: input.apiKey || '',
-      apiSecret: input.apiSecret || null,
+      apiKey: input.apiKey ? encrypt(input.apiKey) : '', // Szyfruj przed zapisem
+      apiSecret: input.apiSecret ? encrypt(input.apiSecret) : null, // Szyfruj jeśli istnieje
       status: input.status,
-      configJson: {
-        ...input.config,
-        authType: input.authType,
-      },
+      configJson: input.config || {},
     },
   });
 
@@ -79,6 +74,9 @@ export async function testShopConnection(id: string) {
   if (!shop) {
     throw new Error('Shop not found');
   }
+
+  // Odszyfruj klucze przed użyciem
+  const apiKey = decrypt(shop.apiKey);
 
   const config = (shop.configJson as any) || {};
   const authType = config.authType || 'WEB_SERVICE';
@@ -103,7 +101,7 @@ export async function testShopConnection(id: string) {
   try {
     if (authType === 'WEB_SERVICE') {
       const url = `${baseUrl}/api/orders?limit=1&output_format=JSON`;
-      const authHeader = 'Basic ' + Buffer.from(`${shop.apiKey || ''}:`).toString('base64');
+      const authHeader = 'Basic ' + Buffer.from(`${apiKey || ''}:`).toString('base64');
 
       // try Authorization header
       let res = await fetch(url, {
@@ -117,7 +115,7 @@ export async function testShopConnection(id: string) {
       // fallback: some hosts strip Authorization; try ws_key query param
       if (!res.ok && res.status === 401) {
         const urlWithKey = `${baseUrl}/api/orders?limit=1&output_format=JSON&ws_key=${encodeURIComponent(
-          shop.apiKey || ''
+          apiKey || ''
         )}`;
         res = await fetch(urlWithKey, { headers: { Accept: 'application/json' } });
         body = await res.text();

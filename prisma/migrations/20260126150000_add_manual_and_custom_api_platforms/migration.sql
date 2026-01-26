@@ -1,0 +1,4 @@
+-- AlterEnum
+-- Dodanie MANUAL i CUSTOM_API do typu ShopPlatform
+ALTER TYPE "ShopPlatform" ADD VALUE IF NOT EXISTS 'MANUAL';
+ALTER TYPE "ShopPlatform" ADD VALUE IF NOT EXISTS 'CUSTOM_API';

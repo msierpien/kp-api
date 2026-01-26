@@ -84,50 +84,56 @@ export interface PersonalizedProductItem {
 }
 
 // Shops / integrations
+export type ShopPlatform = 'PRESTASHOP' | 'WOOCOMMERCE' | 'SHOPIFY' | 'MAGENTO' | 'MANUAL' | 'CUSTOM_API' | 'OTHER';
+
 export interface ShopItem {
   id: string;
   name: string;
-  platform: string;
+  platform: ShopPlatform;
   baseUrl: string;
   status: string;
   lastSyncAt: Date | null;
   apiKey: string;
   apiSecret: string | null;
-  authType: 'WEB_SERVICE' | 'ADMIN_API';
-  config: {
-    orderSync: {
-      enabled: boolean;
-      intervalMinutes: number;
-      orderStatus: string;
-    };
-    adminApi: {
-      clientId: string | null;
-      clientSecret: string | null;
-      scopes: string[];
-    };
-  };
+  authType?: 'WEB_SERVICE' | 'ADMIN_API' | 'REST_API' | 'OAUTH' | 'MANUAL';
+  config: any; // Elastyczna konfiguracja JSON per platforma
 }
 
 export interface CreateShopDto {
   name: string;
-  platform: string;
+  platform: ShopPlatform;
   baseUrl: string;
-  apiKey: string;
+  apiKey?: string;
   apiSecret?: string | null;
   status: string;
-  authType: 'WEB_SERVICE' | 'ADMIN_API';
-  config: {
-    orderSync: {
-      enabled: boolean;
-      intervalMinutes: number;
-      orderStatus: string;
-    };
-    adminApi: {
-      clientId: string | null;
-      clientSecret: string | null;
-      scopes: string[];
-    };
-  };
+  config?: any; // Elastyczna konfiguracja
 }
 
 export interface UpdateShopDto extends CreateShopDto {}
+
+// Manual Orders
+export interface CreateManualOrderDto {
+  shopId: string;
+  orderReference: string;
+  customerEmail: string;
+  customerName?: string | null;
+  totalPaid: number;
+  currency?: string;
+  language?: string;
+  createdAtShop?: string; // ISO date string
+  items: CreateManualOrderItemDto[];
+  notes?: string;
+}
+
+export interface CreateManualOrderItemDto {
+  sku: string;
+  productName: string;
+  quantity: number;
+  unitPrice?: number;
+}
+
+export interface ManualOrderResponse {
+  orderId: string;
+  casesCreated: number;
+  message: string;
+}

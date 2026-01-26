@@ -17,6 +17,8 @@ enum ShopPlatform {
   WOOCOMMERCE
   SHOPIFY
   MAGENTO
+  MANUAL        // Ręczne zamówienia (FB, Instagram, email)
+  CUSTOM_API    // Niestandardowe integracje API
   OTHER
 }
 

@@ -1,0 +1,347 @@
+// Prisma Schema dla systemu personalizacji PrestaShop
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// Integracja / Sklepy
+// ============================================
+
+enum ShopPlatform {
+  PRESTASHOP
+  WOOCOMMERCE
+  SHOPIFY
+  MAGENTO
+  OTHER
+}
+
+model Shop {
+  id            String       @id @default(cuid())
+  name          String
+  platform      ShopPlatform @default(PRESTASHOP)
+  baseUrl       String       @map("base_url")
+  apiKey        String       @default("") @map("api_key") // zaszyfrowane
+  apiSecret     String?      @map("api_secret") // zaszyfrowane, opcjonalne
+  status        String       @default("ACTIVE") // ACTIVE, INACTIVE
+  lastSyncAt    DateTime?    @map("last_sync_at")
+  configJson    Json?        @map("config_json") // dodatkowa konfiguracja specyficzna dla platformy
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  orders              Order[]
+  syncLogs            SyncLog[]
+  personalizedProducts PersonalizedProduct[]
+
+  @@index([status])
+  @@index([platform])
+  @@map("shops")
+}
+
+model PersonalizedProduct {
+  id         String   @id @default(cuid())
+  shopId     String   @map("shop_id")
+  sku        String   // SKU produktu w sklepie
+  templateId String   @map("template_id")
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  shop       Shop                    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  template   PersonalizationTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  orderItems OrderItem[]
+
+  @@unique([shopId, sku])
+  @@index([shopId])
+  @@index([sku])
+  @@index([isActive])
+  @@map("personalized_products")
+}
+
+// ============================================
+// Zamówienia
+// ============================================
+
+model Order {
+  id                 String   @id @default(cuid())
+  shopId             String   @map("shop_id")
+  externalOrderId    String   @map("external_order_id") // ID zamówienia w sklepie
+  orderReference     String   @map("order_reference")
+  customerEmail      String   @map("customer_email")
+  customerName       String?  @map("customer_name")
+  language           String   @default("pl")
+  currency           String   @default("PLN")
+  totalPaid          Decimal  @map("total_paid") @db.Decimal(10, 2)
+  createdAtShop      DateTime @map("created_at_shop")
+  payloadJson        Json     @map("payload_json") // snapshot całego zamówienia z API sklepu
+  syncedAt           DateTime @default(now()) @map("synced_at")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  shop               Shop                  @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  items              OrderItem[]
+  personalizationCases PersonalizationCase[]
+  accessPins         OrderAccessPin[]
+
+  @@unique([shopId, externalOrderId])
+  @@index([shopId, orderReference])
+  @@index([customerEmail])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                      String   @id @default(cuid())
+  orderId                 String   @map("order_id")
+  externalItemId          String   @map("external_item_id") // ID pozycji w sklepie
+  sku                     String
+  productNameSnapshot     String   @map("product_name_snapshot")
+  quantity                Int
+  personalizedProductId   String?  @map("personalized_product_id")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  order                   Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  personalizedProduct     PersonalizedProduct?  @relation(fields: [personalizedProductId], references: [id], onDelete: SetNull)
+  personalizationCase     PersonalizationCase?
+
+  @@index([orderId])
+  @@index([sku])
+  @@index([personalizedProductId])
+  @@map("order_items")
+}
+
+// ============================================
+// Synchronizacja / Logi
+// ============================================
+
+model SyncLog {
+  id             String    @id @default(cuid())
+  shopId         String    @map("shop_id")
+  syncType       String    @map("sync_type") // ORDERS, PRODUCTS
+  status         String    @default("SUCCESS") // SUCCESS, FAILED, PARTIAL
+  ordersFetched  Int       @default(0) @map("orders_fetched")
+  ordersCreated  Int       @default(0) @map("orders_created")
+  ordersSkipped  Int       @default(0) @map("orders_skipped")
+  errorMessage   String?   @map("error_message") @db.Text
+  startedAt      DateTime  @default(now()) @map("started_at")
+  finishedAt     DateTime? @map("finished_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  shop           Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId])
+  @@index([startedAt])
+  @@index([status])
+  @@map("sync_logs")
+}
+
+// ============================================
+// Konfiguracja personalizacji
+// ============================================
+
+model PersonalizationTemplate {
+  id          String   @id @default(cuid())
+  code        String   @unique // np. INV_KOMUNIA_01
+  name        String
+  description String?
+  version     Int      @default(1)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  forms                Form[]
+  cases                PersonalizationCase[]
+  personalizedProducts PersonalizedProduct[]
+
+  @@index([code])
+  @@index([isActive])
+  @@map("personalization_templates")
+}
+
+model Form {
+  id              String   @id @default(cuid())
+  templateId      String   @map("template_id")
+  name            String
+  sortOrder       Int      @default(0) @map("sort_order")
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  template        PersonalizationTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  fields          FormField[]
+
+  @@index([templateId])
+  @@map("forms")
+}
+
+model FormField {
+  id                 String   @id @default(cuid())
+  formId             String   @map("form_id")
+  key                String   // unikalne w obrębie formularza
+  label              String
+  type               String   // text, textarea, select, checkbox, date, time, repeater, upload
+  required           Boolean  @default(false)
+  minLength          Int?     @map("min_length")
+  maxLength          Int?     @map("max_length")
+  pattern            String?  // regex
+  placeholder        String?
+  helpText           String?  @map("help_text")
+  defaultValue       String?  @map("default_value")
+  optionsJson        Json?    @map("options_json") // dla select
+  repeaterGroupKey   String?  @map("repeater_group_key") // np. "guests"
+  sortOrder          Int      @default(0) @map("sort_order")
+  validationRulesJson Json?   @map("validation_rules_json")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  form               Form     @relation(fields: [formId], references: [id], onDelete: Cascade)
+  answers            PersonalizationAnswer[]
+
+  @@unique([formId, key])
+  @@index([formId])
+  @@map("form_fields")
+}
+
+// ============================================
+// Przypadki personalizacji
+// ============================================
+
+model PersonalizationCase {
+  id                    String    @id @default(cuid())
+  orderId               String    @map("order_id")
+  orderItemId           String    @unique @map("order_item_id")
+  templateId            String    @map("template_id")
+  templateVersionFrozen Int       @map("template_version_frozen")
+  status                String    @default("NEW") // NEW, WAITING_FOR_CUSTOMER, SUBMITTED, READY_FOR_PRINT, ARCHIVED
+  customerTokenHash     String?   @unique @map("customer_token_hash")
+  tokenActive           Boolean   @default(true) @map("token_active")
+  submittedAt           DateTime? @map("submitted_at")
+  notesInternal         String?   @map("notes_internal")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  order                 Order                   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderItem             OrderItem               @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  template              PersonalizationTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  answers               PersonalizationAnswer[]
+  answerVersions        PersonalizationAnswerVersion[]
+  renderJobs            RenderJob[]
+  assets                Asset[]
+
+  @@index([orderId])
+  @@index([status])
+  @@index([customerTokenHash])
+  @@map("personalization_cases")
+}
+
+model PersonalizationAnswer {
+  id         String    @id @default(cuid())
+  caseId     String    @map("case_id")
+  fieldId    String    @map("field_id")
+  valueText  String?   @map("value_text") @db.Text
+  valueJson  Json?     @map("value_json") // dla repeaterów
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  case       PersonalizationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  field      FormField           @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, fieldId])
+  @@index([caseId])
+  @@map("personalization_answers")
+}
+
+model PersonalizationAnswerVersion {
+  id         String   @id @default(cuid())
+  caseId     String   @map("case_id")
+  changedBy  String   @map("changed_by") // CUSTOMER, ADMIN, SYSTEM
+  changesJson Json    @map("changes_json") // diff lub snapshot
+  ip         String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  case       PersonalizationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([createdAt])
+  @@map("personalization_answer_versions")
+}
+
+// ============================================
+// PIN (opcjonalna weryfikacja)
+// ============================================
+
+model OrderAccessPin {
+  id        String    @id @default(cuid())
+  orderId   String    @map("order_id")
+  pinHash   String    @map("pin_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  order     Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([expiresAt])
+  @@map("order_access_pins")
+}
+
+// ============================================
+// Render i pliki (przyszłość)
+// ============================================
+
+model RenderJob {
+  id         String    @id @default(cuid())
+  caseId     String    @map("case_id")
+  type       String    // PDF, PNG
+  status     String    @default("NEW") // NEW, RUNNING, DONE, FAILED
+  attempts   Int       @default(0)
+  error      String?   @db.Text
+  createdAt  DateTime  @default(now()) @map("created_at")
+  startedAt  DateTime? @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+
+  case       PersonalizationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([status])
+  @@map("render_jobs")
+}
+
+model Asset {
+  id         String   @id @default(cuid())
+  caseId     String   @map("case_id")
+  type       String   // PDF_PREVIEW, PNG_PREVIEW, PDF_PRINT
+  storageKey String   @map("storage_key") // ścieżka w S3
+  mime       String
+  sizeBytes  Int      @map("size_bytes")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  case       PersonalizationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@map("assets")
+}
+
+// ============================================
+// Użytkownicy admin (MVP)
+// ============================================
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String   @map("password_hash")
+  name          String
+  role          String   @default("SELLER") // ADMIN, SELLER
+  isActive      Boolean  @default(true) @map("is_active")
+  lastLoginAt   DateTime? @map("last_login_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([email])
+  @@index([role])
+  @@map("users")
+}

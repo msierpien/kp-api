@@ -1,0 +1,17 @@
+import { FastifyInstance } from 'fastify';
+import { authMiddleware } from '../../middleware/auth.middleware';
+import { statsRoutes } from './stats.routes';
+import { casesRoutes } from './cases.routes';
+import { syncLogsRoutes } from './sync-logs.routes';
+import { shopsRoutes } from './shops.routes';
+
+export async function adminRoutes(fastify: FastifyInstance) {
+  // Apply auth middleware to all admin routes
+  fastify.addHook('preHandler', authMiddleware(fastify));
+
+  // Register admin sub-routes
+  fastify.register(statsRoutes, { prefix: '/stats' });
+  fastify.register(casesRoutes, { prefix: '/cases' });
+  fastify.register(syncLogsRoutes, { prefix: '/sync-logs' });
+  fastify.register(shopsRoutes, { prefix: '/shops' });
+}

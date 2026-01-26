@@ -136,7 +136,18 @@ export class PrestaShopClient {
 
       console.log(`[PrestaShop] Fetching customer ${order.id_customer}`);
       const customerData = await this.fetchWebService<any>(`customers/${order.id_customer}?display=full`);
-      const customer = customerData.customer || customerData;
+      
+      console.log(`[PrestaShop] Customer raw response:`, JSON.stringify(customerData, null, 2).substring(0, 1000));
+      console.log(`[PrestaShop] Customer data keys:`, Object.keys(customerData));
+      
+      // Handle both single customer and array
+      const customer = customerData.customer || 
+                      (customerData.customers && customerData.customers[0]) || 
+                      customerData;
+      
+      console.log(`[PrestaShop] Customer ${order.id_customer} email: "${customer.email}"`);
+      console.log(`[PrestaShop] Customer ${order.id_customer} firstname: "${customer.firstname}"`);
+      console.log(`[PrestaShop] Customer ${order.id_customer} lastname: "${customer.lastname}"`);
 
       // Fetch order items
       const items: Array<{

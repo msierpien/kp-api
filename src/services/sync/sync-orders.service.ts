@@ -67,17 +67,17 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
       ? shop.lastSyncAt.toISOString().split('T')[0]
       : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
+    // Get sync limit from config or default to 50
+    const syncLimit = config.orderSync?.limit || 50;
+    
     const orders = await client.fetchOrders({
-      limit: 100,
+      limit: syncLimit,
       dateFrom,
       currentState: config.orderSync?.orderStatus === 'PAID' ? 2 : undefined, // 2 = Payment accepted
     });
 
     result.ordersFetched = orders.length;
-
-    // Limit to 3 orders for testing
-    const ordersToProcess = orders.slice(0, 3);
-    console.log(`Processing ${ordersToProcess.length} orders (limited for testing)`);
+    console.log(`[Sync] Fetched ${orders.length} orders from PrestaShop (limit: ${syncLimit})`);
 
     // 4. Build product mapping by identifier type
     const productMap = {
@@ -90,11 +90,14 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
       const type = pp.identifierType as keyof typeof productMap;
       if (productMap[type]) {
         productMap[type].set(pp.identifierValue.toLowerCase(), pp);
+        console.log(`[Sync] Mapped ${type}: "${pp.identifierValue}" → Product: ${pp.name}`);
       }
     }
 
+    console.log(`[Sync] Product map built: SKU=${productMap.SKU.size}, INDEX=${productMap.INDEX.size}, EAN=${productMap.EAN.size}`);
+
     // 5. Process each order
-    for (const orderData of ordersToProcess) {
+    for (const orderData of orders) {
       try {
         // Check if order already exists
         const existingOrder = await prisma.order.findUnique({
@@ -115,21 +118,50 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
         console.log(`Fetching details for order ${orderData.id}...`);
         const details = await client.fetchOrderDetails(orderData.id);
         console.log(`Order ${orderData.id} details fetched successfully`);
+        
+        // Debug: show all items in order
+        console.log(`[Sync] Order ${orderData.id} has ${details.items.length} items:`);
+        details.items.forEach((item, idx) => {
+          console.log(`  [${idx + 1}] ${item.product_name}`);
+          console.log(`      product_reference: "${item.product_reference}"`);
+          console.log(`      product_id: ${item.product_id}`);
+          console.log(`      quantity: ${item.quantity}`);
+        });
 
         // Check if order contains personalized products
-        // Match by SKU (reference) - most common case
+        // Match product_reference against all identifier types (SKU/INDEX/EAN)
         const personalizedItems = details.items.filter((item) => {
           const ref = (item.product_reference || '').toLowerCase();
-          return productMap.SKU.has(ref);
+          
+          const matched = productMap.SKU.has(ref) || 
+                         productMap.INDEX.has(ref) || 
+                         productMap.EAN.has(ref);
+          
+          if (matched) {
+            console.log(`[Sync] ✓ Matched item: ${item.product_name} (reference: ${ref})`);
+          } else {
+            console.log(`[Sync] ✗ No match: ${item.product_name} (reference: ${ref})`);
+          }
+          
+          return matched;
         });
 
         if (personalizedItems.length === 0) {
-          console.log(`Order ${orderData.id} has no personalized products, skipping`);
+          console.log(`[Sync] Order ${orderData.id} has no personalized products, skipping`);
           result.ordersSkipped++;
           continue;
         }
 
         console.log(`Order ${orderData.id} has ${personalizedItems.length} personalized items`);
+
+        // Validate and normalize customer email (required field in Prisma)
+        const customerEmail = details.customer.email?.trim().toLowerCase();
+        if (!customerEmail) {
+          console.warn(`[Sync] Order ${orderData.id} has no customer email, skipping`);
+          result.ordersSkipped++;
+          result.errors.push(`Order ${orderData.id}: missing customer email`);
+          continue;
+        }
 
         // Create order in database
         const order = await prisma.order.create({
@@ -137,8 +169,8 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
             shopId: shop.id,
             externalOrderId: String(details.order.id),
             orderReference: details.order.reference,
-            customerEmail: details.customer.email,
-            customerName: `${details.customer.firstname} ${details.customer.lastname}`,
+            customerEmail: customerEmail,
+            customerName: `${details.customer.firstname} ${details.customer.lastname}`.trim(),
             language: 'pl',
             currency: 'PLN',
             totalPaid: parseFloat(details.order.total_paid),
@@ -152,11 +184,16 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
         // Create order items and personalization cases
         for (const item of personalizedItems) {
           const ref = (item.product_reference || '').toLowerCase();
+          
           const personalizedProduct: any =
             productMap.SKU.get(ref) ||
             productMap.INDEX.get(ref) ||
             productMap.EAN.get(ref);
-          if (!personalizedProduct) continue;
+          
+          if (!personalizedProduct) {
+            console.warn(`[Sync] Could not find personalized product mapping for item: ${item.product_name}`);
+            continue;
+          }
 
           const orderItem = await prisma.orderItem.create({
             data: {

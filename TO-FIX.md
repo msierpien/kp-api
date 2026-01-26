@@ -88,13 +88,38 @@
 - [x] Edycja metadanych szablonu
 - [x] Usuwanie szablonów
 
+### 6. Filtrowanie zamówień wg produktów personalizowanych ✅ ZAIMPLEMENTOWANE
+**Jak działa:**
+- Synchronizacja pobiera zamówienia ze sklepu (ostatnie 7 dni lub od lastSyncAt)
+- **Filtruje tylko zamówienia zawierające produkty personalizowane** (match po SKU/INDEX/EAN)
+- Tworzy Order + OrderItem + PersonalizationCase tylko dla pasujących produktów
+- Pozostałe zamówienia są skipowane (ordersSkipped counter)
+
+**Lokalizacja kodu:** `sync-orders.service.ts` linie 120-128
+```typescript
+const personalizedItems = details.items.filter((item) => {
+  const ref = (item.product_reference || '').toLowerCase();
+  return productMap.SKU.has(ref);
+});
+
+if (personalizedItems.length === 0) {
+  result.ordersSkipped++;
+  continue; // Skipuje zamówienie bez personalizowanych produktów
+}
+```
+
+**Możliwe optymalizacje (przyszłość):**
+- [ ] Cache listy SKU produktów personalizowanych w Redis
+- [ ] Webhook od PrestaShop zamiast pollingu (instant sync)
+- [ ] Bulk processing zamówień (currently 3 for testing, max 100)
+
 ## 🚧 DO ZROBIENIA - Priorytet 3
 
-### 6. Automatyzacja
+### 7. Automatyzacja
 - [ ] Cron Job / Worker synchronizacji (node-cron lub BullMQ)
 - [ ] Konfiguracja interwału per sklep
 
-### 7. Wysyłka e-maili
+### 8. Wysyłka e-maili
 - [ ] Service email (Nodemailer/Sendgrid)
 - [ ] Template HTML
 - [ ] Wysyłka po utworzeniu case

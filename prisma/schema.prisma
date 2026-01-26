@@ -20,6 +20,12 @@ enum ShopPlatform {
   OTHER
 }
 
+enum IdentifierType {
+  SKU       // reference w PrestaShop
+  INDEX     // supplier_reference w PrestaShop
+  EAN       // ean13 w PrestaShop
+}
+
 model Shop {
   id            String       @id @default(cuid())
   name          String
@@ -43,21 +49,24 @@ model Shop {
 }
 
 model PersonalizedProduct {
-  id         String   @id @default(cuid())
-  shopId     String   @map("shop_id")
-  sku        String   // SKU produktu w sklepie
-  templateId String   @map("template_id")
-  isActive   Boolean  @default(true) @map("is_active")
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
+  id                String         @id @default(cuid())
+  shopId            String         @map("shop_id")
+  name              String         // nazwa produktu dla łatwej identyfikacji
+  identifierType    IdentifierType @default(SKU) @map("identifier_type") // SKU, INDEX, EAN
+  identifierValue   String         @map("identifier_value") // wartość identyfikatora (np. "INV-KOMUNIA-001")
+  externalProductId String?        @map("external_product_id") // ID produktu w PrestaShop (opcjonalne)
+  templateId        String         @map("template_id")
+  isActive          Boolean        @default(true) @map("is_active")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
 
   shop       Shop                    @relation(fields: [shopId], references: [id], onDelete: Cascade)
   template   PersonalizationTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
   orderItems OrderItem[]
 
-  @@unique([shopId, sku])
+  @@unique([shopId, identifierType, identifierValue])
   @@index([shopId])
-  @@index([sku])
+  @@index([identifierValue])
   @@index([isActive])
   @@map("personalized_products")
 }

@@ -148,16 +148,18 @@ export async function seed() {
   }
   console.log(`✅ Created ${fields.length} form fields`);
 
-  // 7. Utwórz mapowanie produktu personalizowanego
+  // 7. Utwórz produkt personalizowany
   const personalizedProduct = await prisma.personalizedProduct.create({
     data: {
       shopId: shop.id,
-      sku: 'INV-KOMUNIA-001',
+      name: 'Zaproszenie komunijne - wzór 01',
+      identifierType: 'SKU',
+      identifierValue: 'INV-KOMUNIA-001',
       templateId: template.id,
       isActive: true,
     },
   });
-  console.log('✅ Personalized product mapping created:', personalizedProduct.sku);
+  console.log('✅ Personalized product created:', personalizedProduct.name, `(${personalizedProduct.identifierType}=${personalizedProduct.identifierValue})`);
 
   // 8. Utwórz przykładowe zamówienia i PersonalizationCase
   const order1 = await prisma.order.upsert({

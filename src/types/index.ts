@@ -71,6 +71,18 @@ export interface SyncLogItem {
   finishedAt: Date | null;
 }
 
+export interface PersonalizedProductItem {
+  id: string;
+  name: string;
+  identifierType: string;
+  identifierValue: string;
+  isActive: boolean;
+  shop: { id: string; name: string };
+  template: { id: string; name: string; code: string };
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 // Shops / integrations
 export interface ShopItem {
   id: string;

@@ -7,6 +7,7 @@ import jwt from '@fastify/jwt';
 import prisma from './lib/prisma';
 import { authRoutes } from './routes/auth.routes';
 import { adminRoutes } from './routes/admin';
+import { personalizationRoutes } from './routes/public/personalization.routes';
 
 const server = Fastify({
   logger: {
@@ -46,6 +47,7 @@ server.register(jwt, {
 // Routes
 server.register(authRoutes, { prefix: '/auth' });
 server.register(adminRoutes, { prefix: '/admin' });
+server.register(personalizationRoutes, { prefix: '/personalization' });
 
 // Health check
 server.get('/health', async () => {

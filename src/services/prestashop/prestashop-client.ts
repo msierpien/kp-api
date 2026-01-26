@@ -43,12 +43,6 @@ export interface PrestaShopOrderDetails {
 export class PrestaShopClient {
   private baseUrl: string;
   private apiKey: string;
-  private authType: 'WEB_SERVICE' | 'ADMIN_API';
-  private adminApiConfig?: {
-    clientId: string;
-    clientSecret: string;
-    scopes: string[];
-  };
 
   constructor(config: {
     baseUrl: string;
@@ -62,32 +56,6 @@ export class PrestaShopClient {
   }) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '');
     this.apiKey = config.apiKey;
-    this.authType = config.authType;
-    this.adminApiConfig = config.adminApiConfig;
-  }
-
-  private async getAccessToken(): Promise<string | null> {
-    if (this.authType !== 'ADMIN_API' || !this.adminApiConfig) {
-      return null;
-    }
-
-    const response = await fetch(`${this.baseUrl}/admin-api/access_token`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'client_credentials',
-        client_id: this.adminApiConfig.clientId,
-        client_secret: this.adminApiConfig.clientSecret,
-        scope: this.adminApiConfig.scopes.join(' '),
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to get access token: ${response.status}`);
-    }
-
-    const data = await response.json();
-    return data.access_token;
   }
 
   private async fetchWebService<T>(endpoint: string): Promise<T> {

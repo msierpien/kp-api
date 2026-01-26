@@ -75,10 +75,19 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
     const ordersToProcess = orders.slice(0, 3);
     console.log(`Processing ${ordersToProcess.length} orders (limited for testing)`);
 
-    // 4. Get SKU mapping
-    const skuMap = new Map(
-      shop.personalizedProducts.map((pp: any) => [pp.sku.toLowerCase(), pp])
-    );
+    // 4. Build product mapping by identifier type
+    const productMap = {
+      SKU: new Map<string, any>(),      // reference
+      INDEX: new Map<string, any>(),    // supplier_reference
+      EAN: new Map<string, any>(),      // ean13
+    } as const;
+
+    for (const pp of shop.personalizedProducts as any[]) {
+      const type = pp.identifierType as keyof typeof productMap;
+      if (productMap[type]) {
+        productMap[type].set(pp.identifierValue.toLowerCase(), pp);
+      }
+    }
 
     // 5. Process each order
     for (const orderData of ordersToProcess) {
@@ -104,9 +113,11 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
         console.log(`Order ${orderData.id} details fetched successfully`);
 
         // Check if order contains personalized products
-        const personalizedItems = details.items.filter((item) =>
-          skuMap.has(item.product_reference.toLowerCase())
-        );
+        // Match by SKU (reference) - most common case
+        const personalizedItems = details.items.filter((item) => {
+          const ref = (item.product_reference || '').toLowerCase();
+          return productMap.SKU.has(ref);
+        });
 
         if (personalizedItems.length === 0) {
           console.log(`Order ${orderData.id} has no personalized products, skipping`);
@@ -128,7 +139,7 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
             currency: 'PLN',
             totalPaid: parseFloat(details.order.total_paid),
             createdAtShop: new Date(details.order.date_add),
-            payloadJson: details,
+            payloadJson: JSON.parse(JSON.stringify(details)),
           },
         });
 
@@ -136,7 +147,11 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
 
         // Create order items and personalization cases
         for (const item of personalizedItems) {
-          const personalizedProduct: any = skuMap.get(item.product_reference.toLowerCase());
+          const ref = (item.product_reference || '').toLowerCase();
+          const personalizedProduct: any =
+            productMap.SKU.get(ref) ||
+            productMap.INDEX.get(ref) ||
+            productMap.EAN.get(ref);
           if (!personalizedProduct) continue;
 
           const orderItem = await prisma.orderItem.create({
@@ -151,16 +166,17 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
           });
 
           // Create personalization case for this item
-          const accessToken = generateAccessToken();
+          const tokenHash = generateAccessToken();
 
           await prisma.personalizationCase.create({
             data: {
               orderId: order.id,
               orderItemId: orderItem.id,
               templateId: personalizedProduct.templateId,
+              templateVersionFrozen: personalizedProduct.template.version,
               status: 'NEW',
-              accessToken,
-              accessTokenExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+              customerTokenHash: tokenHash,
+              tokenActive: true,
             },
           });
 

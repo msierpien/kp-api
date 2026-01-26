@@ -4,6 +4,9 @@ import { statsRoutes } from './stats.routes';
 import { casesRoutes } from './cases.routes';
 import { syncLogsRoutes } from './sync-logs.routes';
 import { shopsRoutes } from './shops.routes';
+import { ordersRoutes } from './orders.routes';
+import { personalizedProductsRoutes } from './personalized-products.routes';
+import { templatesRoutes } from './templates.routes';
 
 export async function adminRoutes(fastify: FastifyInstance) {
   // Apply auth middleware to all admin routes
@@ -14,4 +17,7 @@ export async function adminRoutes(fastify: FastifyInstance) {
   fastify.register(casesRoutes, { prefix: '/cases' });
   fastify.register(syncLogsRoutes, { prefix: '/sync-logs' });
   fastify.register(shopsRoutes, { prefix: '/shops' });
+  fastify.register(ordersRoutes, { prefix: '/orders' });
+  fastify.register(personalizedProductsRoutes, { prefix: '/personalized-products' });
+  fastify.register(templatesRoutes, { prefix: '/templates' });
 }

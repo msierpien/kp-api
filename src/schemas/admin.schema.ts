@@ -66,3 +66,56 @@ export type ShopConfigInput = z.infer<typeof shopConfigSchema>;
 export type CreateShopInput = z.infer<typeof createShopSchema>;
 export type UpdateShopInput = z.infer<typeof updateShopSchema>;
 export type ShopIdParamsInput = z.infer<typeof shopIdParamsSchema>;
+
+// Personalized products (mapping identifier -> template)
+export const personalizedProductSchema = z.object({
+  shopId: z.string().min(1),
+  name: z.string().min(1),
+  identifierType: z.enum(['SKU', 'INDEX', 'EAN']).default('SKU'),
+  identifierValue: z.string().min(1),
+  templateId: z.string().min(1),
+  isActive: z.boolean().default(true),
+});
+
+export const personalizedProductParamsSchema = z.object({
+  id: z.string().min(1),
+});
+
+export type PersonalizedProductInput = z.infer<typeof personalizedProductSchema>;
+export type PersonalizedProductParams = z.infer<typeof personalizedProductParamsSchema>;
+
+// Templates / forms
+export const formFieldInputSchema = z.object({
+  key: z.string().min(1),
+  label: z.string().min(1),
+  type: z.string().min(1),
+  required: z.boolean().default(false),
+  minLength: z.number().int().optional().nullable(),
+  maxLength: z.number().int().optional().nullable(),
+  pattern: z.string().optional().nullable(),
+  placeholder: z.string().optional().nullable(),
+  helpText: z.string().optional().nullable(),
+  defaultValue: z.string().optional().nullable(),
+  optionsJson: z.any().optional().nullable(),
+  repeaterGroupKey: z.string().optional().nullable(),
+  sortOrder: z.number().int().default(0),
+  validationRulesJson: z.any().optional().nullable(),
+});
+
+export const formInputSchema = z.object({
+  name: z.string().min(1),
+  sortOrder: z.number().int().default(0),
+  isActive: z.boolean().default(true),
+  fields: z.array(formFieldInputSchema).default([]),
+});
+
+export const templateFormSchema = z.object({
+  forms: z.array(formInputSchema).default([]),
+});
+
+export const templateIdParamsSchema = z.object({
+  id: z.string().min(1),
+});
+
+export type TemplateFormInput = z.infer<typeof templateFormSchema>;
+export type TemplateIdParams = z.infer<typeof templateIdParamsSchema>;

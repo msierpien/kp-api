@@ -117,5 +117,25 @@ export const templateIdParamsSchema = z.object({
   id: z.string().min(1),
 });
 
+// Template creation
+export const createTemplateSchema = z.object({
+  code: z.string().min(1).max(50).regex(/^[A-Z0-9_]+$/, 'Kod może zawierać tylko wielkie litery, cyfry i podkreślenia'),
+  name: z.string().min(1).max(100),
+  description: z.string().max(500).optional().nullable(),
+  version: z.number().int().positive().default(1),
+  isActive: z.boolean().default(true),
+});
+
+// Template metadata update (not forms)
+export const updateTemplateMetadataSchema = z.object({
+  code: z.string().min(1).max(50).regex(/^[A-Z0-9_]+$/).optional(),
+  name: z.string().min(1).max(100).optional(),
+  description: z.string().max(500).optional().nullable(),
+  version: z.number().int().positive().optional(),
+  isActive: z.boolean().optional(),
+});
+
 export type TemplateFormInput = z.infer<typeof templateFormSchema>;
 export type TemplateIdParams = z.infer<typeof templateIdParamsSchema>;
+export type CreateTemplateInput = z.infer<typeof createTemplateSchema>;
+export type UpdateTemplateMetadataInput = z.infer<typeof updateTemplateMetadataSchema>;

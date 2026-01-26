@@ -38,7 +38,6 @@ export const shopIdParamsSchema = z.object({
 export type PaginationInput = z.infer<typeof paginationSchema>;
 export type CasesQueryInput = z.infer<typeof casesQuerySchema>;
 export type SyncLogsQueryInput = z.infer<typeof syncLogsQuerySchema>;
-export type ShopConfigInput = z.infer<typeof shopConfigSchema>;
 export type CreateShopInput = z.infer<typeof createShopSchema>;
 export type UpdateShopInput = z.infer<typeof updateShopSchema>;
 export type ShopIdParamsInput = z.infer<typeof shopIdParamsSchema>;
@@ -139,3 +138,25 @@ export const createManualOrderSchema = z.object({
 
 export type CreateManualOrderInput = z.infer<typeof createManualOrderSchema>;
 export type CreateManualOrderItemInput = z.infer<typeof createManualOrderItemSchema>;
+
+// Cases management
+export const caseIdParamsSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const updateCaseAnswersSchema = z.object({
+  answers: z.any(), // JSON - będzie walidowane względem pól template'a
+});
+
+export const updateCaseStatusSchema = z.object({
+  status: z.enum(['NEW', 'WAITING_FOR_CUSTOMER', 'SUBMITTED', 'READY_FOR_PRINT', 'ARCHIVED']),
+});
+
+export const addCaseNoteSchema = z.object({
+  note: z.string().min(1).max(1000),
+});
+
+export type CaseIdParams = z.infer<typeof caseIdParamsSchema>;
+export type UpdateCaseAnswersInput = z.infer<typeof updateCaseAnswersSchema>;
+export type UpdateCaseStatusInput = z.infer<typeof updateCaseStatusSchema>;
+export type AddCaseNoteInput = z.infer<typeof addCaseNoteSchema>;

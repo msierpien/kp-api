@@ -88,3 +88,122 @@ export async function getCases(query: CasesQueryInput): Promise<PaginatedRespons
     totalPages: Math.ceil(total / limit),
   };
 }
+
+export async function getCaseById(id: string) {
+  const caseItem = await prisma.personalizationCase.findUnique({
+    where: { id },
+    include: {
+      order: {
+        include: {
+          shop: true,
+        },
+      },
+      orderItem: {
+        include: {
+          personalizedProduct: {
+            include: {
+              template: true,
+            },
+          },
+        },
+      },
+      template: {
+        include: {
+          forms: {
+            where: { isActive: true },
+            include: {
+              fields: {
+                orderBy: { sortOrder: 'asc' },
+              },
+            },
+            orderBy: { sortOrder: 'asc' },
+          },
+        },
+      },
+    },
+  });
+
+  if (!caseItem) {
+    throw new Error('Case not found');
+  }
+
+  // Konwersja Decimal na number dla frontendowych operacji
+  return {
+    ...caseItem,
+    order: {
+      ...caseItem.order,
+      totalPaid: caseItem.order.totalPaid.toNumber(),
+    },
+  };
+}
+
+export async function updateCaseAnswers(id: string, answers: any) {
+  const caseItem = await prisma.personalizationCase.findUnique({
+    where: { id },
+  });
+
+  if (!caseItem) {
+    throw new Error('Case not found');
+  }
+
+  // Merge z istniejącymi odpowiedziami
+  const updatedAnswers = {
+    ...(caseItem.answersJson as any),
+    ...answers,
+  };
+
+  return await prisma.personalizationCase.update({
+    where: { id },
+    data: {
+      answersJson: updatedAnswers,
+      updatedAt: new Date(),
+    },
+  });
+}
+
+export async function updateCaseStatus(id: string, status: string) {
+  const validStatuses = ['NEW', 'WAITING_FOR_CUSTOMER', 'SUBMITTED', 'READY_FOR_PRINT', 'ARCHIVED'];
+  
+  if (!validStatuses.includes(status)) {
+    throw new Error(`Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+  }
+
+  const caseItem = await prisma.personalizationCase.findUnique({
+    where: { id },
+  });
+
+  if (!caseItem) {
+    throw new Error('Case not found');
+  }
+
+  return await prisma.personalizationCase.update({
+    where: { id },
+    data: {
+      status,
+      updatedAt: new Date(),
+    },
+  });
+}
+
+export async function addCaseNote(id: string, note: string) {
+  const caseItem = await prisma.personalizationCase.findUnique({
+    where: { id },
+  });
+
+  if (!caseItem) {
+    throw new Error('Case not found');
+  }
+
+  const currentNotes = (caseItem.notesInternal || '') as string;
+  const timestamp = new Date().toISOString();
+  const newNote = `[${timestamp}] ${note}`;
+  const updatedNotes = currentNotes ? `${currentNotes}\n${newNote}` : newNote;
+
+  return await prisma.personalizationCase.update({
+    where: { id },
+    data: {
+      notesInternal: updatedNotes,
+      updatedAt: new Date(),
+    },
+  });
+}

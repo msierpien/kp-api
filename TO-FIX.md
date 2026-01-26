@@ -41,11 +41,16 @@
 
 ## 🚧 DO ZROBIENIA - Priorytet 1 (Backend API)
 
-### 1. Case Management - szczegóły i edycja
-- [ ] Endpoint `GET /admin/cases/:id` - szczegóły przypadku
-- [ ] Endpoint `PUT /admin/cases/:id/answers` - korekta odpowiedzi
-- [ ] Endpoint `PUT /admin/cases/:id/status` - zarządzanie workflow
-- [ ] Endpoint `POST /admin/cases/:id/notes` - notatki wewnętrzne
+### 1. Case Management - szczegóły i edycja ✅ UKOŃCZONE
+- [x] Endpoint `GET /admin/cases/:id` - szczegóły przypadku
+- [x] Endpoint `PUT /admin/cases/:id/answers` - korekta odpowiedzi
+- [x] Endpoint `PUT /admin/cases/:id/status` - zarządzanie workflow
+- [x] Endpoint `POST /admin/cases/:id/notes` - notatki wewnętrzne
+- [x] Frontend - strona `/dashboard/cases/[id]` z zakładkami (Info, Odpowiedzi, Notatki)
+- [x] Frontend - workflow statusów z przyciskami (NEW → WAITING → SUBMITTED → READY → ARCHIVED)
+- [x] Frontend - dodawanie notatek wewnętrznych
+- [x] Linki w tabeli cases prowadzące do szczegółów
+- [x] React Query hooks: useCaseDetails, useUpdateCaseStatus, useAddCaseNote
 
 ### 2. Templates Management - pełny CRUD ✅ UKOŃCZONE
 - [x] Endpoint `POST /admin/templates` - tworzenie nowego szablonu

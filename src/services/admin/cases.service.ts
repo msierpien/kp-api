@@ -1,6 +1,8 @@
 import prisma from '../../lib/prisma';
 import type { CaseListItem, PaginatedResponse } from '../../types';
 import type { CasesQueryInput } from '../../schemas/admin.schema';
+import { emailService } from '../email/email.service';
+import { triggerAutomations, AutomationTrigger } from './automation.service';
 
 export async function getCases(query: CasesQueryInput): Promise<PaginatedResponse<CaseListItem>> {
   const { page, limit, status, search, sortBy, sortOrder } = query;
@@ -140,6 +142,15 @@ export async function getCaseById(id: string) {
 export async function updateCaseAnswers(id: string, answers: any) {
   const caseItem = await prisma.personalizationCase.findUnique({
     where: { id },
+    include: {
+      order: {
+        include: {
+          shop: true,
+        },
+      },
+      orderItem: true,
+      template: true,
+    },
   });
 
   if (!caseItem) {
@@ -152,13 +163,40 @@ export async function updateCaseAnswers(id: string, answers: any) {
     ...answers,
   };
 
-  return await prisma.personalizationCase.update({
+  // Sprawdź czy wszystkie wymagane pola są wypełnione
+  const allFieldsFilled = Object.keys(updatedAnswers).length > 0;
+  const shouldSubmit = allFieldsFilled && caseItem.status === 'WAITING_FOR_CUSTOMER';
+
+  const updated = await prisma.personalizationCase.update({
     where: { id },
     data: {
       answersJson: updatedAnswers,
+      ...(shouldSubmit ? { 
+        status: 'SUBMITTED', 
+        submittedAt: new Date() 
+      } : {}),
       updatedAt: new Date(),
     },
+    include: {
+      order: {
+        include: {
+          shop: true,
+        },
+      },
+      orderItem: true,
+      template: true,
+    },
   });
+
+  // Trigger automation if case was submitted
+  if (shouldSubmit) {
+    await triggerAutomations({
+      trigger: AutomationTrigger.CASE_SUBMITTED,
+      caseItem: updated,
+    });
+  }
+
+  return updated;
 }
 
 export async function updateCaseStatus(id: string, status: string) {
@@ -170,19 +208,48 @@ export async function updateCaseStatus(id: string, status: string) {
 
   const caseItem = await prisma.personalizationCase.findUnique({
     where: { id },
+    include: {
+      order: {
+        include: {
+          shop: true,
+        },
+      },
+      orderItem: true,
+      template: true,
+    },
   });
 
   if (!caseItem) {
     throw new Error('Case not found');
   }
 
-  return await prisma.personalizationCase.update({
+  const oldStatus = caseItem.status;
+
+  const updated = await prisma.personalizationCase.update({
     where: { id },
     data: {
       status,
       updatedAt: new Date(),
     },
+    include: {
+      order: {
+        include: {
+          shop: true,
+        },
+      },
+      orderItem: true,
+      template: true,
+    },
   });
+
+  // Trigger automation for status change
+  await triggerAutomations({
+    trigger: AutomationTrigger.CASE_STATUS_CHANGED,
+    caseItem: updated,
+    oldStatus,
+  });
+
+  return updated;
 }
 
 export async function addCaseNote(id: string, note: string) {
@@ -206,4 +273,58 @@ export async function addCaseNote(id: string, note: string) {
       updatedAt: new Date(),
     },
   });
+}
+
+export async function resendPersonalizationEmail(id: string) {
+  // Pobierz pełne dane case'a
+  const caseItem = await prisma.personalizationCase.findUnique({
+    where: { id },
+    include: {
+      order: {
+        include: {
+          shop: true,
+        },
+      },
+      orderItem: {
+        include: {
+          personalizedProduct: true,
+        },
+      },
+    },
+  });
+
+  if (!caseItem) {
+    throw new Error('Case not found');
+  }
+
+  if (!emailService.isConfigured()) {
+    throw new Error('Email service not configured');
+  }
+
+  const baseUrl = process.env.PUBLIC_PORTAL_BASE_URL || 'http://localhost:3002';
+  
+  try {
+    await emailService.sendPersonalizationEmail({
+      to: caseItem.order.customerEmail,
+      customerName: caseItem.order.customerName || '',
+      orderReference: caseItem.order.orderReference,
+      shopName: caseItem.order.shop.name,
+      items: [{
+        productName: caseItem.orderItem.productNameSnapshot,
+        quantity: caseItem.orderItem.quantity,
+        personalizationUrl: `${baseUrl}/personalize?token=${caseItem.customerTokenHash}`,
+      }],
+      baseUrl,
+    });
+
+    console.log(`[Cases] ✉️  Email resent to ${caseItem.order.customerEmail} for case ${id}`);
+    
+    return { 
+      success: true, 
+      message: 'Email został wysłany ponownie' 
+    };
+  } catch (error) {
+    console.error(`[Cases] Failed to resend email for case ${id}:`, error);
+    throw new Error('Nie udało się wysłać emaila');
+  }
 }

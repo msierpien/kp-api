@@ -1,6 +1,7 @@
 import prisma from '../../lib/prisma';
 import { PrestaShopClient } from '../prestashop/prestashop-client';
 import { decrypt } from '../../lib/encryption';
+import { emailService } from '../email/email.service';
 
 export interface SyncResult {
   success: boolean;
@@ -181,6 +182,13 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
 
         result.ordersCreated++;
 
+        // Zbierz wszystkie przypadki personalizacji dla tego zamówienia
+        const casesForEmail: Array<{
+          productName: string;
+          quantity: number;
+          token: string;
+        }> = [];
+
         // Create order items and personalization cases
         for (const item of personalizedItems) {
           const ref = (item.product_reference || '').toLowerCase();
@@ -209,7 +217,7 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
           // Create personalization case for this item
           const tokenHash = generateAccessToken();
 
-          await prisma.personalizationCase.create({
+          const newCase = await prisma.personalizationCase.create({
             data: {
               orderId: order.id,
               orderItemId: orderItem.id,
@@ -219,13 +227,60 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
               customerTokenHash: tokenHash,
               tokenActive: true,
             },
+            include: {
+              order: {
+                include: {
+                  shop: true,
+                },
+              },
+              orderItem: true,
+              template: true,
+            },
           });
 
           result.casesCreated++;
+
+          // Trigger automation for new case
+          const { triggerAutomations, AutomationTrigger } = await import('../admin/automation.service');
+          await triggerAutomations({
+            trigger: AutomationTrigger.CASE_CREATED,
+            caseItem: newCase,
+          });
+
+          // Dodaj do listy do emaila
+          casesForEmail.push({
+            productName: item.product_name,
+            quantity: item.quantity,
+            token: tokenHash,
+          });
         }
 
-        // TODO: Send email with personalization link
-        // await sendPersonalizationEmail(order, cases);
+        // Wyślij email z linkami do personalizacji
+        if (casesForEmail.length > 0 && emailService.isConfigured()) {
+          try {
+            const baseUrl = process.env.PUBLIC_PORTAL_BASE_URL || 'http://localhost:3002';
+            
+            await emailService.sendPersonalizationEmail({
+              to: customerEmail,
+              customerName: `${details.customer.firstname} ${details.customer.lastname}`.trim(),
+              orderReference: details.order.reference,
+              shopName: shop.name,
+              items: casesForEmail.map(c => ({
+                productName: c.productName,
+                quantity: c.quantity,
+                personalizationUrl: `${baseUrl}/personalize?token=${c.token}`,
+              })),
+              baseUrl,
+            });
+
+            console.log(`[Sync] ✉️  Email sent to ${customerEmail} for order ${details.order.reference}`);
+          } catch (emailError) {
+            console.error(`[Sync] Failed to send email for order ${details.order.reference}:`, emailError);
+            // Nie przerywaj synchronizacji, jeśli email się nie powiódł
+          }
+        } else if (casesForEmail.length > 0) {
+          console.warn(`[Sync] ⚠️  Email service not configured, skipping email for order ${details.order.reference}`);
+        }
 
       } catch (error) {
         result.errors.push(

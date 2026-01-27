@@ -1,0 +1,244 @@
+import nodemailer from 'nodemailer';
+import type { Transporter } from 'nodemailer';
+
+export interface EmailConfig {
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  pass: string;
+  from: string;
+}
+
+export interface PersonalizationEmailData {
+  to: string;
+  customerName: string;
+  orderReference: string;
+  shopName: string;
+  items: Array<{
+    productName: string;
+    quantity: number;
+    personalizationUrl: string;
+  }>;
+  baseUrl: string;
+}
+
+class EmailService {
+  private transporter: Transporter | null = null;
+  private config: EmailConfig | null = null;
+
+  initialize(config: EmailConfig) {
+    this.config = config;
+    this.transporter = nodemailer.createTransport({
+      host: config.host,
+      port: config.port,
+      secure: config.secure,
+      auth: {
+        user: config.user,
+        pass: config.pass,
+      },
+    });
+    console.log('[Email] Service initialized with SMTP:', config.host);
+  }
+
+  isConfigured(): boolean {
+    return this.transporter !== null && this.config !== null;
+  }
+
+  async sendPersonalizationEmail(data: PersonalizationEmailData): Promise<boolean> {
+    if (!this.transporter || !this.config) {
+      console.warn('[Email] Service not configured, skipping email send');
+      return false;
+    }
+
+    const html = this.generatePersonalizationEmailHtml(data);
+    const text = this.generatePersonalizationEmailText(data);
+
+    try {
+      const result = await this.transporter.sendMail({
+        from: `"${data.shopName}" <${this.config.from}>`,
+        to: data.to,
+        subject: `Personalizacja zamówienia ${data.orderReference} - ${data.shopName}`,
+        text,
+        html,
+      });
+
+      console.log('[Email] Sent personalization email to:', data.to, 'messageId:', result.messageId);
+      return true;
+    } catch (error) {
+      console.error('[Email] Failed to send email:', error);
+      return false;
+    }
+  }
+
+  private generatePersonalizationEmailHtml(data: PersonalizationEmailData): string {
+    const itemsHtml = data.items
+      .map(
+        (item) => `
+        <tr>
+          <td style="padding: 12px; border-bottom: 1px solid #e5e7eb;">
+            <strong>${item.productName}</strong>
+            <br>
+            <span style="color: #6b7280; font-size: 14px;">Ilość: ${item.quantity}</span>
+          </td>
+          <td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: center;">
+            <a href="${item.personalizationUrl}"
+               style="display: inline-block; background-color: #2563eb; color: white;
+                      padding: 10px 20px; text-decoration: none; border-radius: 6px;
+                      font-weight: 500;">
+              Personalizuj
+            </a>
+          </td>
+        </tr>
+      `
+      )
+      .join('');
+
+    return `
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Personalizacja zamówienia</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; margin: 0 auto; padding: 20px;">
+    <tr>
+      <td>
+        <!-- Header -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #1f2937; border-radius: 8px 8px 0 0; padding: 24px;">
+          <tr>
+            <td style="text-align: center;">
+              <h1 style="color: white; margin: 0; font-size: 24px;">${data.shopName}</h1>
+            </td>
+          </tr>
+        </table>
+
+        <!-- Content -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: white; padding: 32px;">
+          <tr>
+            <td>
+              <h2 style="color: #1f2937; margin: 0 0 16px 0; font-size: 20px;">
+                Witaj${data.customerName ? ` ${data.customerName}` : ''}!
+              </h2>
+
+              <p style="color: #4b5563; line-height: 1.6; margin: 0 0 24px 0;">
+                Dziękujemy za złożenie zamówienia <strong>${data.orderReference}</strong>.
+                Twoje zamówienie zawiera produkty wymagające personalizacji.
+                Prosimy o wypełnienie poniższych formularzy, abyśmy mogli przygotować Twoje zamówienie.
+              </p>
+
+              <!-- Products Table -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+                <thead>
+                  <tr style="background-color: #f9fafb;">
+                    <th style="padding: 12px; text-align: left; color: #374151; font-weight: 600;">Produkt</th>
+                    <th style="padding: 12px; text-align: center; color: #374151; font-weight: 600;">Akcja</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${itemsHtml}
+                </tbody>
+              </table>
+
+              <!-- Info Box -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #fef3c7; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+                <tr>
+                  <td>
+                    <p style="color: #92400e; margin: 0; font-size: 14px;">
+                      <strong>Ważne:</strong> Link do personalizacji jest ważny przez 30 dni.
+                      Po wypełnieniu formularza nie będzie możliwości edycji.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="color: #6b7280; font-size: 14px; margin: 0;">
+                Jeśli masz pytania, skontaktuj się z nami odpowiadając na tego maila.
+              </p>
+            </td>
+          </tr>
+        </table>
+
+        <!-- Footer -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f9fafb; border-radius: 0 0 8px 8px; padding: 24px;">
+          <tr>
+            <td style="text-align: center;">
+              <p style="color: #6b7280; font-size: 12px; margin: 0;">
+                ${data.shopName}<br>
+                Ta wiadomość została wygenerowana automatycznie.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    `.trim();
+  }
+
+  private generatePersonalizationEmailText(data: PersonalizationEmailData): string {
+    const itemsText = data.items
+      .map((item) => `- ${item.productName} (ilość: ${item.quantity})\n  Link: ${item.personalizationUrl}`)
+      .join('\n\n');
+
+    return `
+Witaj${data.customerName ? ` ${data.customerName}` : ''}!
+
+Dziękujemy za złożenie zamówienia ${data.orderReference}.
+Twoje zamówienie zawiera produkty wymagające personalizacji.
+
+Produkty do personalizacji:
+${itemsText}
+
+WAŻNE: Link do personalizacji jest ważny przez 30 dni.
+Po wypełnieniu formularza nie będzie możliwości edycji.
+
+Pozdrawiamy,
+${data.shopName}
+    `.trim();
+  }
+
+  async testConnection(): Promise<{ success: boolean; message: string }> {
+    if (!this.transporter) {
+      return { success: false, message: 'Email service not configured' };
+    }
+
+    try {
+      await this.transporter.verify();
+      return { success: true, message: 'SMTP connection successful' };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return { success: false, message: `SMTP connection failed: ${message}` };
+    }
+  }
+}
+
+// Singleton instance
+export const emailService = new EmailService();
+
+// Initialize from environment variables
+export function initializeEmailService() {
+  const host = process.env.SMTP_HOST;
+  const port = parseInt(process.env.SMTP_PORT || '587', 10);
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  const from = process.env.SMTP_FROM;
+
+  if (!host || !user || !pass || !from) {
+    console.warn('[Email] SMTP not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_FROM environment variables.');
+    return;
+  }
+
+  emailService.initialize({
+    host,
+    port,
+    secure: port === 465,
+    user,
+    pass,
+    from,
+  });
+}

@@ -5,6 +5,7 @@ import {
   updateCaseAnswers,
   updateCaseStatus,
   addCaseNote,
+  resendPersonalizationEmail,
 } from '../../services/admin/cases.service';
 import {
   casesQuerySchema,
@@ -193,6 +194,44 @@ export async function casesRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           error: 'Internal Server Error',
           message: 'Nie udało się dodać notatki',
+        });
+      }
+    }
+  );
+
+  // POST /admin/cases/:id/resend-email
+  fastify.post<{ Params: CaseIdParams }>(
+    '/:id/resend-email',
+    async (request: FastifyRequest<{ Params: CaseIdParams }>, reply: FastifyReply) => {
+      try {
+        const paramsValidation = caseIdParamsSchema.safeParse(request.params);
+
+        if (!paramsValidation.success) {
+          return reply.status(400).send({
+            error: 'Validation Error',
+            message: paramsValidation.error.errors[0].message,
+          });
+        }
+
+        const result = await resendPersonalizationEmail(paramsValidation.data.id);
+        return reply.send(result);
+      } catch (error: any) {
+        fastify.log.error(error);
+        if (error.message === 'Case not found') {
+          return reply.status(404).send({
+            error: 'Not Found',
+            message: 'Case o podanym ID nie istnieje',
+          });
+        }
+        if (error.message === 'Email service not configured') {
+          return reply.status(503).send({
+            error: 'Service Unavailable',
+            message: 'Serwis email nie jest skonfigurowany',
+          });
+        }
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Nie udało się wysłać emaila',
         });
       }
     }

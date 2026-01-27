@@ -8,6 +8,8 @@ import prisma from './lib/prisma';
 import { authRoutes } from './routes/auth.routes';
 import { adminRoutes } from './routes/admin';
 import { personalizationRoutes } from './routes/public/personalization.routes';
+import { reloadEmailService } from './services/admin/email-settings.service';
+import { initializeScheduler } from './services/scheduler/scheduler.service';
 
 const server = Fastify({
   logger: {
@@ -93,6 +95,22 @@ const start = async () => {
   try {
     const port = Number(process.env.API_PORT) || 3001;
     const host = process.env.API_HOST || '0.0.0.0';
+
+    // Załaduj ustawienia email z bazy danych przy starcie
+    try {
+      await reloadEmailService();
+      server.log.info('✉️  Email service initialized from database');
+    } catch (error) {
+      server.log.warn('⚠️  Failed to initialize email service from database:', error);
+    }
+
+    // Zainicjalizuj scheduler automatycznej synchronizacji
+    try {
+      await initializeScheduler();
+      server.log.info('📅 Order synchronization scheduler initialized');
+    } catch (error) {
+      server.log.warn('⚠️  Failed to initialize scheduler:', error);
+    }
 
     await server.listen({ port, host });
     server.log.info(`🚀 Server is running on http://${host}:${port}`);

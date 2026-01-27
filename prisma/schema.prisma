@@ -37,6 +37,8 @@ model Shop {
   apiSecret     String?      @map("api_secret") // zaszyfrowane, opcjonalne
   status        String       @default("ACTIVE") // ACTIVE, INACTIVE
   lastSyncAt    DateTime?    @map("last_sync_at")
+  syncInterval  Int          @default(30) @map("sync_interval") // interwał synchronizacji w minutach
+  syncEnabled   Boolean      @default(true) @map("sync_enabled") // czy auto-sync jest włączony
   configJson    Json?        @map("config_json") // dodatkowa konfiguracja specyficzna dla platformy
   createdAt     DateTime     @default(now()) @map("created_at")
   updatedAt     DateTime     @updatedAt @map("updated_at")
@@ -47,6 +49,7 @@ model Shop {
 
   @@index([status])
   @@index([platform])
+  @@index([syncEnabled])
   @@map("shops")
 }
 
@@ -335,6 +338,48 @@ model Asset {
 
   @@index([caseId])
   @@map("assets")
+}
+
+// ============================================
+// Ustawienia Email (SMTP)
+// ============================================
+
+model EmailSettings {
+  id        String   @id @default(cuid())
+  host      String
+  port      Int
+  secure    Boolean  @default(false)
+  user      String
+  password  String   // zaszyfrowane
+  fromEmail String   @map("from_email")
+  fromName  String?  @map("from_name")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("email_settings")
+}
+
+// ============================================
+// Automatyzacje (Automation Rules)
+// ============================================
+
+model Automation {
+  id          String   @id @default(cuid())
+  name        String   // Nazwa reguły np. "Wyślij email po utworzeniu case"
+  description String?  // Opcjonalny opis
+  trigger     String   // CASE_CREATED, CASE_STATUS_CHANGED, CASE_SUBMITTED, CASE_TIME_ELAPSED
+  conditions  Json     // Warunki w formacie JSON (status, template, shop, etc.)
+  actions     Json     // Akcje w formacie JSON (send_email, change_status, add_note, webhook)
+  isActive    Boolean  @default(true) @map("is_active")
+  priority    Int      @default(0) // Kolejność wykonywania (wyższy = wcześniej)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([trigger])
+  @@index([isActive])
+  @@index([priority])
+  @@map("automations")
 }
 
 // ============================================

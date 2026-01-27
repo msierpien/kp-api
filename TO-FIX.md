@@ -64,6 +64,34 @@
 - [x] Walidacja: tylko dla sklepów typu MANUAL
 - [x] Automatyczne tworzenie cases dla personalizowanych produktów
 
+## ⚠️ PROBLEM AKTUALNY - Docker + Login (27.01.2026)
+
+**Status:** Docker przestaje działać i wymaga restartu komputera
+
+**Problem:**
+1. Docker Desktop zatrzymuje się i nie może się połączyć: `Cannot connect to the Docker daemon at unix:///Users/michal/.docker/run/docker.sock`
+2. API nie może połączyć się z PostgreSQL na `localhost:5432`, gdy Docker nie działa
+3. Port 3001 zajęty przez kontener Docker API (personalization-api)
+
+**Co działa:**
+- ✅ Seed wykonany poprawnie - użytkownicy dodani (admin@kreatywne-papierki.pl / admin123, seller@kreatywne-papierki.pl / seller123)
+- ✅ Migracje bazy danych wykonane
+- ✅ Email Service w pełni zaimplementowany (backend + frontend)
+- ✅ Wszystkie kontenery były zdrowe przed upadkiem Dockera: postgres, redis, adminer, api
+
+**Kroki po restarcie:**
+1. Uruchom Docker Desktop: `open -a Docker`
+2. Poczekaj 30s na pełne uruchomienie
+3. Uruchom kontenery: `cd api && docker-compose up -d`
+4. Zatrzymaj kontener API: `docker-compose stop api` (używamy lokalnego dev)
+5. Uruchom lokalne API: `cd api && pnpm dev`
+6. Przetestuj login: admin@kreatywne-papierki.pl / admin123
+
+**Dlaczego zatrzymujemy kontener API:**
+- Kontener API zajmuje port 3001
+- Lokalne `pnpm dev` pozwala na live reload i debugowanie
+- DATABASE_URL w .env ustawiony na localhost:5432 (działa z Dockera)
+
 ## 🚧 DO ZROBIENIA - Priorytet 2 (Frontend Admin)
 
 ### 3. Szczegóły przypadku personalizacji
@@ -115,15 +143,39 @@ if (personalizedItems.length === 0) {
 
 ## 🚧 DO ZROBIENIA - Priorytet 3
 
-### 7. Automatyzacja
-- [ ] Cron Job / Worker synchronizacji (node-cron lub BullMQ)
-- [ ] Konfiguracja interwału per sklep
+### 7. Automatyzacja ✅ UKOŃCZONE
+- [x] Cron Job / Worker synchronizacji (node-cron)
+- [x] Konfiguracja interwału per sklep (syncInterval w bazie)
+- [x] Pola `syncInterval` i `syncEnabled` w modelu Shop
+- [x] Service schedulera z inicjalizacją przy starcie
+- [x] Endpointy:
+  - `POST /admin/shops/:id/sync` - ręczna synchronizacja
+  - `POST /admin/shops/:id/sync/enable` - włącz auto-sync
+  - `POST /admin/shops/:id/sync/disable` - wyłącz auto-sync
+  - `PUT /admin/shops/:id/sync/interval` - zmień interwał (5-1440 minut)
+- [x] Automatyczne wykrywanie i schedulowanie aktywnych sklepów
+- [x] Timezone: Europe/Warsaw
+- [x] Logi cron jobs w konsoli
 
-### 8. Wysyłka e-maili
-- [ ] Service email (Nodemailer/Sendgrid)
-- [ ] Template HTML
-- [ ] Wysyłka po utworzeniu case
-- [ ] Ponowne wysyłanie linku
+**Lokalizacja:** `services/scheduler/scheduler.service.ts`
+
+### 8. Wysyłka e-maili ✅ UKOŃCZONE
+- [x] Service email (Nodemailer)
+- [x] Template HTML + text
+- [x] Wysyłka po utworzeniu case
+- [x] Ponowne wysyłanie linku (`POST /admin/cases/:id/resend-email`)
+- [x] **Zarządzanie SMTP z panelu admina:**
+  - [x] Model `EmailSettings` w bazie (z szyfrowaniem hasła)
+  - [x] Endpointy API: GET/POST/PUT/DELETE `/admin/email-settings`
+  - [x] Test połączenia SMTP (`POST /admin/email-settings/test`)
+  - [x] Automatyczne ładowanie aktywnej konfiguracji przy starcie
+  - [x] Możliwość wielu konfiguracji (tylko jedna aktywna)
+- [x] **Frontend Panel Admina:**
+  - [x] Strona `/dashboard/settings/email` - zarządzanie SMTP
+  - [x] Formularz dodawania/edycji z walidacją
+  - [x] Test połączenia przed zapisem
+  - [x] Przycisk "Wyślij ponownie" w szczegółach case'a
+  - [x] React Query hooks i API client
 
 ## Następne kroki (przyszłe features)
 

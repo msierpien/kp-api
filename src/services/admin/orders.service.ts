@@ -1,11 +1,16 @@
-import { prisma } from '../../lib/prisma';
+import prisma from '../../lib/prisma';
 import { CreateManualOrderInput } from '../../schemas/admin.schema';
 import type { ManualOrderResponse } from '../../types';
+
+// Temporary array to store created cases outside transaction
+const manualCasesCreated: any[] = [];
 
 /**
  * Tworzy ręczne zamówienie (dla platform MANUAL - FB, Instagram, email itp.)
  */
 export async function createManualOrder(data: CreateManualOrderInput): Promise<ManualOrderResponse> {
+  manualCasesCreated.length = 0; // Clear array before starting
+
   // Walidacja: czy sklep istnieje i jest typu MANUAL
   const shop = await prisma.shop.findUnique({
     where: { id: data.shopId },
@@ -100,7 +105,7 @@ export async function createManualOrder(data: CreateManualOrderInput): Promise<M
       // Jeśli produkt jest personalizowany, utwórz case(y)
       if (personalizedProduct) {
         for (let i = 0; i < item.quantity; i++) {
-          await tx.personalizationCase.create({
+          const newCase = await tx.personalizationCase.create({
             data: {
               orderId: newOrder.id,
               orderItemId: orderItem.id,
@@ -112,13 +117,34 @@ export async function createManualOrder(data: CreateManualOrderInput): Promise<M
               submissionUrl: '', // TODO: generować link
               expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 dni
             },
+            include: {
+              order: {
+                include: {
+                  shop: true,
+                },
+              },
+              orderItem: true,
+              template: true,
+            },
           });
+
+          // Trigger automation (poza transakcją, po commit)
+          manualCasesCreated.push(newCase);
         }
       }
     }
 
     return newOrder;
   });
+
+  // Trigger automations for created cases (after transaction commits)
+  const { triggerAutomations, AutomationTrigger } = await import('./automation.service');
+  for (const caseItem of manualCasesCreated) {
+    await triggerAutomations({
+      trigger: AutomationTrigger.CASE_CREATED,
+      caseItem,
+    });
+  }
 
   // Policz ile cases utworzono
   const casesCount = await prisma.personalizationCase.count({
@@ -130,4 +156,36 @@ export async function createManualOrder(data: CreateManualOrderInput): Promise<M
     casesCreated: casesCount,
     message: `Utworzono zamówienie ${data.orderReference} z ${casesCount} przypadkami personalizacji`,
   };
+}
+
+/**
+ * Usuwa zamówienie wraz z wszystkimi powiązanymi danymi
+ */
+export async function deleteOrder(orderId: string): Promise<void> {
+  // Sprawdź czy zamówienie istnieje
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+  });
+
+  if (!order) {
+    throw new Error('Zamówienie nie istnieje');
+  }
+
+  // Usuń w transakcji
+  await prisma.$transaction(async (tx) => {
+    // Usuń wszystkie case'y powiązane z zamówieniem
+    await tx.personalizationCase.deleteMany({
+      where: { orderId },
+    });
+
+    // Usuń pozycje zamówienia
+    await tx.orderItem.deleteMany({
+      where: { orderId },
+    });
+
+    // Usuń zamówienie
+    await tx.order.delete({
+      where: { id: orderId },
+    });
+  });
 }

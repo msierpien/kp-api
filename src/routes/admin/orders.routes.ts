@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import prisma from '../../lib/prisma';
-import { createManualOrder } from '../../services/admin/orders.service';
+import { createManualOrder, deleteOrder } from '../../services/admin/orders.service';
 import { createManualOrderSchema, type CreateManualOrderInput } from '../../schemas/admin.schema';
 
 interface OrderParams {
@@ -146,6 +146,34 @@ export async function ordersRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({
           error: 'Create Failed',
           message: error.message || 'Nie udało się utworzyć zamówienia',
+        });
+      }
+    }
+  );
+
+  // DELETE /admin/orders/:id - Delete order
+  fastify.delete<{ Params: OrderParams }>(
+    '/:id',
+    async (request: FastifyRequest<{ Params: OrderParams }>, reply: FastifyReply) => {
+      try {
+        await deleteOrder(request.params.id);
+        return reply.status(200).send({
+          success: true,
+          message: 'Zamówienie zostało usunięte',
+        });
+      } catch (error: any) {
+        fastify.log.error(error);
+        
+        if (error.message === 'Zamówienie nie istnieje') {
+          return reply.status(404).send({
+            error: 'Not Found',
+            message: error.message,
+          });
+        }
+        
+        return reply.status(500).send({
+          error: 'Delete Failed',
+          message: error.message || 'Nie udało się usunąć zamówienia',
         });
       }
     }

@@ -160,3 +160,22 @@ export type CaseIdParams = z.infer<typeof caseIdParamsSchema>;
 export type UpdateCaseAnswersInput = z.infer<typeof updateCaseAnswersSchema>;
 export type UpdateCaseStatusInput = z.infer<typeof updateCaseStatusSchema>;
 export type AddCaseNoteInput = z.infer<typeof addCaseNoteSchema>;
+
+// Email Settings
+export const emailSettingsSchema = z.object({
+  host: z.string().min(1, 'Host SMTP jest wymagany'),
+  port: z.number().int().min(1).max(65535),
+  secure: z.boolean().default(false),
+  user: z.string().min(1, 'Użytkownik SMTP jest wymagany'),
+  password: z.string().min(1, 'Hasło SMTP jest wymagane'),
+  fromEmail: z.string().email('Nieprawidłowy adres email'),
+  fromName: z.string().optional().nullable(),
+  isActive: z.boolean().default(true),
+});
+
+export const emailSettingsIdParamsSchema = z.object({
+  id: z.string().min(1),
+});
+
+export type EmailSettingsInput = z.infer<typeof emailSettingsSchema>;
+export type EmailSettingsIdParams = z.infer<typeof emailSettingsIdParamsSchema>;

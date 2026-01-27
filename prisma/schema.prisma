@@ -234,6 +234,7 @@ model PersonalizationCase {
   customerTokenHash     String?   @unique @map("customer_token_hash")
   tokenActive           Boolean   @default(true) @map("token_active")
   submittedAt           DateTime? @map("submitted_at")
+  answersJson           Json?     @map("answers_json")
   notesInternal         String?   @map("notes_internal")
   createdAt             DateTime  @default(now()) @map("created_at")
   updatedAt             DateTime  @updatedAt @map("updated_at")

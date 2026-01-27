@@ -2,6 +2,7 @@ import prisma from '../../lib/prisma';
 import { PrestaShopClient } from '../prestashop/prestashop-client';
 import { decrypt } from '../../lib/encryption';
 import { emailService } from '../email/email.service';
+import { generateAccessToken, maskToken } from '../../lib/token';
 
 export interface SyncResult {
   success: boolean;
@@ -215,7 +216,8 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
           });
 
           // Create personalization case for this item
-          const tokenHash = generateAccessToken();
+          // Generujemy token i hash - token wysyłamy klientowi, hash zapisujemy w bazie
+          const { token: customerToken, hash: tokenHash } = generateAccessToken();
 
           const newCase = await prisma.personalizationCase.create({
             data: {
@@ -224,7 +226,7 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
               templateId: personalizedProduct.templateId,
               templateVersionFrozen: personalizedProduct.template.version,
               status: 'NEW',
-              customerTokenHash: tokenHash,
+              customerTokenHash: tokenHash, // Zapisujemy HASH w bazie, nie sam token
               tokenActive: true,
             },
             include: {
@@ -247,11 +249,11 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
             caseItem: newCase,
           });
 
-          // Dodaj do listy do emaila
+          // Dodaj do listy do emaila - używamy oryginalnego tokena, nie hasha
           casesForEmail.push({
             productName: item.product_name,
             quantity: item.quantity,
-            token: tokenHash,
+            token: customerToken, // Oryginalny token dla klienta (nie hash!)
           });
         }
 
@@ -268,7 +270,7 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
               items: casesForEmail.map(c => ({
                 productName: c.productName,
                 quantity: c.quantity,
-                personalizationUrl: `${baseUrl}/personalize?token=${c.token}`,
+                personalizationUrl: `${baseUrl}/${c.token}`,
               })),
               baseUrl,
             });
@@ -336,11 +338,3 @@ async function logSync(
   });
 }
 
-function generateAccessToken(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let token = '';
-  for (let i = 0; i < 64; i++) {
-    token += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return token;
-}

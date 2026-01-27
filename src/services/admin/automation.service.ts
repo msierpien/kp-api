@@ -1,5 +1,6 @@
 import prisma from '../../lib/prisma';
 import { emailService } from '../email/email.service';
+import { generateAccessToken, maskToken } from '../../lib/token';
 
 /**
  * Typy triggerów automatyzacji
@@ -184,8 +185,24 @@ async function executeSendEmail(config: any, caseData: any): Promise<void> {
     throw new Error('Email service not configured');
   }
 
+  if (!caseData?.id) {
+    throw new Error('Missing case data for email automation');
+  }
+
+  // Każdy email dostaje świeży token: zapisujemy nowy hash w bazie, token używamy w linku
+  const { token: accessToken, hash: tokenHash } = generateAccessToken();
+  await prisma.personalizationCase.update({
+    where: { id: caseData.id },
+    data: {
+      customerTokenHash: tokenHash,
+      tokenActive: true,
+      updatedAt: new Date(),
+    },
+  });
+  console.log(`[Automation] Generated new token for case ${caseData.id}: ${maskToken(accessToken)}`);
+
   const baseUrl = process.env.PUBLIC_PORTAL_BASE_URL || 'http://localhost:3002';
-  const personalizationUrl = `${baseUrl}/personalize?token=${caseData.customerTokenHash}`;
+  const personalizationUrl = `${baseUrl}/${accessToken}`;
 
   // Podstawowe zmienne do template
   const variables = {

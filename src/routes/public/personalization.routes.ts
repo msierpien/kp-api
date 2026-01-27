@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import prisma from '../../lib/prisma';
+import { hashToken, maskToken } from '../../lib/token';
 
 interface PersonalizationParams {
   token: string;
@@ -9,14 +10,67 @@ interface SaveDesignBody {
   answers: Record<string, string | any>;
 }
 
+// Helper: upserts answers rows for case and returns merged answersJson.
+// answers keys are FORM FIELD KEYS coming from frontend; we map them to field IDs.
+async function saveAnswers(
+  caseId: string,
+  currentAnswersJson: any,
+  answers: Record<string, any>,
+  fieldKeyToId: Map<string, string>
+) {
+  for (const [fieldKey, value] of Object.entries(answers)) {
+    const fieldId = fieldKeyToId.get(fieldKey);
+    if (!fieldId) {
+      // Skip unknown fields to avoid FK errors
+      continue;
+    }
+
+    await prisma.personalizationAnswer.upsert({
+      where: {
+        caseId_fieldId: {
+          caseId,
+          fieldId,
+        },
+      },
+      update: {
+        valueText: typeof value === 'string' ? value : null,
+        valueJson: typeof value !== 'string' ? value : null,
+      },
+      create: {
+        caseId,
+        fieldId,
+        valueText: typeof value === 'string' ? value : null,
+        valueJson: typeof value !== 'string' ? value : null,
+      },
+    });
+  }
+
+  return {
+    ...((currentAnswersJson as any) || {}),
+    ...answers,
+  };
+}
+
+// Helper do dodawania nagłówków bezpieczeństwa
+function addSecurityHeaders(reply: FastifyReply) {
+  reply.header('Referrer-Policy', 'no-referrer');
+  reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+}
+
 export async function personalizationRoutes(fastify: FastifyInstance) {
   // GET /personalization/:token - Get personalization case by access token
   fastify.get<{ Params: PersonalizationParams }>(
     '/:token',
     async (request: FastifyRequest<{ Params: PersonalizationParams }>, reply: FastifyReply) => {
       try {
+        addSecurityHeaders(reply);
+
+        // Hash tokena z URL przed wyszukaniem w bazie
+        const tokenHash = hashToken(request.params.token);
+        fastify.log.info(`Looking up personalization case (token: ${maskToken(request.params.token)})`);
+
         const personalizationCase = await prisma.personalizationCase.findUnique({
-          where: { customerTokenHash: request.params.token },
+          where: { customerTokenHash: tokenHash },
           include: {
             orderItem: {
               include: {
@@ -30,12 +84,15 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
                 personalizedProduct: {
                   include: {
                     template: {
-                      select: {
-                        id: true,
-                        code: true,
-                        name: true,
-                        description: true,
-                        version: true,
+                      include: {
+                        forms: {
+                          include: {
+                            fields: {
+                              orderBy: { sortOrder: 'asc' },
+                            },
+                          },
+                          orderBy: { sortOrder: 'asc' },
+                        },
                       },
                     },
                   },
@@ -76,16 +133,40 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // PUT /personalization/:token/answers - Save personalization answers
+  // PUT /personalization/:token/design (alias: /answers) - Save personalization draft
   fastify.put<{ Params: PersonalizationParams; Body: SaveDesignBody }>(
-    '/:token/answers',
+    '/:token/:endpoint(answers|design)',
     async (
       request: FastifyRequest<{ Params: PersonalizationParams; Body: SaveDesignBody }>,
       reply: FastifyReply
     ) => {
       try {
+        addSecurityHeaders(reply);
+
+        // Hash tokena z URL przed wyszukaniem w bazie
+        const tokenHash = hashToken(request.params.token);
+
         const personalizationCase = await prisma.personalizationCase.findUnique({
-          where: { customerTokenHash: request.params.token },
+          where: { customerTokenHash: tokenHash },
+          include: {
+            orderItem: {
+              include: {
+                personalizedProduct: {
+                  include: {
+                    template: {
+                      include: {
+                        forms: {
+                          include: {
+                            fields: true,
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
         });
 
         if (!personalizationCase) {
@@ -103,34 +184,26 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
-        // Save answers - upsert each answer
-        const answers = request.body.answers;
-        for (const [fieldId, value] of Object.entries(answers)) {
-          await prisma.personalizationAnswer.upsert({
-            where: {
-              caseId_fieldId: {
-                caseId: personalizationCase.id,
-                fieldId,
-              },
-            },
-            update: {
-              valueText: typeof value === 'string' ? value : null,
-              valueJson: typeof value !== 'string' ? value : null,
-            },
-            create: {
-              caseId: personalizationCase.id,
-              fieldId,
-              valueText: typeof value === 'string' ? value : null,
-              valueJson: typeof value !== 'string' ? value : null,
-            },
-          });
-        }
+        // Zbuduj mapę fieldKey -> fieldId (na podstawie template)
+        const fieldKeyToId = new Map<string, string>();
+        personalizationCase.orderItem?.personalizedProduct?.template?.forms?.forEach((form: any) => {
+          form.fields.forEach((f: any) => fieldKeyToId.set(f.key, f.id));
+        });
+
+        // Save answers rows + merged JSON for admin panel
+        const mergedAnswers = await saveAnswers(
+          personalizationCase.id,
+          personalizationCase.answersJson,
+          request.body.answers,
+          fieldKeyToId
+        );
 
         // Update case status
         const updated = await prisma.personalizationCase.update({
-          where: { customerTokenHash: request.params.token },
+          where: { customerTokenHash: tokenHash },
           data: {
             status: 'WAITING_FOR_CUSTOMER',
+            answersJson: mergedAnswers,
           },
           include: {
             answers: {
@@ -151,14 +224,37 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
   );
 
   // POST /personalization/:token/submit - Submit personalization for production
-  fastify.post<{ Params: PersonalizationParams }>(
+  fastify.post<{ Params: PersonalizationParams; Body: SaveDesignBody }>(
     '/:token/submit',
-    async (request: FastifyRequest<{ Params: PersonalizationParams }>, reply: FastifyReply) => {
+    async (
+      request: FastifyRequest<{ Params: PersonalizationParams; Body: SaveDesignBody }>,
+      reply: FastifyReply
+    ) => {
       try {
+        addSecurityHeaders(reply);
+
+        // Hash tokena z URL przed wyszukaniem w bazie
+        const tokenHash = hashToken(request.params.token);
+
         const personalizationCase = await prisma.personalizationCase.findUnique({
-          where: { customerTokenHash: request.params.token },
+          where: { customerTokenHash: tokenHash },
           include: {
             answers: true,
+            orderItem: {
+              include: {
+                personalizedProduct: {
+                  include: {
+                    template: {
+                      include: {
+                        forms: {
+                          include: { fields: true },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
           },
         });
 
@@ -177,7 +273,33 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
-        if (personalizationCase.answers.length === 0) {
+        // Zbuduj mapę fieldKey -> fieldId (na podstawie template)
+        const fieldKeyToId = new Map<string, string>();
+        personalizationCase.orderItem?.personalizedProduct?.template?.forms?.forEach((form: any) => {
+          form.fields.forEach((f: any) => fieldKeyToId.set(f.key, f.id));
+        });
+
+        // Jeśli w body przyszły odpowiedzi, zapisz je przed walidacją
+        let mergedAnswers = personalizationCase.answersJson;
+        if (request.body?.answers) {
+          mergedAnswers = await saveAnswers(
+            personalizationCase.id,
+            personalizationCase.answersJson,
+            request.body.answers,
+            fieldKeyToId
+          );
+
+          await prisma.personalizationCase.update({
+            where: { id: personalizationCase.id },
+            data: { answersJson: mergedAnswers },
+          });
+        }
+
+        const answersCount = await prisma.personalizationAnswer.count({
+          where: { caseId: personalizationCase.id },
+        });
+
+        if (answersCount === 0) {
           return reply.status(400).send({
             error: 'Bad Request',
             message: 'Brak wypełnionych pól personalizacji',
@@ -185,7 +307,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         }
 
         const updated = await prisma.personalizationCase.update({
-          where: { customerTokenHash: request.params.token },
+          where: { customerTokenHash: tokenHash },
           data: {
             status: 'SUBMITTED',
             submittedAt: new Date(),

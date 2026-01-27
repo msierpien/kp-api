@@ -27,8 +27,31 @@ const server = Fastify({
 });
 
 // Plugins
+// CORS - dozwolone origins (admin panel + portal klienta)
+const allowedOrigins = [
+  process.env.FRONTEND_URL || 'http://localhost:3000',
+  process.env.PUBLIC_PORTAL_BASE_URL || 'http://localhost:3002',
+];
+
 server.register(cors, {
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: (origin, cb) => {
+    // Pozwól na requesty bez origin (np. curl, Postman)
+    if (!origin) {
+      cb(null, true);
+      return;
+    }
+    // Sprawdź czy origin jest na liście dozwolonych
+    if (allowedOrigins.includes(origin)) {
+      cb(null, true);
+      return;
+    }
+    // W trybie dev pozwól na wszystkie localhost
+    if (process.env.NODE_ENV === 'development' && origin.includes('localhost')) {
+      cb(null, true);
+      return;
+    }
+    cb(new Error('Not allowed by CORS'), false);
+  },
   credentials: true,
 });
 

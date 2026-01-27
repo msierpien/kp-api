@@ -3,6 +3,7 @@ import type { CaseListItem, PaginatedResponse } from '../../types';
 import type { CasesQueryInput } from '../../schemas/admin.schema';
 import { emailService } from '../email/email.service';
 import { triggerAutomations, AutomationTrigger } from './automation.service';
+import { generateAccessToken, maskToken } from '../../lib/token';
 
 export async function getCases(query: CasesQueryInput): Promise<PaginatedResponse<CaseListItem>> {
   const { page, limit, status, search, sortBy, sortOrder } = query;
@@ -301,8 +302,22 @@ export async function resendPersonalizationEmail(id: string) {
     throw new Error('Email service not configured');
   }
 
+  // Generujemy NOWY token - stary będzie nieaktywny
+  // To też zabezpiecza przed wyciekiem poprzedniego tokena
+  const { token: newToken, hash: newHash } = generateAccessToken();
+
+  // Aktualizuj hash w bazie danych
+  await prisma.personalizationCase.update({
+    where: { id },
+    data: {
+      customerTokenHash: newHash,
+      tokenActive: true, // Reaktywuj token jeśli był nieaktywny
+      updatedAt: new Date(),
+    },
+  });
+
   const baseUrl = process.env.PUBLIC_PORTAL_BASE_URL || 'http://localhost:3002';
-  
+
   try {
     await emailService.sendPersonalizationEmail({
       to: caseItem.order.customerEmail,
@@ -312,16 +327,16 @@ export async function resendPersonalizationEmail(id: string) {
       items: [{
         productName: caseItem.orderItem.productNameSnapshot,
         quantity: caseItem.orderItem.quantity,
-        personalizationUrl: `${baseUrl}/personalize?token=${caseItem.customerTokenHash}`,
+        personalizationUrl: `${baseUrl}/${newToken}`, // Używamy oryginalnego tokena, nie hasha
       }],
       baseUrl,
     });
 
-    console.log(`[Cases] ✉️  Email resent to ${caseItem.order.customerEmail} for case ${id}`);
-    
-    return { 
-      success: true, 
-      message: 'Email został wysłany ponownie' 
+    console.log(`[Cases] ✉️  Email resent to ${caseItem.order.customerEmail} for case ${id} (token: ${maskToken(newToken)})`);
+
+    return {
+      success: true,
+      message: 'Email został wysłany ponownie'
     };
   } catch (error) {
     console.error(`[Cases] Failed to resend email for case ${id}:`, error);

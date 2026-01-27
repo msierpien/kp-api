@@ -177,6 +177,26 @@ if (personalizedItems.length === 0) {
   - [x] Przycisk "Wyślij ponownie" w szczegółach case'a
   - [x] React Query hooks i API client
 
+### 9. Portal Klienta ✅ UKOŃCZONE (27.01.2026)
+- [x] Projekt Next.js w katalogu `client/` (port 3002)
+- [x] Konfiguracja: TypeScript, Tailwind CSS, shadcn/ui
+- [x] Strona `/[token]` - formularz personalizacji
+- [x] Dynamiczny renderer pól (text, textarea, number, email, date, select, radio, checkbox, file)
+- [x] Walidacja z zod + react-hook-form
+- [x] Zapisywanie wersji roboczej (draft)
+- [x] Zatwierdzanie personalizacji (submit)
+- [x] Strona `/[token]/potwierdzenie` - podsumowanie
+- [x] Obsługa błędów (wygasły token, nie znaleziono)
+- [x] Obsługa już zatwierdzonych personalizacji
+- [x] React Query hooks: usePersonalization, useSaveDesign, useSubmitPersonalization
+- [x] API client do komunikacji z backendem
+
+**Uruchomienie:**
+```bash
+cd client && pnpm install && pnpm dev
+# Portal dostępny na http://localhost:3002
+```
+
 ## Następne kroki (przyszłe features)
 
 ### Warstwa podglądu graficznego

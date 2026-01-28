@@ -122,6 +122,8 @@ async function generateHTML(data: TemplateData): Promise<string> {
       watermark: data.watermark,
       assetBaseUrl: process.env.PUBLIC_STORAGE_URL || `${process.env.API_PUBLIC_URL || 'http://localhost:3001'}/storage/`,
     });
+  } else if (data.layoutConfig) {
+    console.warn('[Renderer] layoutConfig dostarczony, ale brak warstw; fallback na Handlebars');
   }
 
   // Ścieżka do szablonu

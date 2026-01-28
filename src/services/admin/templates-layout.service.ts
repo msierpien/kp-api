@@ -5,6 +5,7 @@ import fs from 'fs/promises';
 import path from 'path';
 
 const STORAGE_DIR = path.join(process.cwd(), 'storage', 'templates');
+const MAX_ASSETS_PER_TEMPLATE = 50;
 
 // ============================================
 // Layout CRUD
@@ -29,12 +30,23 @@ export async function updateTemplateLayout(
 ): Promise<TemplateLayoutJson> {
   const template = await prisma.personalizationTemplate.findUnique({
     where: { id: templateId },
-    select: { id: true },
+    select: {
+      id: true,
+      forms: {
+        select: {
+          fields: {
+            select: { key: true },
+          },
+        },
+      },
+    },
   });
 
   if (!template) {
     throw new Error('Szablon nie znaleziony');
   }
+
+  validateLayout(layoutJson, template.forms);
 
   const updated = await prisma.personalizationTemplate.update({
     where: { id: templateId },
@@ -68,6 +80,11 @@ export async function uploadTemplateAsset(
   assetType: string,
   metadata?: { width?: number; height?: number; originalName?: string }
 ): Promise<TemplateAssetItem> {
+  const currentCount = await prisma.templateAsset.count({ where: { templateId } });
+  if (currentCount >= MAX_ASSETS_PER_TEMPLATE) {
+    throw new Error(`Osiagnieto limit ${MAX_ASSETS_PER_TEMPLATE} plików dla tego szablonu`);
+  }
+
   // Pobierz kod szablonu dla ścieżki
   const template = await prisma.personalizationTemplate.findUnique({
     where: { id: templateId },
@@ -151,4 +168,45 @@ function mapAssetToItem(asset: any): TemplateAssetItem {
     sortOrder: asset.sortOrder,
     createdAt: asset.createdAt,
   };
+}
+
+function validateLayout(layout: TemplateLayoutInput, forms: Array<{ fields: Array<{ key: string }> }> | null) {
+  // unikalne id
+  const ids = new Set<string>();
+  for (const layer of layout.layers) {
+    if (ids.has(layer.id)) {
+      throw new Error(`Duplikat id warstwy: ${layer.id}`);
+    }
+    ids.add(layer.id);
+    if (layer.width <= 0 || layer.height <= 0) {
+      throw new Error(`Warstwa ${layer.name} ma nieprawidłowe wymiary`);
+    }
+  }
+
+  // mapowanie pól tekstowych do istniejących fieldKey
+  const formKeys = new Set(forms?.flatMap(f => f.fields.map(fl => fl.key)) || []);
+  const seenKeys = new Set<string>();
+  for (const layer of layout.layers) {
+    if (layer.type === 'text') {
+      const fk = (layer.properties as any).fieldKey;
+      if (!fk) {
+        throw new Error(`Warstwa tekstowa ${layer.name} nie ma fieldKey`);
+      }
+      if (!formKeys.has(fk)) {
+        throw new Error(`fieldKey ${fk} nie istnieje w formularzu`);
+      }
+      if (seenKeys.has(fk)) {
+        // nie blokujemy, ale ostrzegamy
+        console.warn(`[layout] Powielony fieldKey ${fk} w warstwach (dopuszczalne, ale sprawdź)`);
+      } else {
+        seenKeys.add(fk);
+      }
+    }
+  }
+
+  // ostrzeżenie o braku tła
+  const hasBackground = layout.layers.some(l => l.type === 'background');
+  if (!hasBackground) {
+    console.warn('[layout] Brak warstwy background');
+  }
 }

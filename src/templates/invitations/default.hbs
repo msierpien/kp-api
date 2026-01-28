@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      font-family: 'Inter', sans-serif;
+      background: #fff;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    .invitation {
+      width: 100%;
+      height: 100%;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 60px 40px;
+      background: linear-gradient(135deg, #fdfbf7 0%, #fff 50%, #fdfbf7 100%);
+    }
+
+    /* Ramka dekoracyjna */
+    .frame {
+      position: absolute;
+      top: 30px;
+      left: 30px;
+      right: 30px;
+      bottom: 30px;
+      border: 3px solid #d4af37;
+      pointer-events: none;
+    }
+
+    .frame::before {
+      content: '';
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      right: 8px;
+      bottom: 8px;
+      border: 1px solid #d4af3766;
+    }
+
+    /* Dekoracyjne narożniki */
+    .corner {
+      position: absolute;
+      width: 40px;
+      height: 40px;
+      border-color: #d4af37;
+      border-style: solid;
+    }
+
+    .corner-tl { top: 15px; left: 15px; border-width: 3px 0 0 3px; }
+    .corner-tr { top: 15px; right: 15px; border-width: 3px 3px 0 0; }
+    .corner-bl { bottom: 15px; left: 15px; border-width: 0 0 3px 3px; }
+    .corner-br { bottom: 15px; right: 15px; border-width: 0 3px 3px 0; }
+
+    /* Tytuł */
+    .title {
+      font-family: 'Playfair Display', serif;
+      font-size: 42px;
+      font-weight: 600;
+      color: #2c2c2c;
+      text-align: center;
+      margin-bottom: 20px;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+    }
+
+    /* Dekoracyjna linia */
+    .divider {
+      width: 120px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, #d4af37, transparent);
+      margin: 15px 0 30px;
+    }
+
+    /* Imię dziecka */
+    .child-name {
+      font-family: 'Playfair Display', serif;
+      font-size: 36px;
+      font-weight: 700;
+      color: #d4af37;
+      text-align: center;
+      margin-bottom: 25px;
+      text-transform: capitalize;
+    }
+
+    /* Tekst zaproszenia */
+    .invitation-text {
+      font-family: 'Inter', sans-serif;
+      font-size: 16px;
+      font-weight: 400;
+      color: #555;
+      text-align: center;
+      line-height: 1.8;
+      max-width: 80%;
+      margin-bottom: 30px;
+    }
+
+    /* Data i godzina */
+    .datetime {
+      font-family: 'Playfair Display', serif;
+      font-size: 22px;
+      font-weight: 500;
+      color: #333;
+      text-align: center;
+      margin-bottom: 15px;
+    }
+
+    .datetime .label {
+      font-family: 'Inter', sans-serif;
+      font-size: 12px;
+      font-weight: 500;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      display: block;
+      margin-bottom: 5px;
+    }
+
+    /* Miejsce */
+    .venue {
+      font-family: 'Inter', sans-serif;
+      font-size: 15px;
+      font-weight: 400;
+      color: #666;
+      text-align: center;
+      line-height: 1.6;
+      margin-bottom: 20px;
+    }
+
+    .venue-name {
+      font-weight: 600;
+      color: #333;
+      display: block;
+      margin-bottom: 5px;
+    }
+
+    /* Dodatkowe informacje */
+    .additional-info {
+      font-family: 'Inter', sans-serif;
+      font-size: 13px;
+      font-weight: 400;
+      color: #888;
+      text-align: center;
+      font-style: italic;
+      margin-top: 20px;
+      max-width: 70%;
+    }
+
+    /* Podpis */
+    .signature {
+      font-family: 'Playfair Display', serif;
+      font-size: 18px;
+      font-weight: 500;
+      color: #555;
+      text-align: center;
+      margin-top: 40px;
+    }
+
+    /* Watermark */
+    .watermark {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) rotate({{watermark.angle}}deg);
+      font-family: 'Inter', sans-serif;
+      font-size: {{watermark.fontSize}}px;
+      font-weight: 700;
+      color: #999;
+      opacity: {{watermark.opacity}};
+      pointer-events: none;
+      white-space: nowrap;
+      z-index: 100;
+    }
+
+    /* Ikona krzyża */
+    .cross-icon {
+      width: 50px;
+      height: 50px;
+      margin-bottom: 20px;
+      opacity: 0.8;
+    }
+
+    .cross-icon svg {
+      width: 100%;
+      height: 100%;
+      fill: #d4af37;
+    }
+  </style>
+</head>
+<body>
+  <div class="invitation">
+    <!-- Ramka dekoracyjna -->
+    <div class="frame"></div>
+    <div class="corner corner-tl"></div>
+    <div class="corner corner-tr"></div>
+    <div class="corner corner-bl"></div>
+    <div class="corner corner-br"></div>
+
+    <!-- Ikona (opcjonalna) -->
+    {{#if showCrossIcon}}
+    <div class="cross-icon">
+      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M11 2v7H4v4h7v9h2v-9h7v-4h-7V2z"/>
+      </svg>
+    </div>
+    {{/if}}
+
+    <!-- Tytuł -->
+    <h1 class="title">{{#if title}}{{title}}{{else}}Zaproszenie{{/if}}</h1>
+
+    <div class="divider"></div>
+
+    <!-- Imię dziecka -->
+    {{#if child_name}}
+    <div class="child-name">{{capitalize child_name}}</div>
+    {{else if childName}}
+    <div class="child-name">{{capitalize childName}}</div>
+    {{/if}}
+
+    <!-- Tekst zaproszenia -->
+    {{#if invitation_text}}
+    <p class="invitation-text">{{{multiline invitation_text}}}</p>
+    {{else if invitationText}}
+    <p class="invitation-text">{{{multiline invitationText}}}</p>
+    {{else}}
+    <p class="invitation-text">
+      Serdecznie zapraszamy na uroczystość<br>
+      Pierwszej Komunii Świętej
+    </p>
+    {{/if}}
+
+    <!-- Data i godzina -->
+    {{#if ceremony_date}}
+    <div class="datetime">
+      <span class="label">Data</span>
+      {{ceremony_date}}
+    </div>
+    {{else if date}}
+    <div class="datetime">
+      <span class="label">Data</span>
+      {{date}}
+    </div>
+    {{/if}}
+
+    {{#if ceremony_time}}
+    <div class="datetime">
+      <span class="label">Godzina</span>
+      {{ceremony_time}}
+    </div>
+    {{else if time}}
+    <div class="datetime">
+      <span class="label">Godzina</span>
+      {{time}}
+    </div>
+    {{/if}}
+
+    <!-- Miejsce -->
+    {{#if church_name}}
+    <div class="venue">
+      <span class="venue-name">{{church_name}}</span>
+      {{#if church_address}}{{{multiline church_address}}}{{/if}}
+    </div>
+    {{else if venueName}}
+    <div class="venue">
+      <span class="venue-name">{{venueName}}</span>
+      {{#if venueAddress}}{{{multiline venueAddress}}}{{/if}}
+    </div>
+    {{/if}}
+
+    <!-- Miejsce przyjęcia (opcjonalne) -->
+    {{#if reception_place}}
+    <div class="venue">
+      <span class="venue-name">Przyjęcie:</span>
+      {{{multiline reception_place}}}
+    </div>
+    {{/if}}
+
+    <!-- Dodatkowe informacje -->
+    {{#if additional_info}}
+    <p class="additional-info">{{{multiline additional_info}}}</p>
+    {{else if additionalInfo}}
+    <p class="additional-info">{{{multiline additionalInfo}}}</p>
+    {{/if}}
+
+    <!-- Podpis -->
+    {{#if signature}}
+    <div class="signature">{{signature}}</div>
+    {{/if}}
+
+    <!-- Watermark (tylko dla preview) -->
+    {{#if watermark}}
+    <div class="watermark">{{watermark.text}}</div>
+    {{/if}}
+  </div>
+</body>
+</html>

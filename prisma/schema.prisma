@@ -230,11 +230,12 @@ model PersonalizationCase {
   orderItemId           String    @unique @map("order_item_id")
   templateId            String    @map("template_id")
   templateVersionFrozen Int       @map("template_version_frozen")
-  status                String    @default("NEW") // NEW, WAITING_FOR_CUSTOMER, SUBMITTED, READY_FOR_PRINT, ARCHIVED
+  status                String    @default("NEW") // NEW, WAITING_FOR_CUSTOMER, PREVIEW_READY, SUBMITTED, RENDERED, FAILED_RENDER, READY_FOR_PRINT, ARCHIVED
   customerTokenHash     String?   @unique @map("customer_token_hash")
   tokenActive           Boolean   @default(true) @map("token_active")
   submittedAt           DateTime? @map("submitted_at")
   answersJson           Json?     @map("answers_json")
+  validationSummary     Json?     @map("validation_summary") // { errors: [], warnings: [] }
   notesInternal         String?   @map("notes_internal")
   createdAt             DateTime  @default(now()) @map("created_at")
   updatedAt             DateTime  @updatedAt @map("updated_at")
@@ -311,33 +312,37 @@ model OrderAccessPin {
 model RenderJob {
   id         String    @id @default(cuid())
   caseId     String    @map("case_id")
-  type       String    // PDF, PNG
-  status     String    @default("NEW") // NEW, RUNNING, DONE, FAILED
+  jobType    String    @map("job_type") // PDF_PRINT, PNG_PREVIEW
+  status     String    @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
   attempts   Int       @default(0)
   error      String?   @db.Text
+  metadata   Json?     // parametry renderowania
   createdAt  DateTime  @default(now()) @map("created_at")
   startedAt  DateTime? @map("started_at")
-  finishedAt DateTime? @map("finished_at")
+  completedAt DateTime? @map("completed_at")
 
   case       PersonalizationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   @@index([caseId])
   @@index([status])
+  @@index([jobType])
   @@map("render_jobs")
 }
 
 model Asset {
-  id         String   @id @default(cuid())
-  caseId     String   @map("case_id")
-  type       String   // PDF_PREVIEW, PNG_PREVIEW, PDF_PRINT
-  storageKey String   @map("storage_key") // ścieżka w S3
-  mime       String
-  sizeBytes  Int      @map("size_bytes")
-  createdAt  DateTime @default(now()) @map("created_at")
+  id         String    @id @default(cuid())
+  caseId     String    @map("case_id")
+  assetType  String    @map("asset_type") // PNG_PREVIEW, PDF_PRINT
+  filePath   String    @map("file_path") // ścieżka lokalna lub S3
+  fileSize   Int       @map("file_size")
+  mimeType   String    @map("mime_type")
+  metadata   Json?     // dodatkowe dane (width, height, generated, etc)
+  createdAt  DateTime  @default(now()) @map("created_at")
 
   case       PersonalizationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   @@index([caseId])
+  @@index([assetType])
   @@map("assets")
 }
 

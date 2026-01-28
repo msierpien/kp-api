@@ -1,6 +1,10 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import prisma from '../../lib/prisma';
 import { hashToken, maskToken } from '../../lib/token';
+import { renderPreview } from '../../services/renderer/puppeteer-renderer.service';
+import { validateAnswers } from '../../services/renderer/text-validator.service';
+import { saveFile } from '../../services/storage/local-storage.service';
+import { addFinalPdfJob } from '../../services/queue/render.queue';
 
 interface PersonalizationParams {
   token: string;
@@ -223,6 +227,206 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
     }
   );
 
+  // POST /personalization/:token/preview - Generate preview and validate
+  fastify.post<{ Params: PersonalizationParams; Body: SaveDesignBody }>(
+    '/:token/preview',
+    async (
+      request: FastifyRequest<{ Params: PersonalizationParams; Body: SaveDesignBody }>,
+      reply: FastifyReply
+    ) => {
+      try {
+        addSecurityHeaders(reply);
+
+        const tokenHash = hashToken(request.params.token);
+
+        const personalizationCase = await prisma.personalizationCase.findUnique({
+          where: { customerTokenHash: tokenHash },
+          include: {
+            orderItem: {
+              include: {
+                order: { select: { id: true, orderReference: true } },
+                personalizedProduct: {
+                  include: {
+                    template: {
+                      include: {
+                        forms: {
+                          include: { fields: { orderBy: { sortOrder: 'asc' } } },
+                          orderBy: { sortOrder: 'asc' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        });
+
+        if (!personalizationCase) {
+          return reply.status(404).send({
+            error: 'Not Found',
+            message: 'Nie znaleziono personalizacji',
+          });
+        }
+
+        if (!personalizationCase.tokenActive) {
+          return reply.status(403).send({
+            error: 'Forbidden',
+            message: 'Token jest nieaktywny',
+          });
+        }
+
+        // Zbuduj mapę fieldKey -> fieldId
+        const fieldKeyToId = new Map<string, string>();
+        personalizationCase.orderItem?.personalizedProduct?.template?.forms?.forEach((form: any) => {
+          form.fields.forEach((f: any) => fieldKeyToId.set(f.key, f.id));
+        });
+
+        // Zapisz odpowiedzi jeśli przyszły w body
+        let mergedAnswers = personalizationCase.answersJson || {};
+        if (request.body?.answers) {
+          mergedAnswers = await saveAnswers(
+            personalizationCase.id,
+            personalizationCase.answersJson,
+            request.body.answers,
+            fieldKeyToId
+          );
+        }
+
+        // Pobierz wszystkie pola z template
+        const allFields: any[] = [];
+        personalizationCase.orderItem?.personalizedProduct?.template?.forms?.forEach((form: any) => {
+          allFields.push(...form.fields);
+        });
+
+        // Walidacja z opentype.js
+        const answersForValidation = mergedAnswers as Record<string, string | number | boolean | undefined>;
+        const validation = await validateAnswers(answersForValidation, allFields.map(f => ({
+          key: f.key,
+          label: f.label,
+          type: f.type,
+          required: f.required,
+          maxLength: f.maxLength || undefined,
+          minLength: f.minLength || undefined,
+          pattern: f.pattern || undefined,
+        })));
+
+        // Generuj preview nawet z ostrzeżeniami (ale nie z błędami krytycznymi)
+        let previewUrl: string | null = null;
+
+        try {
+          // Pobierz nazwę szablonu z konfiguracji lub użyj domyślnego
+          const template = personalizationCase.orderItem?.personalizedProduct?.template;
+          const templateSlug = (template as any)?.slug || template?.name?.toLowerCase().replace(/\s+/g, '-') || 'default';
+
+          // DEBUG: Loguj dane przekazywane do renderera
+          fastify.log.info({
+            msg: 'Preview render - input data',
+            templateSlug,
+            mergedAnswers,
+            caseId: personalizationCase.id,
+          });
+
+          // Renderuj preview z Puppeteer
+          const previewBuffer = await renderPreview(
+            {
+              answers: mergedAnswers as Record<string, string | number | boolean>,
+              templateName: templateSlug,
+              watermark: {
+                text: 'PODGLĄD',
+                opacity: 0.15,
+                angle: -30,
+                fontSize: 72,
+              },
+            },
+            {
+              width: 800,
+              height: 600,
+              scale: 1,
+              includeWatermark: true,
+            }
+          );
+
+          const templateVersion = personalizationCase.orderItem?.personalizedProduct?.template?.version || 1;
+          const orderId = personalizationCase.orderItem?.order?.id;
+
+          const savedFile = await saveFile(previewBuffer, {
+            orderId: orderId || 'unknown',
+            templateVersion,
+            filename: `preview-${personalizationCase.id}`,
+            extension: 'png',
+          });
+
+          // Utwórz Asset PNG_PREVIEW
+          await prisma.asset.create({
+            data: {
+              caseId: personalizationCase.id,
+              assetType: 'PNG_PREVIEW',
+              filePath: savedFile.relativePath,
+              fileSize: savedFile.size,
+              mimeType: 'image/png',
+              metadata: {
+                width: 800,
+                height: 600,
+                generated: new Date().toISOString(),
+                templateName: templateSlug,
+              },
+            },
+          });
+
+          previewUrl = savedFile.url;
+
+          // DEBUG: Loguj wygenerowany URL
+          fastify.log.info({
+            msg: 'Preview render - output',
+            previewUrl,
+            filePath: savedFile.relativePath,
+            fileSize: savedFile.size,
+          });
+
+          // Zaktualizuj status case na PREVIEW_READY
+          await prisma.personalizationCase.update({
+            where: { id: personalizationCase.id },
+            data: {
+              status: 'PREVIEW_READY',
+              answersJson: mergedAnswers,
+              validationSummary: JSON.parse(JSON.stringify(validation)),
+            },
+          });
+        } catch (renderError) {
+          fastify.log.error({ err: renderError }, 'Preview generation failed');
+
+          // Zapisz validation summary nawet jeśli rendering się nie udał
+          await prisma.personalizationCase.update({
+            where: { id: personalizationCase.id },
+            data: {
+              answersJson: mergedAnswers,
+              validationSummary: JSON.parse(JSON.stringify(validation)),
+            },
+          });
+
+          return reply.status(500).send({
+            error: 'Internal Server Error',
+            message: 'Nie udało się wygenerować podglądu',
+            validation,
+          });
+        }
+
+        return reply.send({
+          previewUrl,
+          validation,
+          status: 'PREVIEW_READY',
+        });
+      } catch (error) {
+        fastify.log.error(error);
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Nie udało się przetworzyć zapytania',
+        });
+      }
+    }
+  );
+
   // POST /personalization/:token/submit - Submit personalization for production
   fastify.post<{ Params: PersonalizationParams; Body: SaveDesignBody }>(
     '/:token/submit',
@@ -240,6 +444,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           where: { customerTokenHash: tokenHash },
           include: {
             answers: true,
+            order: {
+              select: { orderReference: true },
+            },
             orderItem: {
               include: {
                 personalizedProduct: {
@@ -291,7 +498,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
 
           await prisma.personalizationCase.update({
             where: { id: personalizationCase.id },
-            data: { answersJson: mergedAnswers },
+            data: { answersJson: mergedAnswers as object },
           });
         }
 
@@ -306,6 +513,52 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
+        // Pobierz dane potrzebne do renderowania
+        const submitTemplate = personalizationCase.orderItem?.personalizedProduct?.template;
+        const templateSlug = (submitTemplate as any)?.slug || submitTemplate?.name?.toLowerCase().replace(/\s+/g, '-') || 'default';
+        const templateVersion = personalizationCase.orderItem?.personalizedProduct?.template?.version || 1;
+        const orderId = personalizationCase.orderId;
+        const orderReference = personalizationCase.order?.orderReference;
+
+        // Utwórz RenderJob w bazie (dla śledzenia)
+        const dbRenderJob = await prisma.renderJob.create({
+          data: {
+            caseId: personalizationCase.id,
+            jobType: 'PDF_PRINT',
+            status: 'PENDING',
+            metadata: {
+              templateId: personalizationCase.templateId,
+              templateVersion: personalizationCase.templateVersionFrozen,
+            },
+          },
+        });
+
+        // Dodaj job do BullMQ queue
+        const bullmqJob = await addFinalPdfJob({
+          caseId: personalizationCase.id,
+          answers: mergedAnswers as Record<string, string | number | boolean>,
+          templateName: templateSlug,
+          templateVersion,
+          orderId,
+          orderReference: orderReference || undefined,
+          renderOptions: {
+            width: 297, // A4 landscape for 2-page spread (148mm x 2)
+            height: 210,
+          },
+        });
+
+        // Zaktualizuj RenderJob z ID BullMQ
+        await prisma.renderJob.update({
+          where: { id: dbRenderJob.id },
+          data: {
+            metadata: {
+              ...(dbRenderJob.metadata as object || {}),
+              bullmqJobId: bullmqJob.id,
+            },
+          },
+        });
+
+        // Zaktualizuj status case na SUBMITTED
         const updated = await prisma.personalizationCase.update({
           where: { customerTokenHash: tokenHash },
           data: {
@@ -314,10 +567,16 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           },
         });
 
-        // TODO: Generate PDF
-        // TODO: Send notification to admin
+        fastify.log.info(`RenderJob created: ${dbRenderJob.id}, BullMQ job: ${bullmqJob.id} for case: ${personalizationCase.id}`);
 
-        return reply.send(updated);
+        return reply.send({
+          ...updated,
+          renderJob: {
+            id: dbRenderJob.id,
+            bullmqJobId: bullmqJob.id,
+            status: 'PENDING',
+          },
+        });
       } catch (error) {
         fastify.log.error(error);
         return reply.status(500).send({

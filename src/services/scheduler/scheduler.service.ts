@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import prisma from '../../lib/prisma';
-import { syncOrdersForShop } from '../sync/sync-orders.service';
+import { syncShopOrders } from '../sync/sync-orders.service';
+// BullMQ Worker automatycznie przetwarza RenderJobs - nie potrzebujemy crona
 
 /**
  * Mapa aktywnych zadań cron per sklep
@@ -36,7 +37,7 @@ async function runShopSync(shopId: string, shopName: string) {
   console.log(`[Scheduler] 🔄 Starting automatic sync for shop: ${shopName} (${shopId})`);
   
   try {
-    const result = await syncOrdersForShop(shopId);
+    const result = await syncShopOrders(shopId);
     
     const duration = Date.now() - startTime.getTime();
     console.log(
@@ -92,6 +93,9 @@ function stopShopSync(shopId: string) {
   }
 }
 
+// UWAGA: Przetwarzanie RenderJobs jest teraz obsługiwane przez BullMQ Worker
+// Nie potrzebujemy już crona do przetwarzania - worker automatycznie pobiera joby z kolejki Redis
+
 /**
  * Inicjalizuje scheduler - ładuje wszystkie sklepy z auto-sync i scheduleuje
  */
@@ -126,6 +130,10 @@ export async function initializeScheduler() {
     }
     
     console.log(`[Scheduler] ✅ Initialized ${shops.length} shop sync schedules`);
+
+    // UWAGA: RenderJobs są teraz przetwarzane przez BullMQ Worker (automatycznie)
+    console.log('[Scheduler] ℹ️  RenderJobs processing handled by BullMQ Worker');
+
   } catch (error) {
     console.error('[Scheduler] ❌ Failed to initialize scheduler:', error);
   }

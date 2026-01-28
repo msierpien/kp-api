@@ -4,12 +4,19 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import jwt from '@fastify/jwt';
+import fastifyStatic from '@fastify/static';
+import path from 'path';
 import prisma from './lib/prisma';
 import { authRoutes } from './routes/auth.routes';
 import { adminRoutes } from './routes/admin';
 import { personalizationRoutes } from './routes/public/personalization.routes';
 import { reloadEmailService } from './services/admin/email-settings.service';
 import { initializeScheduler } from './services/scheduler/scheduler.service';
+import { initStorage } from './services/storage/local-storage.service';
+import { startRenderWorker, stopRenderWorker } from './services/queue/render.worker';
+import { closeQueue, getQueueStats } from './services/queue/render.queue';
+import { closeBrowser } from './services/renderer/puppeteer-renderer.service';
+import bullBoardPlugin from './plugins/bull-board';
 
 const server = Fastify({
   logger: {
@@ -24,6 +31,17 @@ const server = Fastify({
         }
       : undefined,
   },
+});
+
+// Custom content type parser to allow empty JSON bodies (Fastify v5 fix)
+server.addContentTypeParser('application/json', { parseAs: 'string' }, function (req, body, done) {
+  try {
+    const json = body === '' ? {} : JSON.parse(body as string);
+    done(null, json);
+  } catch (err: any) {
+    err.statusCode = 400;
+    done(err, undefined);
+  }
 });
 
 // Plugins
@@ -57,6 +75,8 @@ server.register(cors, {
 
 server.register(helmet, {
   contentSecurityPolicy: process.env.NODE_ENV === 'production',
+  crossOriginResourcePolicy: false, // Wyłącz - ustawiamy ręcznie dla /storage/
+  crossOriginEmbedderPolicy: false, // Pozwól na cross-origin embedding
 });
 
 server.register(rateLimit, {
@@ -69,23 +89,56 @@ server.register(jwt, {
   secret: process.env.JWT_ACCESS_SECRET || 'dev-secret-change-in-production',
 });
 
+// Static files - storage (z CORS dla cross-origin requests)
+const storagePath = process.env.STORAGE_PATH || path.join(process.cwd(), 'storage');
+server.register(fastifyStatic, {
+  root: storagePath,
+  prefix: '/storage/',
+  decorateReply: false,
+  setHeaders: (res, _path) => {
+    // Dodaj nagłówki CORS dla plików statycznych
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+    // Pozwól na cross-origin embedding (dla <img>, <video> etc.)
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    // Cache dla obrazów (1 godzina)
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+  },
+});
+
 // Routes
 server.register(authRoutes, { prefix: '/auth' });
 server.register(adminRoutes, { prefix: '/admin' });
 server.register(personalizationRoutes, { prefix: '/personalization' });
 
+// Bull Board Dashboard (tylko w development lub z flagą)
+if (process.env.NODE_ENV === 'development' || process.env.ENABLE_BULL_BOARD === 'true') {
+  server.register(bullBoardPlugin);
+}
+
 // Health check
 server.get('/health', async () => {
   try {
     await prisma.$queryRaw`SELECT 1`;
-    return { 
-      status: 'ok', 
+
+    // Pobierz statystyki kolejki renderowania
+    let queueStats = null;
+    try {
+      queueStats = await getQueueStats();
+    } catch {
+      // Queue może nie być dostępna
+    }
+
+    return {
+      status: 'ok',
       timestamp: new Date().toISOString(),
-      database: 'connected'
+      database: 'connected',
+      renderQueue: queueStats,
     };
   } catch (error) {
-    return { 
-      status: 'error', 
+    return {
+      status: 'error',
       timestamp: new Date().toISOString(),
       database: 'disconnected',
       error: error instanceof Error ? error.message : 'Unknown error'
@@ -105,6 +158,17 @@ server.get('/', async () => {
 // Graceful shutdown
 const gracefulShutdown = async () => {
   server.log.info('Shutting down gracefully...');
+
+  // Zatrzymaj BullMQ worker i zamknij przeglądarkę Puppeteer
+  try {
+    await stopRenderWorker();
+    await closeQueue();
+    await closeBrowser();
+    server.log.info('🛑 Render worker and browser stopped');
+  } catch (error) {
+    server.log.error({ err: error }, 'Error stopping render worker');
+  }
+
   await prisma.$disconnect();
   await server.close();
   process.exit(0);
@@ -119,12 +183,20 @@ const start = async () => {
     const port = Number(process.env.API_PORT) || 3001;
     const host = process.env.API_HOST || '0.0.0.0';
 
+    // Inicjalizuj storage
+    try {
+      await initStorage();
+      server.log.info('📁 Storage initialized');
+    } catch (error) {
+      server.log.error({ err: error }, '❌ Failed to initialize storage');
+    }
+
     // Załaduj ustawienia email z bazy danych przy starcie
     try {
       await reloadEmailService();
       server.log.info('✉️  Email service initialized from database');
     } catch (error) {
-      server.log.warn('⚠️  Failed to initialize email service from database:', error);
+      server.log.warn({ err: error }, '⚠️  Failed to initialize email service from database');
     }
 
     // Zainicjalizuj scheduler automatycznej synchronizacji
@@ -132,13 +204,24 @@ const start = async () => {
       await initializeScheduler();
       server.log.info('📅 Order synchronization scheduler initialized');
     } catch (error) {
-      server.log.warn('⚠️  Failed to initialize scheduler:', error);
+      server.log.warn({ err: error }, '⚠️  Failed to initialize scheduler');
+    }
+
+    // Uruchom BullMQ render worker
+    try {
+      startRenderWorker();
+      server.log.info('🎨 Render worker started (Puppeteer + BullMQ)');
+    } catch (error) {
+      server.log.error({ err: error }, '❌ Failed to start render worker');
     }
 
     await server.listen({ port, host });
     server.log.info(`🚀 Server is running on http://${host}:${port}`);
     server.log.info(`📊 Health check: http://${host}:${port}/health`);
     server.log.info(`🔒 Environment: ${process.env.NODE_ENV || 'development'}`);
+    if (process.env.NODE_ENV === 'development' || process.env.ENABLE_BULL_BOARD === 'true') {
+      server.log.info(`📋 Bull Board: http://${host}:${port}/admin/queues`);
+    }
   } catch (err) {
     server.log.error(err);
     await prisma.$disconnect();

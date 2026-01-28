@@ -169,7 +169,7 @@ export async function seed() {
       shopId: shop.id,
       externalOrderId: 'WC-1001',
       orderReference: 'KP-2024-001',
-      customerEmail: 'jan.kowalski@example.com',
+      customerEmail: 'sierpien.michal@gmail.com',
       customerName: 'Jan Kowalski',
       language: 'pl',
       currency: 'PLN',

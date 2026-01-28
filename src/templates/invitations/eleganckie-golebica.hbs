@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Tangerine:wght@400;700&family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&display=swap');
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      font-family: 'Cormorant Garamond', serif;
+      background: #fff;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    .container {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: row;
+    }
+
+    /* Strona lewa - główne zaproszenie */
+    .page-left, .page-right {
+      width: 50%;
+      height: 100%;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 30px;
+    }
+
+    /* Ramka z zaokrąglonymi rogami */
+    .frame {
+      position: absolute;
+      top: 25px;
+      left: 25px;
+      right: 25px;
+      bottom: 25px;
+      border: 1px solid #333;
+      border-radius: 15px;
+      pointer-events: none;
+    }
+
+    /* Wieniec/gołębica SVG */
+    .wreath-icon {
+      width: 100px;
+      height: 90px;
+      margin-bottom: 10px;
+    }
+
+    .wreath-icon svg {
+      width: 100%;
+      height: 100%;
+      stroke: #333;
+      stroke-width: 1;
+      fill: none;
+    }
+
+    /* Imię dziecka - kaligraficzny */
+    .child-name {
+      font-family: 'Tangerine', cursive;
+      font-size: 52px;
+      font-weight: 400;
+      color: #222;
+      margin-bottom: 15px;
+      letter-spacing: 2px;
+    }
+
+    /* Tekst "z Mamą pragnie zaprosić" */
+    .intro-text {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 14px;
+      font-weight: 400;
+      color: #333;
+      margin-bottom: 15px;
+      letter-spacing: 1px;
+    }
+
+    /* Imiona gości - pogrubione */
+    .guest-names {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 18px;
+      font-weight: 600;
+      color: #111;
+      text-align: center;
+      line-height: 1.5;
+      margin-bottom: 15px;
+    }
+
+    /* "na uroczystość przyjęcia" */
+    .occasion-intro {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 14px;
+      font-weight: 400;
+      color: #333;
+      margin-bottom: 10px;
+      letter-spacing: 1px;
+    }
+
+    /* Sakrament Pierwszej Komunii Świętej */
+    .sacrament-title {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 16px;
+      font-weight: 600;
+      color: #111;
+      text-align: center;
+      margin-bottom: 8px;
+    }
+
+    /* "która odbędzie się" */
+    .when-intro {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 13px;
+      font-weight: 300;
+      font-style: italic;
+      color: #444;
+      margin-bottom: 8px;
+    }
+
+    /* Data i godzina */
+    .datetime {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 15px;
+      font-weight: 500;
+      color: #222;
+      margin-bottom: 10px;
+    }
+
+    /* Miejsce - kościół */
+    .venue {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 14px;
+      font-weight: 400;
+      color: #333;
+      text-align: center;
+      line-height: 1.5;
+      max-width: 85%;
+    }
+
+    /* ========== PRAWA STRONA ========== */
+
+    /* "Kochani" - kaligraficzny */
+    .dear-title {
+      font-family: 'Tangerine', cursive;
+      font-size: 48px;
+      font-weight: 400;
+      color: #222;
+      margin-bottom: 25px;
+      letter-spacing: 2px;
+    }
+
+    /* Tekst o przyjęciu */
+    .reception-text {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 13px;
+      font-weight: 400;
+      color: #333;
+      text-align: center;
+      line-height: 1.7;
+      max-width: 90%;
+      margin-bottom: 20px;
+    }
+
+    /* RSVP */
+    .rsvp-text {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 12px;
+      font-weight: 400;
+      color: #444;
+      text-align: center;
+      line-height: 1.6;
+      margin-bottom: 25px;
+    }
+
+    .rsvp-text .phone {
+      font-weight: 500;
+      color: #222;
+    }
+
+    /* "Do zobaczenia!" - kaligraficzny */
+    .goodbye {
+      font-family: 'Tangerine', cursive;
+      font-size: 36px;
+      font-weight: 400;
+      color: #222;
+      font-style: italic;
+    }
+
+    /* Znaczniki cięcia (crop marks) - opcjonalne */
+    .crop-marks {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    .crop-mark {
+      position: absolute;
+      background: #000;
+    }
+
+    .crop-tl-h { top: 10px; left: 0; width: 15px; height: 1px; }
+    .crop-tl-v { top: 0; left: 10px; width: 1px; height: 15px; }
+    .crop-tr-h { top: 10px; right: 0; width: 15px; height: 1px; }
+    .crop-tr-v { top: 0; right: 10px; width: 1px; height: 15px; }
+    .crop-bl-h { bottom: 10px; left: 0; width: 15px; height: 1px; }
+    .crop-bl-v { bottom: 0; left: 10px; width: 1px; height: 15px; }
+    .crop-br-h { bottom: 10px; right: 0; width: 15px; height: 1px; }
+    .crop-br-v { bottom: 0; right: 10px; width: 1px; height: 15px; }
+    .crop-center-t { top: 0; left: 50%; width: 1px; height: 15px; transform: translateX(-50%); }
+    .crop-center-b { bottom: 0; left: 50%; width: 1px; height: 15px; transform: translateX(-50%); }
+
+    /* Watermark */
+    .watermark {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) rotate({{watermark.angle}}deg);
+      font-family: 'Cormorant Garamond', serif;
+      font-size: {{watermark.fontSize}}px;
+      font-weight: 700;
+      color: #999;
+      opacity: {{watermark.opacity}};
+      pointer-events: none;
+      white-space: nowrap;
+      z-index: 100;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Znaczniki cięcia -->
+    {{#if showCropMarks}}
+    <div class="crop-marks">
+      <div class="crop-mark crop-tl-h"></div>
+      <div class="crop-mark crop-tl-v"></div>
+      <div class="crop-mark crop-tr-h"></div>
+      <div class="crop-mark crop-tr-v"></div>
+      <div class="crop-mark crop-bl-h"></div>
+      <div class="crop-mark crop-bl-v"></div>
+      <div class="crop-mark crop-br-h"></div>
+      <div class="crop-mark crop-br-v"></div>
+      <div class="crop-mark crop-center-t"></div>
+      <div class="crop-mark crop-center-b"></div>
+    </div>
+    {{/if}}
+
+    <!-- STRONA LEWA - Główne zaproszenie -->
+    <div class="page-left">
+      <div class="frame"></div>
+
+      <!-- Wieniec z gałązek -->
+      <div class="wreath-icon">
+        <svg viewBox="0 0 100 90" xmlns="http://www.w3.org/2000/svg">
+          <!-- Lewa gałązka -->
+          <path d="M50 75 Q30 60 20 40 Q15 30 25 25" stroke-linecap="round"/>
+          <path d="M25 35 Q20 30 15 35" stroke-linecap="round"/>
+          <path d="M22 40 Q17 38 14 43" stroke-linecap="round"/>
+          <path d="M20 48 Q15 47 13 52" stroke-linecap="round"/>
+          <path d="M25 28 Q22 22 18 25" stroke-linecap="round"/>
+          <path d="M30 23 Q28 18 24 19" stroke-linecap="round"/>
+          <!-- Prawa gałązka -->
+          <path d="M50 75 Q70 60 80 40 Q85 30 75 25" stroke-linecap="round"/>
+          <path d="M75 35 Q80 30 85 35" stroke-linecap="round"/>
+          <path d="M78 40 Q83 38 86 43" stroke-linecap="round"/>
+          <path d="M80 48 Q85 47 87 52" stroke-linecap="round"/>
+          <path d="M75 28 Q78 22 82 25" stroke-linecap="round"/>
+          <path d="M70 23 Q72 18 76 19" stroke-linecap="round"/>
+          <!-- Listki dodatkowe -->
+          <path d="M35 55 Q30 52 28 57" stroke-linecap="round"/>
+          <path d="M40 63 Q35 61 33 66" stroke-linecap="round"/>
+          <path d="M65 55 Q70 52 72 57" stroke-linecap="round"/>
+          <path d="M60 63 Q65 61 67 66" stroke-linecap="round"/>
+          <!-- Gołąbek mały na górze (opcjonalnie) -->
+          <ellipse cx="50" cy="18" rx="8" ry="5" fill="none"/>
+          <path d="M42 18 Q38 15 35 18" stroke-linecap="round"/>
+          <path d="M58 18 Q62 15 65 18" stroke-linecap="round"/>
+          <circle cx="47" cy="17" r="1" fill="#333"/>
+        </svg>
+      </div>
+
+      <!-- Imię dziecka -->
+      <div class="child-name">{{capitalize childName}}</div>
+
+      <!-- z Mamą pragnie zaprosić -->
+      <div class="intro-text">{{#if introText}}{{introText}}{{else}}z Mamą pragnie zaprosić{{/if}}</div>
+
+      <!-- Imiona gości -->
+      <div class="guest-names">{{{multiline guestNames}}}</div>
+
+      <!-- na uroczystość przyjęcia -->
+      <div class="occasion-intro">na uroczystość przyjęcia</div>
+
+      <!-- Sakramentu Pierwszej Komunii Świętej -->
+      <div class="sacrament-title">Sakramentu Pierwszej Komunii Świętej,</div>
+
+      <!-- która odbędzie się -->
+      <div class="when-intro">która odbędzie się</div>
+
+      <!-- Data i godzina -->
+      <div class="datetime">{{date}} o godzinie {{time}}</div>
+
+      <!-- Miejsce -->
+      <div class="venue">{{{multiline churchAddress}}}</div>
+    </div>
+
+    <!-- STRONA PRAWA - Informacje o przyjęciu -->
+    <div class="page-right">
+      <div class="frame"></div>
+
+      <!-- Kochani -->
+      <div class="dear-title">{{#if dearTitle}}{{dearTitle}}{{else}}Kochani{{/if}}</div>
+
+      <!-- Info o przyjęciu -->
+      <div class="reception-text">
+        {{#if receptionText}}
+          {{{multiline receptionText}}}
+        {{else}}
+          Po uroczystości serdecznie zapraszamy<br>
+          na przyjęcie do {{receptionVenue}}<br>
+          {{receptionAddress}}
+        {{/if}}
+      </div>
+
+      <!-- RSVP -->
+      <div class="rsvp-text">
+        {{#if rsvpText}}
+          {{{multiline rsvpText}}}
+        {{else}}
+          Uprzejmie prosimy o potwierdzenie przybycia<br>
+          do dnia {{rsvpDate}}<br>
+          Tel. <span class="phone">{{rsvpPhone}}</span>
+        {{/if}}
+      </div>
+
+      <!-- Do zobaczenia! -->
+      <div class="goodbye">{{#if goodbyeText}}{{goodbyeText}}{{else}}Do zobaczenia !{{/if}}</div>
+    </div>
+
+    <!-- Watermark (tylko dla preview) -->
+    {{#if watermark}}
+    <div class="watermark">{{watermark.text}}</div>
+    {{/if}}
+  </div>
+</body>
+</html>

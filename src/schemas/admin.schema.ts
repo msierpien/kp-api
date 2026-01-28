@@ -179,3 +179,122 @@ export const emailSettingsIdParamsSchema = z.object({
 
 export type EmailSettingsInput = z.infer<typeof emailSettingsSchema>;
 export type EmailSettingsIdParams = z.infer<typeof emailSettingsIdParamsSchema>;
+
+// ============================================
+// Template Layout (wizualny edytor szablonów)
+// ============================================
+
+const backgroundPropertiesSchema = z.object({
+  type: z.literal('background'),
+  imageUrl: z.string().min(1),
+  fit: z.enum(['cover', 'contain', 'fill']).default('cover'),
+});
+
+const imagePropertiesSchema = z.object({
+  type: z.literal('image'),
+  imageUrl: z.string().min(1),
+  fit: z.enum(['cover', 'contain', 'fill']).default('contain'),
+});
+
+const textFieldPropertiesSchema = z.object({
+  type: z.literal('text'),
+  fieldKey: z.string().min(1),
+  placeholder: z.string().default(''),
+  fontSize: z.number().positive(),
+  fontFamily: z.string().min(1),
+  fontWeight: z.number().int().min(100).max(900).default(400),
+  fontStyle: z.enum(['normal', 'italic']).default('normal'),
+  fill: z.string().default('#000000'),
+  textAlign: z.enum(['left', 'center', 'right']).default('left'),
+  lineHeight: z.number().positive().default(1.2),
+  maxLines: z.number().int().positive().default(1),
+  textTransform: z.enum(['none', 'uppercase', 'lowercase', 'capitalize']).default('none'),
+  editable: z.literal(true).default(true),
+});
+
+const staticTextPropertiesSchema = z.object({
+  type: z.literal('static_text'),
+  text: z.string().default(''),
+  fontSize: z.number().positive(),
+  fontFamily: z.string().min(1),
+  fontWeight: z.number().int().min(100).max(900).default(400),
+  fontStyle: z.enum(['normal', 'italic']).default('normal'),
+  fill: z.string().default('#000000'),
+  textAlign: z.enum(['left', 'center', 'right']).default('left'),
+  lineHeight: z.number().positive().default(1.2),
+  editable: z.literal(false).default(false),
+});
+
+const shapePropertiesSchema = z.object({
+  type: z.literal('shape'),
+  shapeType: z.enum(['rectangle', 'circle', 'ellipse', 'line']),
+  fill: z.string().default('transparent'),
+  stroke: z.string().default('#000000'),
+  strokeWidth: z.number().min(0).default(1),
+  borderRadius: z.number().min(0).default(0),
+});
+
+const cutLinePropertiesSchema = z.object({
+  type: z.literal('cut_line'),
+  stroke: z.string().default('#ff0000'),
+  strokeWidth: z.number().min(0).default(0.5),
+  strokeDashArray: z.array(z.number()).default([5, 5]),
+  clientVisible: z.literal(false).default(false),
+});
+
+const layerPropertiesSchema = z.discriminatedUnion('type', [
+  backgroundPropertiesSchema,
+  imagePropertiesSchema,
+  textFieldPropertiesSchema,
+  staticTextPropertiesSchema,
+  shapePropertiesSchema,
+  cutLinePropertiesSchema,
+]);
+
+const layerBaseSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  type: z.enum(['background', 'image', 'text', 'static_text', 'shape', 'cut_line']),
+  visible: z.boolean().default(true),
+  locked: z.boolean().default(false),
+  opacity: z.number().min(0).max(1).default(1),
+  zIndex: z.number().int().min(0),
+  x: z.number(),
+  y: z.number(),
+  width: z.number().min(0),
+  height: z.number().min(0),
+  rotation: z.number().default(0),
+  properties: layerPropertiesSchema,
+});
+
+const fontConfigSchema = z.object({
+  family: z.string().min(1),
+  src: z.string().min(1),
+  weight: z.number().int().min(100).max(900).default(400),
+  style: z.enum(['normal', 'italic']).default('normal'),
+});
+
+const canvasConfigSchema = z.object({
+  width: z.number().positive(),
+  height: z.number().positive(),
+  unit: z.enum(['px', 'mm']).default('px'),
+  dpi: z.number().positive().default(300),
+  bleed: z.number().min(0).default(0),
+  safeArea: z.number().min(0).default(0),
+  backgroundColor: z.string().default('#ffffff'),
+});
+
+export const templateLayoutSchema = z.object({
+  version: z.literal(1),
+  canvas: canvasConfigSchema,
+  fonts: z.array(fontConfigSchema).default([]),
+  layers: z.array(layerBaseSchema).default([]),
+});
+
+export const templateAssetParamsSchema = z.object({
+  id: z.string().min(1),
+  assetId: z.string().min(1),
+});
+
+export type TemplateLayoutInput = z.infer<typeof templateLayoutSchema>;
+export type TemplateAssetParams = z.infer<typeof templateAssetParamsSchema>;

@@ -158,22 +158,44 @@ model SyncLog {
 // ============================================
 
 model PersonalizationTemplate {
-  id          String   @id @default(cuid())
-  code        String   @unique // np. INV_KOMUNIA_01
-  name        String
-  description String?
-  version     Int      @default(1)
-  isActive    Boolean  @default(true) @map("is_active")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id            String   @id @default(cuid())
+  code          String   @unique // np. INV_KOMUNIA_01
+  name          String
+  description   String?
+  version       Int      @default(1)
+  isActive      Boolean  @default(true) @map("is_active")
+  layoutJson    Json?    @map("layout_json") // TemplateLayoutJson - pozycje pól, warstwy, czcionki
+  thumbnailUrl  String?  @map("thumbnail_url") // URL miniatury szablonu
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
 
   forms                Form[]
   cases                PersonalizationCase[]
   personalizedProducts PersonalizedProduct[]
+  templateAssets       TemplateAsset[]
 
   @@index([code])
   @@index([isActive])
   @@map("personalization_templates")
+}
+
+model TemplateAsset {
+  id          String   @id @default(cuid())
+  templateId  String   @map("template_id")
+  assetType   String   @map("asset_type") // BACKGROUND, DECORATION, LOGO, CUT_LINE_SVG
+  fileName    String   @map("file_name")
+  filePath    String   @map("file_path") // ścieżka relatywna w storage
+  fileSize    Int      @map("file_size")
+  mimeType    String   @map("mime_type")
+  metadata    Json?    // width, height, originalName
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  template    PersonalizationTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId])
+  @@index([assetType])
+  @@map("template_assets")
 }
 
 model Form {

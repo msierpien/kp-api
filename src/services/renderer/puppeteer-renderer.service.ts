@@ -2,6 +2,8 @@ import puppeteer, { Browser } from 'puppeteer';
 import Handlebars from 'handlebars';
 import fs from 'fs/promises';
 import path from 'path';
+import type { TemplateLayoutJson } from '../../types/template-layout';
+import { generateHTMLFromLayout } from './dynamic-renderer.service';
 
 // Singleton browser instance
 let browserInstance: Browser | null = null;
@@ -18,42 +20,8 @@ interface RenderOptions {
 interface TemplateData {
   answers: Record<string, string | number | boolean>;
   templateName: string;
-  layoutConfig?: LayoutConfig;
+  layoutConfig?: TemplateLayoutJson;
   watermark?: WatermarkConfig;
-}
-
-interface LayoutConfig {
-  page: {
-    width: number;
-    height: number;
-    unit: 'mm' | 'px';
-    bleed?: number;
-    safeArea?: number;
-  };
-  fonts?: FontConfig[];
-  fields?: Record<string, FieldConfig>;
-}
-
-interface FontConfig {
-  family: string;
-  src: string;
-  weight?: number;
-  style?: string;
-}
-
-interface FieldConfig {
-  x: number;
-  y: number;
-  width: number;
-  maxLines?: number;
-  font?: {
-    family?: string;
-    size?: number;
-    weight?: number;
-    color?: string;
-  };
-  align?: 'left' | 'center' | 'right';
-  transform?: 'uppercase' | 'lowercase' | 'capitalize';
 }
 
 interface WatermarkConfig {
@@ -148,6 +116,14 @@ async function compileTemplate(templatePath: string): Promise<Handlebars.Templat
  * Generuje HTML z danych i szablonu
  */
 async function generateHTML(data: TemplateData): Promise<string> {
+  // Jeśli mamy layoutJson z wizualnego edytora - generuj HTML dynamicznie
+  if (data.layoutConfig && data.layoutConfig.layers?.length) {
+    return generateHTMLFromLayout(data.layoutConfig, data.answers, {
+      watermark: data.watermark,
+      assetBaseUrl: process.env.PUBLIC_STORAGE_URL || `${process.env.API_PUBLIC_URL || 'http://localhost:3001'}/storage/`,
+    });
+  }
+
   // Ścieżka do szablonu
   const templatePath = path.join(TEMPLATES_DIR, 'invitations', `${data.templateName}.hbs`);
 

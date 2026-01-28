@@ -5,6 +5,7 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import jwt from '@fastify/jwt';
 import fastifyStatic from '@fastify/static';
+import multipart from '@fastify/multipart';
 import path from 'path';
 import prisma from './lib/prisma';
 import { authRoutes } from './routes/auth.routes';
@@ -87,6 +88,14 @@ server.register(rateLimit, {
 // JWT Plugin
 server.register(jwt, {
   secret: process.env.JWT_ACCESS_SECRET || 'dev-secret-change-in-production',
+});
+
+// Multipart (file upload) - limit 10MB
+server.register(multipart, {
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB
+    files: 1,
+  },
 });
 
 // Static files - storage (z CORS dla cross-origin requests)

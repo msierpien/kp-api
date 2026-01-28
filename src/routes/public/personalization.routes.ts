@@ -88,7 +88,13 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
                 personalizedProduct: {
                   include: {
                     template: {
-                      include: {
+                      select: {
+                        id: true,
+                        code: true,
+                        name: true,
+                        description: true,
+                        version: true,
+                        layoutJson: true,
                         forms: {
                           include: {
                             fields: {
@@ -248,7 +254,12 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
                 personalizedProduct: {
                   include: {
                     template: {
-                      include: {
+                      select: {
+                        id: true,
+                        code: true,
+                        name: true,
+                        version: true,
+                        layoutJson: true,
                         forms: {
                           include: { fields: { orderBy: { sortOrder: 'asc' } } },
                           orderBy: { sortOrder: 'asc' },
@@ -315,9 +326,10 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         let previewUrl: string | null = null;
 
         try {
-          // Pobierz nazwę szablonu z konfiguracji lub użyj domyślnego
+          // Pobierz nazwę i layout szablonu z konfiguracji lub użyj domyślnego
           const template = personalizationCase.orderItem?.personalizedProduct?.template;
           const templateSlug = (template as any)?.slug || template?.name?.toLowerCase().replace(/\s+/g, '-') || 'default';
+          const layoutConfig = (template as any)?.layoutJson || null;
 
           // DEBUG: Loguj dane przekazywane do renderera
           fastify.log.info({
@@ -332,6 +344,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
             {
               answers: mergedAnswers as Record<string, string | number | boolean>,
               templateName: templateSlug,
+              layoutConfig: layoutConfig || undefined,
               watermark: {
                 text: 'PODGLĄD',
                 opacity: 0.15,
@@ -517,6 +530,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         const submitTemplate = personalizationCase.orderItem?.personalizedProduct?.template;
         const templateSlug = (submitTemplate as any)?.slug || submitTemplate?.name?.toLowerCase().replace(/\s+/g, '-') || 'default';
         const templateVersion = personalizationCase.orderItem?.personalizedProduct?.template?.version || 1;
+        const layoutConfig = (submitTemplate as any)?.layoutJson || null;
         const orderId = personalizationCase.orderId;
         const orderReference = personalizationCase.order?.orderReference;
 
@@ -539,6 +553,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           answers: mergedAnswers as Record<string, string | number | boolean>,
           templateName: templateSlug,
           templateVersion,
+          layoutConfig,
           orderId,
           orderReference: orderReference || undefined,
           renderOptions: {

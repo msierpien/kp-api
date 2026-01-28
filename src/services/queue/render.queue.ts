@@ -1,5 +1,6 @@
 import { Queue, QueueEvents, Job } from 'bullmq';
 import IORedis from 'ioredis';
+import type { TemplateLayoutJson } from '../../types/template-layout';
 
 // Redis connection configuration
 const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
@@ -39,6 +40,7 @@ export interface RenderJobData {
   answers: Record<string, string | number | boolean>;
   templateName: string;
   templateVersion: number;
+  layoutConfig?: TemplateLayoutJson | null;
   orderId: string;
   orderReference?: string;
   customerName?: string;

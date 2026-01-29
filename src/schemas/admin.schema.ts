@@ -225,6 +225,25 @@ const staticTextPropertiesSchema = z.object({
   editable: z.literal(false).default(false),
 });
 
+const textboxPropertiesSchema = z.object({
+  type: z.literal('textbox'),
+  fieldKey: z.string().optional(),
+  text: z.string().default(''),
+  fontSize: z.number().positive(),
+  fontFamily: z.string().min(1),
+  fontWeight: z.number().int().min(100).max(900).default(400),
+  fontStyle: z.enum(['normal', 'italic']).default('normal'),
+  fill: z.string().default('#000000'),
+  textAlign: z.enum(['left', 'center', 'right', 'justify']).default('left'),
+  verticalAlign: z.enum(['top', 'middle', 'bottom']).default('top'),
+  lineHeight: z.number().positive().default(1.2),
+  padding: z.number().min(0).default(0),
+  backgroundColor: z.string().default('transparent'),
+  borderColor: z.string().default('transparent'),
+  borderWidth: z.number().min(0).default(0),
+  editable: z.boolean().default(true),
+});
+
 const shapePropertiesSchema = z.object({
   type: z.literal('shape'),
   shapeType: z.enum(['rectangle', 'circle', 'ellipse', 'line']),
@@ -247,6 +266,7 @@ const layerPropertiesSchema = z.discriminatedUnion('type', [
   imagePropertiesSchema,
   textFieldPropertiesSchema,
   staticTextPropertiesSchema,
+  textboxPropertiesSchema,
   shapePropertiesSchema,
   cutLinePropertiesSchema,
 ]);
@@ -254,7 +274,7 @@ const layerPropertiesSchema = z.discriminatedUnion('type', [
 const layerBaseSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
-  type: z.enum(['background', 'image', 'text', 'static_text', 'shape', 'cut_line']),
+  type: z.enum(['background', 'image', 'text', 'static_text', 'textbox', 'shape', 'cut_line']),
   visible: z.boolean().default(true),
   locked: z.boolean().default(false),
   opacity: z.number().min(0).max(1).default(1),

@@ -144,6 +144,51 @@ function renderLayer(layer: Layer, answers: Record<string, any>, assetBaseUrl: s
     ">${escapeHtml(String(props.text || ''))}</div>`;
   }
 
+  if (layer.type === 'textbox') {
+    const props = layer.properties;
+    // TextBox może mieć fieldKey (edytowalny przez klienta) lub stały tekst
+    const value = props.fieldKey && answers[props.fieldKey]
+      ? answers[props.fieldKey]
+      : props.text ?? '';
+
+    // Wyrównanie pionowe
+    const verticalAlignMap: Record<string, string> = {
+      'top': 'flex-start',
+      'middle': 'center',
+      'bottom': 'flex-end',
+    };
+    const verticalJustify = verticalAlignMap[props.verticalAlign || 'top'] || 'flex-start';
+
+    // Wyrównanie poziome
+    const horizontalJustify = props.textAlign === 'center'
+      ? 'center'
+      : props.textAlign === 'right'
+        ? 'flex-end'
+        : props.textAlign === 'justify'
+          ? 'space-between'
+          : 'flex-start';
+
+    return `<div style="${common}
+      font-family:'${props.fontFamily}', sans-serif;
+      font-size:${px(props.fontSize)};
+      font-weight:${props.fontWeight};
+      font-style:${props.fontStyle};
+      color:${props.fill};
+      text-align:${props.textAlign};
+      line-height:${props.lineHeight};
+      display:flex;
+      flex-direction:column;
+      align-items:${horizontalJustify};
+      justify-content:${verticalJustify};
+      padding:${props.padding || 0}px;
+      background:${props.backgroundColor || 'transparent'};
+      border:${props.borderWidth || 0}px solid ${props.borderColor || 'transparent'};
+      overflow:hidden;
+      word-break:break-word;
+      box-sizing:border-box;
+    ">${escapeHtml(String(value || ''))}</div>`;
+  }
+
   if (layer.type === 'shape') {
     const props = layer.properties;
     const borderRadius =

@@ -42,7 +42,7 @@ export interface FontConfig {
 // Layers
 // ============================================
 
-export type LayerType = 'background' | 'image' | 'text' | 'static_text' | 'shape' | 'cut_line';
+export type LayerType = 'background' | 'image' | 'text' | 'static_text' | 'textbox' | 'shape' | 'cut_line';
 
 export interface LayerBase {
   id: string;
@@ -65,6 +65,7 @@ export type Layer =
   | ImageLayer
   | TextFieldLayer
   | StaticTextLayer
+  | TextBoxLayer
   | ShapeLayer
   | CutLineLayer;
 
@@ -90,6 +91,11 @@ export interface TextFieldLayer extends LayerBase {
 export interface StaticTextLayer extends LayerBase {
   type: 'static_text';
   properties: StaticTextProperties;
+}
+
+export interface TextBoxLayer extends LayerBase {
+  type: 'textbox';
+  properties: TextBoxProperties;
 }
 
 export interface ShapeLayer extends LayerBase {
@@ -140,6 +146,7 @@ export interface TextFieldProperties {
 
 /**
  * Stały tekst - nie edytowalny przez klienta.
+ * @deprecated Użyj TextBoxLayer z editable: false
  */
 export interface StaticTextProperties {
   type: 'static_text';
@@ -152,6 +159,29 @@ export interface StaticTextProperties {
   textAlign: 'left' | 'center' | 'right';
   lineHeight: number;
   editable: false;
+}
+
+/**
+ * TextBox - pole tekstowe z ramką (Frame Text).
+ * Może być edytowalne lub statyczne.
+ */
+export interface TextBoxProperties {
+  type: 'textbox';
+  fieldKey?: string;          // opcjonalny klucz powiązania z FormField.key
+  text: string;               // tekst w ramce
+  fontSize: number;
+  fontFamily: string;
+  fontWeight: number;
+  fontStyle: 'normal' | 'italic';
+  fill: string;
+  textAlign: 'left' | 'center' | 'right' | 'justify';
+  verticalAlign: 'top' | 'middle' | 'bottom';
+  lineHeight: number;
+  padding: number;
+  backgroundColor: string;
+  borderColor: string;
+  borderWidth: number;
+  editable: boolean;
 }
 
 export interface ShapeProperties {

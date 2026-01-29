@@ -1,6 +1,11 @@
 import { Worker, Job } from 'bullmq';
 import prisma from '../../lib/prisma';
-import { renderPreview, renderPDF, closeBrowser } from '../renderer/puppeteer-renderer.service';
+import { renderPreview } from '../renderer/fabric-renderer.service';
+// TODO: Implement renderPDF with fabric when needed
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const renderPDF = async (..._args: any[]) => {
+  throw new Error('PDF rendering not yet implemented with Fabric.js');
+};
 import { validateAnswers } from '../renderer/text-validator.service';
 import { saveFile } from '../storage/local-storage.service';
 import {
@@ -97,7 +102,7 @@ async function processRenderJob(
     const templateData = {
       answers,
       templateName: templateName || 'default',
-      layoutConfig,
+      layoutConfig: layoutConfig || undefined,
       watermark: jobType === 'PNG_PREVIEW' ? {
         text: 'PODGLĄD',
         opacity: 0.15,
@@ -114,7 +119,12 @@ async function processRenderJob(
     // Renderuj
     if (jobType === 'PNG_PREVIEW') {
       console.log(`[RenderWorker] Rendering PNG preview for case ${caseId}`);
-      buffer = await renderPreview(templateData, {
+      
+      if (!templateData.layoutConfig) {
+        throw new Error('Layout config is required for rendering');
+      }
+      
+      buffer = await renderPreview(templateData as any, {
         width: renderOptions?.width || 800,
         height: renderOptions?.height || 600,
         scale: renderOptions?.scale || 1,
@@ -277,9 +287,7 @@ export async function stopRenderWorker(): Promise<void> {
     workerInstance = null;
     console.log('[RenderWorker] Worker stopped');
   }
-
-  // Zamknij przeglądarkę Puppeteer
-  await closeBrowser();
+  // Puppeteer removed - no browser to close
 }
 
 /**

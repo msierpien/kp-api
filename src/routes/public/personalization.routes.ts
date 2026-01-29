@@ -1,9 +1,9 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import prisma from '../../lib/prisma';
 import { hashToken, maskToken } from '../../lib/token';
-import { renderPreview } from '../../services/renderer/puppeteer-renderer.service';
+import { renderPreview } from '../../services/renderer/fabric-renderer.service';
 import { validateAnswers } from '../../services/renderer/text-validator.service';
-import { saveFile } from '../../services/storage/local-storage.service';
+import { saveFile, fileExists } from '../../services/storage/local-storage.service';
 import { addFinalPdfJob } from '../../services/queue/render.queue';
 
 interface PersonalizationParams {
@@ -322,113 +322,50 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           pattern: f.pattern || undefined,
         })));
 
-        // Generuj preview nawet z ostrzeżeniami (ale nie z błędami krytycznymi)
+        // Generuj preview - WYŁĄCZONE, używaj frontendu (Opcja A)
         let previewUrl: string | null = null;
 
-        try {
-          // Pobierz nazwę i layout szablonu z konfiguracji lub użyj domyślnego
-          const template = personalizationCase.orderItem?.personalizedProduct?.template;
-          const templateSlug = (template as any)?.slug || template?.name?.toLowerCase().replace(/\s+/g, '-') || 'default';
-          const layoutConfig = (template as any)?.layoutJson || null;
-
-          // DEBUG: Loguj dane przekazywane do renderera
-          fastify.log.info({
-            msg: 'Preview render - input data',
-            templateSlug,
-            mergedAnswers,
+        // Backend rendering wyłączony - frontend generuje PNG
+        // Użyj POST /:token/upload-preview z frontendu
+        fastify.log.info('[Preview] Backend rendering disabled - use frontend upload');
+        
+        // Sprawdź czy jest już zapisany preview
+        const existingPreview = await prisma.asset.findFirst({
+          where: {
             caseId: personalizationCase.id,
-          });
-
-          // Renderuj preview z Puppeteer
-          const previewBuffer = await renderPreview(
-            {
-              answers: mergedAnswers as Record<string, string | number | boolean>,
-              templateName: templateSlug,
-              layoutConfig: layoutConfig || undefined,
-              watermark: {
-                text: 'PODGLĄD',
-                opacity: 0.15,
-                angle: -30,
-                fontSize: 72,
-              },
-            },
-            {
-              width: 800,
-              height: 600,
-              scale: 1,
-              includeWatermark: true,
-            }
-          );
-
-          const templateVersion = personalizationCase.orderItem?.personalizedProduct?.template?.version || 1;
-          const orderId = personalizationCase.orderItem?.order?.id;
-
-          const savedFile = await saveFile(previewBuffer, {
-            orderId: orderId || 'unknown',
-            templateVersion,
-            filename: `preview-${personalizationCase.id}`,
-            extension: 'png',
-          });
-
-          // Utwórz Asset PNG_PREVIEW
-          await prisma.asset.create({
-            data: {
-              caseId: personalizationCase.id,
-              assetType: 'PNG_PREVIEW',
-              filePath: savedFile.relativePath,
-              fileSize: savedFile.size,
-              mimeType: 'image/png',
-              metadata: {
-                width: 800,
-                height: 600,
-                generated: new Date().toISOString(),
-                templateName: templateSlug,
-              },
-            },
-          });
-
-          previewUrl = savedFile.url;
-
-          // DEBUG: Loguj wygenerowany URL
-          fastify.log.info({
-            msg: 'Preview render - output',
-            previewUrl,
-            filePath: savedFile.relativePath,
-            fileSize: savedFile.size,
-          });
-
-          // Zaktualizuj status case na PREVIEW_READY
-          await prisma.personalizationCase.update({
-            where: { id: personalizationCase.id },
-            data: {
-              status: 'PREVIEW_READY',
-              answersJson: mergedAnswers,
-              validationSummary: JSON.parse(JSON.stringify(validation)),
-            },
-          });
-        } catch (renderError) {
-          fastify.log.error({ err: renderError }, 'Preview generation failed');
-
-          // Zapisz validation summary nawet jeśli rendering się nie udał
-          await prisma.personalizationCase.update({
-            where: { id: personalizationCase.id },
-            data: {
-              answersJson: mergedAnswers,
-              validationSummary: JSON.parse(JSON.stringify(validation)),
-            },
-          });
-
-          return reply.status(500).send({
-            error: 'Internal Server Error',
-            message: 'Nie udało się wygenerować podglądu',
-            validation,
-          });
+            assetType: 'PNG_PREVIEW',
+          },
+          orderBy: {
+            createdAt: 'desc',
+          },
+        });
+        
+        if (existingPreview) {
+          const existsOnDisk = await fileExists(existingPreview.filePath);
+          if (existsOnDisk) {
+            // Skonstruuj URL z filePath
+            const storageUrl = process.env.PUBLIC_STORAGE_URL || `${process.env.API_PUBLIC_URL || 'http://localhost:3001'}/storage`;
+            previewUrl = `${storageUrl}/${existingPreview.filePath}`;
+            fastify.log.info('[Preview] Using existing frontend-generated preview');
+          } else {
+            fastify.log.warn('[Preview] Existing preview missing on disk, ignoring');
+          }
         }
+
+        // Zaktualizuj case z validation summary
+        await prisma.personalizationCase.update({
+          where: { id: personalizationCase.id },
+          data: {
+            answersJson: mergedAnswers,
+            validationSummary: JSON.parse(JSON.stringify(validation)),
+            status: previewUrl ? 'PREVIEW_READY' : 'DRAFT',
+          },
+        });
 
         return reply.send({
           previewUrl,
           validation,
-          status: 'PREVIEW_READY',
+          status: previewUrl ? 'PREVIEW_READY' : 'DRAFT',
         });
       } catch (error) {
         fastify.log.error(error);
@@ -597,6 +534,131 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           error: 'Internal Server Error',
           message: 'Nie udało się zatwierdzić projektu',
+        });
+      }
+    }
+  );
+
+  // POST /personalization/:token/upload-preview - Upload PNG preview from frontend
+  fastify.post<{ Params: PersonalizationParams }>(
+    '/:token/upload-preview',
+    async (request: FastifyRequest<{ Params: PersonalizationParams }>, reply: FastifyReply) => {
+      try {
+        addSecurityHeaders(reply);
+
+        // Hash tokena
+        const tokenHash = hashToken(request.params.token);
+        fastify.log.info(`[UploadPreview] Processing for token: ${maskToken(request.params.token)}`);
+
+        // Sprawdź czy case istnieje
+        const personalizationCase = await prisma.personalizationCase.findUnique({
+          where: { customerTokenHash: tokenHash },
+          select: {
+            id: true,
+            tokenActive: true,
+            orderItem: {
+              select: {
+                orderId: true,
+                personalizedProduct: {
+                  select: {
+                    template: {
+                      select: { version: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        });
+
+        if (!personalizationCase) {
+          return reply.status(404).send({
+            error: 'Not Found',
+            message: 'Nie znaleziono personalizacji',
+          });
+        }
+
+        if (!personalizationCase.tokenActive) {
+          return reply.status(403).send({
+            error: 'Forbidden',
+            message: 'Token jest nieaktywny',
+          });
+        }
+
+        // Pobierz plik z multipart
+        const data = await request.file();
+        
+        if (!data) {
+          return reply.status(400).send({
+            error: 'Bad Request',
+            message: 'Brak pliku preview',
+          });
+        }
+
+        // Sprawdź typ pliku
+        if (!data.mimetype.startsWith('image/')) {
+          return reply.status(400).send({
+            error: 'Bad Request',
+            message: 'Plik musi być obrazem',
+          });
+        }
+
+        fastify.log.info(`[UploadPreview] File received: ${data.filename}, size: ${data.file.bytesRead} bytes`);
+
+        // Konwertuj stream na buffer
+        const buffer = await data.toBuffer();
+
+        // Zapisz plik
+        const savedFile = await saveFile(buffer, {
+          orderId: personalizationCase.orderItem?.orderId || 'unknown',
+          templateVersion: personalizationCase.orderItem?.personalizedProduct?.template?.version || '1.0',
+          filename: `preview-${personalizationCase.id}`,
+          extension: 'png',
+        });
+
+        fastify.log.info(`[UploadPreview] File saved: ${savedFile.path}`);
+
+        // Zapisz informację o preview w bazie (upsert by znajdź istniejący lub utwórz nowy)
+        const existingAsset = await prisma.asset.findFirst({
+          where: {
+            caseId: personalizationCase.id,
+            assetType: 'PNG_PREVIEW',
+          },
+        });
+
+        if (existingAsset) {
+          // Update existing
+          await prisma.asset.update({
+            where: { id: existingAsset.id },
+            data: {
+              filePath: savedFile.path,
+              fileSize: buffer.length,
+              mimeType: 'image/png',
+            },
+          });
+        } else {
+          // Create new
+          await prisma.asset.create({
+            data: {
+              caseId: personalizationCase.id,
+              assetType: 'PNG_PREVIEW',
+              filePath: savedFile.path,
+              fileSize: buffer.length,
+              mimeType: 'image/png',
+            },
+          });
+        }
+
+        return reply.send({
+          success: true,
+          previewUrl: savedFile.url,
+          size: buffer.length,
+        });
+      } catch (error) {
+        fastify.log.error({ err: error }, '[UploadPreview] Failed');
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Nie udało się zapisać podglądu',
         });
       }
     }

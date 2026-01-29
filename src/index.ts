@@ -16,7 +16,7 @@ import { initializeScheduler } from './services/scheduler/scheduler.service';
 import { initStorage } from './services/storage/local-storage.service';
 import { startRenderWorker, stopRenderWorker } from './services/queue/render.worker';
 import { closeQueue, getQueueStats } from './services/queue/render.queue';
-import { closeBrowser } from './services/renderer/puppeteer-renderer.service';
+// Puppeteer removed - no browser to close anymore
 import bullBoardPlugin from './plugins/bull-board';
 
 const server = Fastify({
@@ -168,12 +168,11 @@ server.get('/', async () => {
 const gracefulShutdown = async () => {
   server.log.info('Shutting down gracefully...');
 
-  // Zatrzymaj BullMQ worker i zamknij przeglądarkę Puppeteer
+  // Zatrzymuj BullMQ worker (Puppeteer został usunięty)
   try {
     await stopRenderWorker();
     await closeQueue();
-    await closeBrowser();
-    server.log.info('🛑 Render worker and browser stopped');
+    server.log.info('🛑 Render worker stopped');
   } catch (error) {
     server.log.error({ err: error }, 'Error stopping render worker');
   }
@@ -219,7 +218,7 @@ const start = async () => {
     // Uruchom BullMQ render worker
     try {
       startRenderWorker();
-      server.log.info('🎨 Render worker started (Puppeteer + BullMQ)');
+      server.log.info('🎨 Render worker started (Fabric.js + BullMQ)');
     } catch (error) {
       server.log.error({ err: error }, '❌ Failed to start render worker');
     }

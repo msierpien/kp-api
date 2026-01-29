@@ -106,7 +106,17 @@ function renderLayer(layer: Layer, answers: Record<string, any>, assetBaseUrl: s
 
   if (layer.type === 'text') {
     const props = layer.properties;
-    const value = answers[props.fieldKey] ?? props.placeholder ?? '';
+    // Text (IText / Pole tekstowe):
+    // 1. Najpierw sprawdź bezpośrednie mapowanie fieldKey
+    // 2. Jeśli brak, użyj placeholder i zamień {{ fieldKey }}
+    let value: string;
+    const answer = answers[props.fieldKey];
+    if (answer !== undefined && answer !== null && answer !== '') {
+      value = String(answer);
+    } else {
+      // Brak odpowiedzi - użyj placeholder i zamień {{ fieldKey }}
+      value = replaceFieldPlaceholders(props.placeholder ?? '', answers);
+    }
     return `<div style="${common}
       font-family:'${props.fontFamily}', sans-serif;
       font-size:${px(props.fontSize)};
@@ -127,6 +137,8 @@ function renderLayer(layer: Layer, answers: Record<string, any>, assetBaseUrl: s
 
   if (layer.type === 'static_text') {
     const props = layer.properties;
+    // Static text - może zawierać {{ fieldKey }}, więc też zamieniamy
+    const value = replaceFieldPlaceholders(props.text ?? '', answers);
     return `<div style="${common}
       font-family:'${props.fontFamily}', sans-serif;
       font-size:${px(props.fontSize)};
@@ -141,15 +153,27 @@ function renderLayer(layer: Layer, answers: Record<string, any>, assetBaseUrl: s
       padding:4px;
       overflow:hidden;
       word-break:break-word;
-    ">${escapeHtml(String(props.text || ''))}</div>`;
+    ">${escapeHtml(String(value || ''))}</div>`;
   }
 
   if (layer.type === 'textbox') {
     const props = layer.properties;
-    // TextBox może mieć fieldKey (edytowalny przez klienta) lub stały tekst
-    const value = props.fieldKey && answers[props.fieldKey]
-      ? answers[props.fieldKey]
-      : props.text ?? '';
+    // TextBox:
+    // 1. Najpierw pobierz tekst bazowy (props.text)
+    // 2. Zamień wszystkie {{ fieldKey }} na wartości z answers
+    // 3. Jeśli jest bezpośrednie mapowanie fieldKey i klient wypełnił - użyj odpowiedzi
+    let value: string = props.text ?? '';
+    
+    // Zamień {{ fieldKey }} na wartości z formularza
+    value = replaceFieldPlaceholders(value, answers);
+    
+    // Jeśli jest bezpośrednie mapowanie fieldKey i klient wypełnił - nadpisz całą wartość
+    if (props.fieldKey) {
+      const answer = answers[props.fieldKey];
+      if (answer !== undefined && answer !== null && answer !== '') {
+        value = String(answer);
+      }
+    }
 
     // Wyrównanie pionowe
     const verticalAlignMap: Record<string, string> = {
@@ -224,6 +248,19 @@ function escapeHtml(str: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+/**
+ * Zastępuje {{ fieldKey }} w tekście wartościami z answers
+ */
+function replaceFieldPlaceholders(text: string, answers: Record<string, any>): string {
+  return text.replace(/\{\{\s*(\w+)\s*\}\}/g, (match, key) => {
+    const value = answers[key];
+    if (value !== undefined && value !== null && value !== '') {
+      return String(value);
+    }
+    return match; // Pozostaw placeholder jeśli brak wartości
+  });
 }
 
 

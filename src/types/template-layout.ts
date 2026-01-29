@@ -142,6 +142,10 @@ export interface TextFieldProperties {
   maxLines: number;
   textTransform: 'none' | 'uppercase' | 'lowercase' | 'capitalize';
   editable: true;
+  // Client interaction settings
+  clientDraggable?: boolean;  // Czy klient może przesuwać
+  clientResizable?: boolean;  // Czy klient może zmieniać rozmiar
+  clientRotatable?: boolean;  // Czy klient może obracać
 }
 
 /**
@@ -168,7 +172,7 @@ export interface StaticTextProperties {
 export interface TextBoxProperties {
   type: 'textbox';
   fieldKey?: string;          // opcjonalny klucz powiązania z FormField.key
-  text: string;               // tekst w ramce
+  text: string;               // tekst (może zawierać {{ fieldKey }})
   fontSize: number;
   fontFamily: string;
   fontWeight: number;
@@ -181,7 +185,11 @@ export interface TextBoxProperties {
   backgroundColor: string;
   borderColor: string;
   borderWidth: number;
-  editable: boolean;
+  editable: boolean;          // czy edytowalne przez klienta
+  // Client interaction settings
+  clientDraggable?: boolean;  // Czy klient może przesuwać
+  clientResizable?: boolean;  // Czy klient może zmieniać rozmiar
+  clientRotatable?: boolean;  // Czy klient może obracać
 }
 
 export interface ShapeProperties {

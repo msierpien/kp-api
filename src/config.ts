@@ -30,6 +30,7 @@ const envSchema = z.object({
   ENCRYPTION_KEY: z.string().length(32, 'ENCRYPTION_KEY must be exactly 32 characters'),
 
   // Email (SMTP)
+  AUTO_SEND_EMAILS: z.string().transform(val => val === 'true').default('false'),
   SMTP_HOST: z.string().optional(),
   SMTP_PORT: z.string().transform(Number).pipe(z.number().int().positive()).default('587'),
   SMTP_USER: z.string().optional(),
@@ -133,12 +134,13 @@ export const config = {
    * Email configuration (SMTP)
    */
   smtp: {
+    autoSend: env.AUTO_SEND_EMAILS,
     host: env.SMTP_HOST,
     port: env.SMTP_PORT || 587,
     user: env.SMTP_USER,
     pass: env.SMTP_PASSWORD,
     from: env.SMTP_FROM,
-    enabled: Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASSWORD),
+    enabled: Boolean(env.SMTP_HOST && env.SMTP_FROM),
   },
 
   /**

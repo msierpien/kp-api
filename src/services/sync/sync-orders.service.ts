@@ -257,8 +257,8 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
           });
         }
 
-        // Wyślij email z linkami do personalizacji
-        if (casesForEmail.length > 0 && emailService.isConfigured()) {
+        // Wyślij email z linkami do personalizacji (jeśli AUTO_SEND_EMAILS = true)
+        if (casesForEmail.length > 0 && emailService.isConfigured() && config.smtp.autoSend) {
           try {
             const baseUrl = config.frontend.portalUrl;
             
@@ -280,6 +280,8 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
             console.error(`[Sync] Failed to send email for order ${details.order.reference}:`, emailError);
             // Nie przerywaj synchronizacji, jeśli email się nie powiódł
           }
+        } else if (casesForEmail.length > 0 && !config.smtp.autoSend) {
+          console.log(`[Sync] ℹ️  AUTO_SEND_EMAILS=false - email NOT sent for order ${details.order.reference} (${casesForEmail.length} cases created, manual send required)`);
         } else if (casesForEmail.length > 0) {
           console.warn(`[Sync] ⚠️  Email service not configured, skipping email for order ${details.order.reference}`);
         }

@@ -99,6 +99,20 @@ services:
     environment:
       ADMINER_DEFAULT_SERVER: postgres
 
+  # MailHog - SMTP testing tool (dev only)
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: personalization-mailhog
+    restart: unless-stopped
+    ports:
+      - "1025:1025"  # SMTP server
+      - "8025:8025"  # Web UI
+    healthcheck:
+      test: ["CMD", "echo", "ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
 volumes:
   postgres_data:
   redis_data:

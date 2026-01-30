@@ -1,4 +1,5 @@
 import prisma from '../../lib/prisma';
+import { config } from '../../config';
 import type { CaseListItem, PaginatedResponse } from '../../types';
 import type { CasesQueryInput } from '../../schemas/admin.schema';
 import { emailService } from '../email/email.service';
@@ -316,7 +317,7 @@ export async function resendPersonalizationEmail(id: string) {
     },
   });
 
-  const baseUrl = process.env.PUBLIC_PORTAL_BASE_URL || 'http://localhost:3002';
+  const baseUrl = config.frontend.portalUrl;
 
   try {
     await emailService.sendPersonalizationEmail({

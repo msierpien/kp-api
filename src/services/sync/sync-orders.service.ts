@@ -2,7 +2,7 @@ import prisma from '../../lib/prisma';
 import { PrestaShopClient } from '../prestashop/prestashop-client';
 import { decrypt } from '../../lib/encryption';
 import { emailService } from '../email/email.service';
-import { generateAccessToken, maskToken } from '../../lib/token';
+import { generateAccessToken } from '../../lib/token';
 
 export interface SyncResult {
   success: boolean;
@@ -260,7 +260,7 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
         // Wyślij email z linkami do personalizacji
         if (casesForEmail.length > 0 && emailService.isConfigured()) {
           try {
-            const baseUrl = process.env.PUBLIC_PORTAL_BASE_URL || 'http://localhost:3002';
+            const baseUrl = config.frontend.portalUrl;
             
             await emailService.sendPersonalizationEmail({
               to: customerEmail,

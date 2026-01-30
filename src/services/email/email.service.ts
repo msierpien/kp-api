@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
+import { config } from '../../config';
 
 export interface EmailConfig {
   host: string;
@@ -222,11 +223,7 @@ export const emailService = new EmailService();
 
 // Initialize from environment variables
 export function initializeEmailService() {
-  const host = process.env.SMTP_HOST;
-  const port = parseInt(process.env.SMTP_PORT || '587', 10);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  const from = process.env.SMTP_FROM;
+  const { host, port, user, pass, from } = config.smtp;
 
   if (!host || !user || !pass || !from) {
     console.warn('[Email] SMTP not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS, SMTP_FROM environment variables.');

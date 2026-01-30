@@ -3,6 +3,7 @@ import { StaticCanvas, FabricImage, IText, Textbox } from 'fabric/node';
 import type { TemplateLayoutJson, Layer, TextFieldProperties, TextBoxProperties, ImageProperties } from '../../types/template-layout';
 import path from 'path';
 import fs from 'fs/promises';
+import { config } from '../../config';
 
 interface RenderOptions {
   width: number;
@@ -262,7 +263,7 @@ export async function renderPreview(
   });
 
   // Asset base URL
-  const assetBaseUrl = process.env.API_URL || 'http://localhost:3001';
+  const assetBaseUrl = config.app.url;
 
   // Renderuj warstwy w kolejności zIndex
   const sortedLayers = [...layout.layers]

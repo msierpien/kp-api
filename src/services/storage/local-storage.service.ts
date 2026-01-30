@@ -2,9 +2,10 @@ import fs from 'fs/promises';
 import path from 'path';
 import { nanoid } from 'nanoid';
 import mime from 'mime-types';
+import { config } from '../../config';
 
-const STORAGE_ROOT = process.env.STORAGE_PATH || path.join(process.cwd(), 'storage');
-const BASE_URL = process.env.API_URL || 'http://localhost:3001';
+const STORAGE_ROOT = config.storage.path;
+const BASE_URL = config.app.url;
 
 interface SaveFileOptions {
   orderId: string;

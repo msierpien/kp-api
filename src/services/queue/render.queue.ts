@@ -1,11 +1,7 @@
 import { Queue, QueueEvents, Job } from 'bullmq';
 import IORedis from 'ioredis';
+import { config } from '../../config';
 import type { TemplateLayoutJson } from '../../types/template-layout';
-
-// Redis connection configuration
-const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
-const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
-const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
 
 // Singleton connection
 let redisConnection: IORedis | null = null;
@@ -13,9 +9,9 @@ let redisConnection: IORedis | null = null;
 export function getRedisConnection(): IORedis {
   if (!redisConnection) {
     redisConnection = new IORedis({
-      host: REDIS_HOST,
-      port: REDIS_PORT,
-      password: REDIS_PASSWORD,
+      host: config.redis.host,
+      port: config.redis.port,
+      password: config.redis.password,
       maxRetriesPerRequest: null, // Required by BullMQ
       enableReadyCheck: false,
     });

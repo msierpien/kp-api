@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import prisma from '../../lib/prisma';
+import { config } from '../../config';
 import { hashToken, maskToken } from '../../lib/token';
 import { renderPreview } from '../../services/renderer/fabric-renderer.service';
 import { validateAnswers } from '../../services/renderer/text-validator.service';
@@ -344,7 +345,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           const existsOnDisk = await fileExists(existingPreview.filePath);
           if (existsOnDisk) {
             // Skonstruuj URL z filePath
-            const storageUrl = process.env.PUBLIC_STORAGE_URL || `${process.env.API_PUBLIC_URL || 'http://localhost:3001'}/storage`;
+            const storageUrl = config.storage.publicUrl;
             previewUrl = `${storageUrl}/${existingPreview.filePath}`;
             fastify.log.info('[Preview] Using existing frontend-generated preview');
           } else {

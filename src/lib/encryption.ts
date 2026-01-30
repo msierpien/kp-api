@@ -1,14 +1,10 @@
 import crypto from 'crypto';
+import { config } from '../config';
 
-// Pobierz klucz szyfrowania z ENV (32 bajty dla AES-256)
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'default-32-byte-key-change-me!!';
+// Pobierz klucz szyfrowania z config (32 bajty dla AES-256)
+const ENCRYPTION_KEY = config.encryption.key;
 const ALGORITHM = 'aes-256-cbc';
 const IV_LENGTH = 16;
-
-// Walidacja klucza przy starcie
-if (!process.env.ENCRYPTION_KEY) {
-  console.warn('⚠️  ENCRYPTION_KEY nie jest ustawiony w .env - używam domyślnego klucza (NIEBEZPIECZNE w produkcji!)');
-}
 
 /**
  * Szyfruje tekst używając AES-256-CBC

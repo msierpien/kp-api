@@ -89,7 +89,7 @@ export async function testShopConnection(id: string) {
   }
 
   const allowInsecure =
-    process.env.ALLOW_INSECURE_PRESTA === '1' ||
+    config.app.env === 'development' ||
     baseUrl.includes('localhost') ||
     baseUrl.includes('127.0.0.1');
   const shouldDisableTls = allowInsecure && baseUrl.startsWith('https://');

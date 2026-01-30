@@ -201,7 +201,7 @@ async function executeSendEmail(config: any, caseData: any): Promise<void> {
   });
   console.log(`[Automation] Generated new token for case ${caseData.id}: ${maskToken(accessToken)}`);
 
-  const baseUrl = process.env.PUBLIC_PORTAL_BASE_URL || 'http://localhost:3002';
+  const baseUrl = config.frontend.portalUrl;
   const personalizationUrl = `${baseUrl}/${accessToken}`;
 
   // Podstawowe zmienne do template

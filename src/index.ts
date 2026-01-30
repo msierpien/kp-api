@@ -7,6 +7,7 @@ import jwt from '@fastify/jwt';
 import fastifyStatic from '@fastify/static';
 import multipart from '@fastify/multipart';
 import path from 'path';
+import { config } from './config';
 import prisma from './lib/prisma';
 import { authRoutes } from './routes/auth.routes';
 import { adminRoutes } from './routes/admin';
@@ -21,8 +22,8 @@ import bullBoardPlugin from './plugins/bull-board';
 
 const server = Fastify({
   logger: {
-    level: process.env.LOG_LEVEL || 'info',
-    transport: process.env.NODE_ENV === 'development' 
+    level: 'info',
+    transport: config.app.isDevelopment
       ? {
           target: 'pino-pretty',
           options: {
@@ -48,8 +49,8 @@ server.addContentTypeParser('application/json', { parseAs: 'string' }, function 
 // Plugins
 // CORS - dozwolone origins (admin panel + portal klienta)
 const allowedOrigins = [
-  process.env.FRONTEND_URL || 'http://localhost:3000',
-  process.env.PUBLIC_PORTAL_BASE_URL || 'http://localhost:3002',
+  config.frontend.adminUrl,
+  config.frontend.publicPortalBaseUrl,
 ];
 
 server.register(cors, {
@@ -65,7 +66,7 @@ server.register(cors, {
       return;
     }
     // W trybie dev pozwól na wszystkie localhost
-    if (process.env.NODE_ENV === 'development' && origin.includes('localhost')) {
+    if (config.app.isDevelopment && origin.includes('localhost')) {
       cb(null, true);
       return;
     }
@@ -75,7 +76,7 @@ server.register(cors, {
 });
 
 server.register(helmet, {
-  contentSecurityPolicy: process.env.NODE_ENV === 'production',
+  contentSecurityPolicy: config.app.isProduction,
   crossOriginResourcePolicy: false, // Wyłącz - ustawiamy ręcznie dla /storage/
   crossOriginEmbedderPolicy: false, // Pozwól na cross-origin embedding
 });
@@ -87,7 +88,7 @@ server.register(rateLimit, {
 
 // JWT Plugin
 server.register(jwt, {
-  secret: process.env.JWT_ACCESS_SECRET || 'dev-secret-change-in-production',
+  secret: config.auth.jwtAccessSecret,
 });
 
 // Multipart (file upload) - limit 10MB
@@ -99,7 +100,10 @@ server.register(multipart, {
 });
 
 // Static files - storage (z CORS dla cross-origin requests)
-const storagePath = process.env.STORAGE_PATH || path.join(process.cwd(), 'storage');
+const storagePath = path.isAbsolute(config.storage.path)
+  ? config.storage.path
+  : path.join(process.cwd(), config.storage.path);
+
 server.register(fastifyStatic, {
   root: storagePath,
   prefix: '/storage/',
@@ -122,7 +126,7 @@ server.register(adminRoutes, { prefix: '/admin' });
 server.register(personalizationRoutes, { prefix: '/personalization' });
 
 // Bull Board Dashboard (tylko w development lub z flagą)
-if (process.env.NODE_ENV === 'development' || process.env.ENABLE_BULL_BOARD === 'true') {
+if (config.app.isDevelopment) {
   server.register(bullBoardPlugin);
 }
 
@@ -160,7 +164,7 @@ server.get('/', async () => {
   return { 
     name: 'Personalization API',
     version: '1.0.0',
-    environment: process.env.NODE_ENV || 'development',
+    environment: config.app.env,
   };
 });
 
@@ -188,8 +192,7 @@ process.on('SIGINT', gracefulShutdown);
 // Start server
 const start = async () => {
   try {
-    const port = Number(process.env.API_PORT) || 3001;
-    const host = process.env.API_HOST || '0.0.0.0';
+    const { port, host } = config.app;
 
     // Inicjalizuj storage
     try {
@@ -226,8 +229,8 @@ const start = async () => {
     await server.listen({ port, host });
     server.log.info(`🚀 Server is running on http://${host}:${port}`);
     server.log.info(`📊 Health check: http://${host}:${port}/health`);
-    server.log.info(`🔒 Environment: ${process.env.NODE_ENV || 'development'}`);
-    if (process.env.NODE_ENV === 'development' || process.env.ENABLE_BULL_BOARD === 'true') {
+    server.log.info(`🔒 Environment: ${config.app.env}`);
+    if (config.app.isDevelopment) {
       server.log.info(`📋 Bull Board: http://${host}:${port}/admin/queues`);
     }
   } catch (err) {

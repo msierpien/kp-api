@@ -46,7 +46,8 @@ export async function createShop(input: CreateShopInput): Promise<ShopItem> {
       apiSecret: input.apiSecret ? encrypt(input.apiSecret) : null, // Szyfruj jeśli istnieje
       status: input.status,
       configJson: input.config || {},
-    },
+      // tenantId will be added automatically by Prisma middleware
+    } as any,
   });
 
   return mapShop(shop);

@@ -9,6 +9,7 @@ import multipart from '@fastify/multipart';
 import path from 'path';
 import { config } from './config';
 import prisma from './lib/prisma';
+import { tenantContext } from './lib/tenant-context';
 import { authRoutes } from './routes/auth.routes';
 import { adminRoutes } from './routes/admin';
 import { personalizationRoutes } from './routes/public/personalization.routes';
@@ -19,6 +20,7 @@ import { startRenderWorker, stopRenderWorker } from './services/queue/render.wor
 import { closeQueue, getQueueStats } from './services/queue/render.queue';
 // Puppeteer removed - no browser to close anymore
 import bullBoardPlugin from './plugins/bull-board';
+import type { JwtPayload } from './types';
 
 const server = Fastify({
   logger: {
@@ -33,6 +35,33 @@ const server = Fastify({
         }
       : undefined,
   },
+});
+
+// Tenant context hook - runs for every request
+server.addHook('onRequest', async (request) => {
+  return tenantContext.run(
+    { tenantId: '', userId: '', role: '' }, // default empty context
+    async () => {
+      try {
+        const authHeader = request.headers.authorization;
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+          const token = authHeader.substring(7);
+          const decoded = (await server.jwt.verify(token)) as JwtPayload;
+          
+          // Update context with user data
+          const store = tenantContext.getStore();
+          if (store) {
+            store.tenantId = decoded.tenantId;
+            store.userId = decoded.userId;
+            store.role = decoded.role;
+          }
+        }
+      } catch {
+        // Token invalid or missing - continue with empty context
+        // Public routes don't need auth
+      }
+    }
+  );
 });
 
 // Custom content type parser to allow empty JSON bodies (Fastify v5 fix)
@@ -108,7 +137,7 @@ server.register(fastifyStatic, {
   root: storagePath,
   prefix: '/storage/',
   decorateReply: false,
-  setHeaders: (res, _path) => {
+  setHeaders: (res) => {
     // Dodaj nagłówki CORS dla plików statycznych
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');

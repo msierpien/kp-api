@@ -1,9 +1,16 @@
 import { PrismaClient } from '@prisma/client';
+import { createTenantMiddleware } from './prisma-tenant-middleware';
+import { getTenantId } from './tenant-context';
 
 const prismaClientSingleton = () => {
-  return new PrismaClient({
+  const client = new PrismaClient({
     log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
   });
+
+  // Add tenant isolation middleware
+  client.$use(createTenantMiddleware(getTenantId));
+
+  return client;
 };
 
 declare global {

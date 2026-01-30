@@ -42,7 +42,8 @@ export class AuthService {
     const payload: JwtPayload = {
       userId: user.id,
       email: user.email,
-      role: user.role as 'ADMIN' | 'SELLER',
+      role: user.role as 'ADMIN' | 'SELLER' | 'SUPER_ADMIN',
+      tenantId: user.tenantId,
     };
 
     const accessToken = this.jwt.sign(payload, { expiresIn: ACCESS_TOKEN_EXPIRY });
@@ -83,7 +84,8 @@ export class AuthService {
       const payload: JwtPayload = {
         userId: user.id,
         email: user.email,
-        role: user.role as 'ADMIN' | 'SELLER',
+        role: user.role as 'ADMIN' | 'SELLER' | 'SUPER_ADMIN',
+        tenantId: user.tenantId,
       };
 
       const accessToken = this.jwt.sign(payload, { expiresIn: ACCESS_TOKEN_EXPIRY });

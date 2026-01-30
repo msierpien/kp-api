@@ -26,7 +26,7 @@ export function authMiddleware(fastify: FastifyInstance) {
   };
 }
 
-export function requireRole(...roles: Array<'ADMIN' | 'SELLER'>) {
+export function requireRole(...roles: Array<'ADMIN' | 'SELLER' | 'SUPER_ADMIN'>) {
   return async function checkRole(request: FastifyRequest, reply: FastifyReply) {
     const user = (request as any).user as JwtPayload | undefined;
 

@@ -66,8 +66,8 @@ export async function replaceTemplateForm(templateId: string, input: TemplateFor
 }
 
 export async function createTemplate(input: CreateTemplateInput) {
-  // Check if code already exists
-  const existing = await prisma.personalizationTemplate.findUnique({
+  // Check if code already exists (within same tenant - middleware will filter)
+  const existing = await prisma.personalizationTemplate.findFirst({
     where: { code: input.code },
   });
 
@@ -82,7 +82,8 @@ export async function createTemplate(input: CreateTemplateInput) {
       description: input.description ?? null,
       version: input.version,
       isActive: input.isActive,
-    },
+      // tenantId will be added automatically by Prisma middleware
+    } as any,
     select: { id: true, name: true, code: true, description: true, version: true, isActive: true, createdAt: true },
   });
 

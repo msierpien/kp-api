@@ -74,7 +74,8 @@ export async function createEmailSettings(data: EmailSettingsInput) {
     data: {
       ...data,
       password: encrypt(data.password),
-    },
+      // tenantId will be added automatically by Prisma middleware
+    } as any,
   });
 
   // Jeśli aktywna, załaduj do email service

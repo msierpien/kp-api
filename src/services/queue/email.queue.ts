@@ -83,6 +83,13 @@ export async function closeEmailQueue() {
 }
 
 /**
+ * Get email queue instance
+ */
+export function getEmailQueue() {
+  return emailQueue;
+}
+
+/**
  * Get email queue stats
  */
 export async function getEmailQueueStats() {

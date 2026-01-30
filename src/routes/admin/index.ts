@@ -10,6 +10,8 @@ import { templatesRoutes } from './templates.routes';
 import { emailSettingsRoutes } from './email-settings.routes';
 import { automationsRoutes } from './automations.routes';
 import { renderJobsRoutes } from './render-jobs.routes';
+import { tenantsRoutes } from './tenants.routes';
+import { usersRoutes } from './users.routes';
 
 export async function adminRoutes(fastify: FastifyInstance) {
   // Apply auth middleware to all admin routes
@@ -26,4 +28,6 @@ export async function adminRoutes(fastify: FastifyInstance) {
   fastify.register(emailSettingsRoutes, { prefix: '/email-settings' });
   fastify.register(automationsRoutes, { prefix: '/automations' });
   fastify.register(renderJobsRoutes, { prefix: '/render-jobs' });
+  fastify.register(tenantsRoutes, { prefix: '/tenants' });
+  fastify.register(usersRoutes, { prefix: '/users' });
 }

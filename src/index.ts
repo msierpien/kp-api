@@ -54,6 +54,14 @@ server.addHook('onRequest', async (request) => {
             store.tenantId = decoded.tenantId;
             store.userId = decoded.userId;
             store.role = decoded.role;
+            
+            // SUPER_ADMIN can override tenantId via query param
+            if (decoded.role === 'SUPER_ADMIN') {
+              const overrideTenantId = (request.query as any)?.tenantId;
+              if (overrideTenantId && typeof overrideTenantId === 'string') {
+                store.overrideTenantId = overrideTenantId;
+              }
+            }
           }
         }
       } catch {

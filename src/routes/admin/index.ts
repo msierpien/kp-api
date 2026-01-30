@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { authMiddleware } from '../../middleware/auth.middleware';
 import { statsRoutes } from './stats.routes';
 import { casesRoutes } from './cases.routes';
+import { emailRoutes } from './email.routes';
 import { syncLogsRoutes } from './sync-logs.routes';
 import { shopsRoutes } from './shops.routes';
 import { ordersRoutes } from './orders.routes';
@@ -21,6 +22,7 @@ export async function adminRoutes(fastify: FastifyInstance) {
   // Register admin sub-routes
   fastify.register(statsRoutes, { prefix: '/stats' });
   fastify.register(casesRoutes, { prefix: '/cases' });
+  fastify.register(emailRoutes, { prefix: '/email' });
   fastify.register(syncLogsRoutes, { prefix: '/sync-logs' });
   fastify.register(shopsRoutes, { prefix: '/shops' });
   fastify.register(ordersRoutes, { prefix: '/orders' });

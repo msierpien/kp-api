@@ -3,17 +3,27 @@ import { config } from '../../config';
 import type { CaseListItem, PaginatedResponse } from '../../types';
 import type { CasesQueryInput } from '../../schemas/admin.schema';
 import { emailService } from '../email/email.service';
+import { queuePersonalizationEmail } from '../queue/email.queue';
 import { triggerAutomations, AutomationTrigger } from './automation.service';
 import { generateAccessToken, maskToken } from '../../lib/token';
 
 export async function getCases(query: CasesQueryInput): Promise<PaginatedResponse<CaseListItem>> {
-  const { page, limit, status, search, sortBy, sortOrder } = query;
+  const { page, limit, status, emailStatus, search, sortBy, sortOrder } = query;
   const skip = (page - 1) * limit;
 
   const where: any = {};
 
   if (status) {
     where.status = status;
+  }
+
+  // Email status filter
+  if (emailStatus === 'sent') {
+    where.emailSentAt = { not: null };
+  } else if (emailStatus === 'not_sent') {
+    where.emailSentAt = null;
+  } else if (emailStatus === 'failed') {
+    where.emailFailedAt = { not: null };
   }
 
   if (search) {
@@ -319,28 +329,26 @@ export async function resendPersonalizationEmail(id: string) {
 
   const baseUrl = config.frontend.portalUrl;
 
-  try {
-    await emailService.sendPersonalizationEmail({
-      to: caseItem.order.customerEmail,
-      customerName: caseItem.order.customerName || '',
-      orderReference: caseItem.order.orderReference,
-      shopName: caseItem.order.shop.name,
-      items: [{
-        productName: caseItem.orderItem.productNameSnapshot,
-        quantity: caseItem.orderItem.quantity,
-        personalizationUrl: `${baseUrl}/${newToken}`, // Używamy oryginalnego tokena, nie hasha
-      }],
-      baseUrl,
-    });
+  // Queue email instead of sending synchronously
+  await queuePersonalizationEmail({
+    to: caseItem.order.customerEmail,
+    customerName: caseItem.order.customerName || '',
+    orderReference: caseItem.order.orderReference,
+    shopName: caseItem.order.shop.name,
+    items: [{
+      productName: caseItem.orderItem.productNameSnapshot,
+      quantity: caseItem.orderItem.quantity,
+      personalizationUrl: `${baseUrl}/${newToken}`, // Używamy oryginalnego tokena, nie hasha
+    }],
+    baseUrl,
+    caseId: id, // Track case ID for update after send
+  });
 
-    console.log(`[Cases] ✉️  Email resent to ${caseItem.order.customerEmail} for case ${id} (token: ${maskToken(newToken)})`);
+  console.log(`[Cases] 📧 Email queued for ${caseItem.order.customerEmail}, case ${id} (token: ${maskToken(newToken)})`);
 
-    return {
-      success: true,
-      message: 'Email został wysłany ponownie'
-    };
-  } catch (error) {
-    console.error(`[Cases] Failed to resend email for case ${id}:`, error);
-    throw new Error('Nie udało się wysłać emaila');
-  }
+  return {
+    success: true,
+    message: 'Email queued for sending',
+    newToken: maskToken(newToken),
+  };
 }

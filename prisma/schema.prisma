@@ -292,6 +292,7 @@ model PersonalizationCase {
   templateVersionFrozen Int       @map("template_version_frozen")
   status                String    @default("NEW") // NEW, WAITING_FOR_CUSTOMER, PREVIEW_READY, SUBMITTED, RENDERED, FAILED_RENDER, READY_FOR_PRINT, ARCHIVED
   customerTokenHash     String?   @unique @map("customer_token_hash")
+  customerTokenEncrypted String?  @map("customer_token_encrypted") // Zaszyfrowany token (plain text) do pokazania adminom
   tokenActive           Boolean   @default(true) @map("token_active")
   submittedAt           DateTime? @map("submitted_at")
   answersJson           Json?     @map("answers_json")

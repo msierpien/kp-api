@@ -216,8 +216,8 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
           });
 
           // Create personalization case for this item
-          // Generujemy token i hash - token wysyłamy klientowi, hash zapisujemy w bazie
-          const { token: customerToken, hash: tokenHash } = generateAccessToken();
+          // Generujemy token, hash i zaszyfrowany token
+          const { token: customerToken, hash: tokenHash, encrypted: tokenEncrypted } = generateAccessToken();
 
           const newCase = await prisma.personalizationCase.create({
             data: {
@@ -226,7 +226,8 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
               templateId: personalizedProduct.templateId,
               templateVersionFrozen: personalizedProduct.template.version,
               status: 'NEW',
-              customerTokenHash: tokenHash, // Zapisujemy HASH w bazie, nie sam token
+              customerTokenHash: tokenHash, // Hash do wyszukiwania
+              customerTokenEncrypted: tokenEncrypted, // Zaszyfrowany token do pokazania adminom
               tokenActive: true,
             },
             include: {

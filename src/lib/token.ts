@@ -1,16 +1,22 @@
 import crypto from 'crypto';
+import { encrypt } from './encryption';
 
 /**
  * Generuje kryptograficznie bezpieczny token dostępu.
- * Zwraca token (do wysłania użytkownikowi) i hash (do zapisania w bazie).
+ * Zwraca:
+ * - token (plain text do wysłania użytkownikowi)
+ * - hash (SHA-256 do wyszukiwania w bazie)
+ * - encrypted (zaszyfrowany token do zapisania w bazie)
  *
  * Token: 64 znaki URL-safe (base64url z 48 bajtów)
  * Hash: SHA-256 hex (64 znaki)
+ * Encrypted: AES-256-CBC zaszyfrowany token
  */
-export function generateAccessToken(): { token: string; hash: string } {
+export function generateAccessToken(): { token: string; hash: string; encrypted: string } {
   const token = crypto.randomBytes(48).toString('base64url');
   const hash = hashToken(token);
-  return { token, hash };
+  const encrypted = encrypt(token);
+  return { token, hash, encrypted };
 }
 
 /**

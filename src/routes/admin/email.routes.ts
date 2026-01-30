@@ -4,6 +4,7 @@ import { emailService } from '../../services/email/email.service';
 import { queuePersonalizationEmail, queueTestEmail } from '../../services/queue/email.queue';
 import prisma from '../../lib/prisma';
 import { config } from '../../config';
+import { decrypt } from '../../lib/encryption';
 
 // Validation schemas
 const bulkSendEmailSchema = z.object({
@@ -120,8 +121,14 @@ export async function emailRoutes(fastify: FastifyInstance) {
         for (const caseItem of toSend) {
           try {
             const baseUrl = config.frontend.portalUrl;
-            const token = caseItem.customerTokenHash; // Simplified - should regenerate token
-            
+
+            // Odszyfruj token z bazy
+            if (!caseItem.customerTokenEncrypted) {
+              fastify.log.warn(`Case ${caseItem.id} has no encrypted token, skipping`);
+              continue;
+            }
+            const token = decrypt(caseItem.customerTokenEncrypted);
+
             await queuePersonalizationEmail({
               to: caseItem.order.customerEmail,
               customerName: caseItem.order.customerName || '',

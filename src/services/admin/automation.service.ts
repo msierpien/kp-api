@@ -189,12 +189,13 @@ async function executeSendEmail(config: any, caseData: any): Promise<void> {
     throw new Error('Missing case data for email automation');
   }
 
-  // Każdy email dostaje świeży token: zapisujemy nowy hash w bazie, token używamy w linku
-  const { token: accessToken, hash: tokenHash } = generateAccessToken();
+  // Każdy email dostaje świeży token: zapisujemy nowy hash i zaszyfrowany token w bazie
+  const { token: accessToken, hash: tokenHash, encrypted: tokenEncrypted } = generateAccessToken();
   await prisma.personalizationCase.update({
     where: { id: caseData.id },
     data: {
       customerTokenHash: tokenHash,
+      customerTokenEncrypted: tokenEncrypted,
       tokenActive: true,
       updatedAt: new Date(),
     },

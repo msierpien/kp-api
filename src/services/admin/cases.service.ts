@@ -315,13 +315,14 @@ export async function resendPersonalizationEmail(id: string) {
 
   // Generujemy NOWY token - stary będzie nieaktywny
   // To też zabezpiecza przed wyciekiem poprzedniego tokena
-  const { token: newToken, hash: newHash } = generateAccessToken();
+  const { token: newToken, hash: newHash, encrypted: newEncrypted } = generateAccessToken();
 
-  // Aktualizuj hash w bazie danych
+  // Aktualizuj hash i zaszyfrowany token w bazie danych
   await prisma.personalizationCase.update({
     where: { id },
     data: {
       customerTokenHash: newHash,
+      customerTokenEncrypted: newEncrypted,
       tokenActive: true, // Reaktywuj token jeśli był nieaktywny
       updatedAt: new Date(),
     },

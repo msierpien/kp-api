@@ -19,6 +19,9 @@ import {
   UpdateCaseStatusInput,
   AddCaseNoteInput,
 } from '../../schemas/admin.schema';
+import prisma from '../../lib/prisma';
+import { config } from '../../config';
+import { decrypt } from '../../lib/encryption';
 
 export async function casesRoutes(fastify: FastifyInstance) {
   // GET /admin/cases
@@ -232,6 +235,59 @@ export async function casesRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           error: 'Internal Server Error',
           message: 'Nie udało się wysłać emaila',
+        });
+      }
+    }
+  );
+
+  // GET /admin/cases/:id/token - Get personalization token for case
+  fastify.get<{ Params: CaseIdParams }>(
+    '/:id/token',
+    async (request: FastifyRequest<{ Params: CaseIdParams }>, reply: FastifyReply) => {
+      try {
+        const paramsValidation = caseIdParamsSchema.safeParse(request.params);
+
+        if (!paramsValidation.success) {
+          return reply.status(400).send({
+            error: 'Validation Error',
+            message: paramsValidation.error.errors[0].message,
+          });
+        }
+
+        const caseItem = await prisma.personalizationCase.findUnique({
+          where: { id: paramsValidation.data.id },
+          select: {
+            id: true,
+            customerTokenEncrypted: true,
+          },
+        });
+
+        if (!caseItem) {
+          return reply.status(404).send({
+            error: 'Not Found',
+            message: 'Case o podanym ID nie istnieje',
+          });
+        }
+
+        if (!caseItem.customerTokenEncrypted) {
+          return reply.status(404).send({
+            error: 'Not Found',
+            message: 'Token nie został jeszcze wygenerowany',
+          });
+        }
+
+        // Odszyfruj token
+        const token = decrypt(caseItem.customerTokenEncrypted);
+
+        return reply.send({
+          token,
+          url: `${config.frontend.portalUrl}/${token}`,
+        });
+      } catch (error) {
+        fastify.log.error(error);
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Nie udało się pobrać tokena',
         });
       }
     }

@@ -297,6 +297,13 @@ model PersonalizationCase {
   answersJson           Json?     @map("answers_json")
   validationSummary     Json?     @map("validation_summary") // { errors: [], warnings: [] }
   notesInternal         String?   @map("notes_internal")
+  
+  // Email tracking
+  emailSentAt           DateTime? @map("email_sent_at") // Kiedy email został wysłany
+  emailFailedAt         DateTime? @map("email_failed_at") // Kiedy ostatnia próba failed
+  emailError            String?   @map("email_error") // Komunikat błędu
+  emailAttempts         Int       @default(0) @map("email_attempts") // Liczba prób
+  
   createdAt             DateTime  @default(now()) @map("created_at")
   updatedAt             DateTime  @updatedAt @map("updated_at")
 
@@ -311,6 +318,7 @@ model PersonalizationCase {
   @@index([orderId])
   @@index([status])
   @@index([customerTokenHash])
+  @@index([emailSentAt])
   @@map("personalization_cases")
 }
 

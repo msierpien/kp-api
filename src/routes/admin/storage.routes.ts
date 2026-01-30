@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { authMiddleware, requireRole } from '../../middleware/auth.middleware';
-import { cleanupStorage, type CleanupOptions } from '../storage/cleanup-storage.service';
+import { cleanupStorage, type CleanupOptions } from '../../services/storage/cleanup-storage.service';
 
 export async function storageRoutes(fastify: FastifyInstance) {
   // Tylko SUPER_ADMIN

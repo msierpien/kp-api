@@ -65,14 +65,18 @@ services:
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change-me-in-production}
       JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-15m}
       JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+      # Encryption
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       # Webhook
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-change-me-in-production}
-      # Email (do konfiguracji później)
-      SMTP_HOST: ${SMTP_HOST:-}
-      SMTP_PORT: ${SMTP_PORT:-587}
+      # Email
+      SMTP_HOST: ${SMTP_HOST:-mailhog}
+      SMTP_PORT: ${SMTP_PORT:-1025}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-noreply@example.com}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      AUTO_SEND_EMAILS: ${AUTO_SEND_EMAILS:-false}
     volumes:
       - ./src:/app/src
       - ./prisma:/app/prisma
@@ -98,6 +102,20 @@ services:
       - postgres
     environment:
       ADMINER_DEFAULT_SERVER: postgres
+
+  # MailHog - SMTP testing tool (dev only)
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: personalization-mailhog
+    restart: unless-stopped
+    ports:
+      - "1025:1025"  # SMTP server
+      - "8025:8025"  # Web UI
+    healthcheck:
+      test: ["CMD", "echo", "ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
 volumes:
   postgres_data:

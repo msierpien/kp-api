@@ -1,8 +1,8 @@
 # Base stage
 FROM node:20-alpine AS base
 
-# Install OpenSSL for Prisma
-RUN apk add --no-cache openssl
+# Install OpenSSL for Prisma + Python and build deps for canvas
+RUN apk add --no-cache openssl python3 make g++ cairo-dev jpeg-dev pango-dev giflib-dev
 
 # Install pnpm
 RUN corepack enable && corepack prepare pnpm@latest --activate

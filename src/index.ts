@@ -14,10 +14,13 @@ import { authRoutes } from './routes/auth.routes';
 import { adminRoutes } from './routes/admin';
 import { personalizationRoutes } from './routes/public/personalization.routes';
 import { reloadEmailService } from './services/admin/email-settings.service';
+import { initializeEmailService } from './services/email/email.service';
 import { initializeScheduler } from './services/scheduler/scheduler.service';
 import { initStorage } from './services/storage/local-storage.service';
 import { startRenderWorker, stopRenderWorker } from './services/queue/render.worker';
+import { startEmailWorker, stopEmailWorker } from './services/queue/email.worker';
 import { closeQueue, getQueueStats } from './services/queue/render.queue';
+import { closeEmailQueue } from './services/queue/email.queue';
 // Puppeteer removed - no browser to close anymore
 import bullBoardPlugin from './plugins/bull-board';
 import type { JwtPayload } from './types';
@@ -209,13 +212,15 @@ server.get('/', async () => {
 const gracefulShutdown = async () => {
   server.log.info('Shutting down gracefully...');
 
-  // Zatrzymuj BullMQ worker (Puppeteer został usunięty)
+  // Zatrzymuj BullMQ workers
   try {
     await stopRenderWorker();
+    await stopEmailWorker();
     await closeQueue();
-    server.log.info('🛑 Render worker stopped');
+    await closeEmailQueue();
+    server.log.info('🛑 Workers and queues stopped');
   } catch (error) {
-    server.log.error({ err: error }, 'Error stopping render worker');
+    server.log.error({ err: error }, 'Error stopping workers');
   }
 
   await prisma.$disconnect();
@@ -239,12 +244,20 @@ const start = async () => {
       server.log.error({ err: error }, '❌ Failed to initialize storage');
     }
 
-    // Załaduj ustawienia email z bazy danych przy starcie
+    // Initialize email service (global SMTP config)
+    try {
+      initializeEmailService();
+      server.log.info('📧 Email service initialized (global config)');
+    } catch (error) {
+      server.log.warn({ err: error }, '⚠️  Failed to initialize global email service');
+    }
+
+    // Załaduj ustawienia email z bazy danych przy starcie (tenant-specific)
     try {
       await reloadEmailService();
-      server.log.info('✉️  Email service initialized from database');
+      server.log.info('✉️  Tenant email settings loaded from database');
     } catch (error) {
-      server.log.warn({ err: error }, '⚠️  Failed to initialize email service from database');
+      server.log.warn({ err: error }, '⚠️  Failed to load tenant email settings');
     }
 
     // Zainicjalizuj scheduler automatycznej synchronizacji

@@ -276,6 +276,14 @@ const start = async () => {
       server.log.error({ err: error }, '❌ Failed to start render worker');
     }
 
+    // Uruchom BullMQ email worker
+    try {
+      startEmailWorker();
+      server.log.info('📧 Email worker started (BullMQ)');
+    } catch (error) {
+      server.log.error({ err: error }, '❌ Failed to start email worker');
+    }
+
     await server.listen({ port, host });
     server.log.info(`🚀 Server is running on http://${host}:${port}`);
     server.log.info(`📊 Health check: http://${host}:${port}/health`);

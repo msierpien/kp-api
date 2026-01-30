@@ -30,16 +30,24 @@ class EmailService {
 
   initialize(config: EmailConfig) {
     this.config = config;
+
+    // MailHog i inne dev SMTP serwery nie wymagają autentykacji
+    const isDevMailServer = config.port === 1025 || config.user === 'mailhog' || config.host === 'localhost';
+
     this.transporter = nodemailer.createTransport({
       host: config.host,
       port: config.port,
       secure: config.secure,
-      auth: {
-        user: config.user,
-        pass: config.pass,
-      },
+      // Auth opcjonalny - tylko dla prawdziwych SMTP serwerów
+      ...(isDevMailServer ? {} : {
+        auth: {
+          user: config.user,
+          pass: config.pass,
+        },
+      }),
     });
-    console.log('[Email] Service initialized with SMTP:', config.host);
+
+    console.log('[Email] Service initialized with SMTP:', config.host, isDevMailServer ? '(dev mode, no auth)' : '(production mode, with auth)');
   }
 
   isConfigured(): boolean {
@@ -56,6 +64,8 @@ class EmailService {
     const text = this.generatePersonalizationEmailText(data);
 
     try {
+      console.log('[Email] Sending personalization email to:', data.to);
+
       const result = await this.transporter.sendMail({
         from: `"${data.shopName}" <${this.config.from}>`,
         to: data.to,
@@ -64,10 +74,14 @@ class EmailService {
         html,
       });
 
-      console.log('[Email] Sent personalization email to:', data.to, 'messageId:', result.messageId);
+      console.log('[Email] ✅ Successfully sent personalization email to:', data.to, 'messageId:', result.messageId);
       return true;
     } catch (error) {
-      console.error('[Email] Failed to send email:', error);
+      console.error('[Email] ❌ Failed to send email to:', data.to);
+      console.error('[Email] Error details:', error instanceof Error ? error.message : error);
+      if (error instanceof Error && error.stack) {
+        console.error('[Email] Stack trace:', error.stack);
+      }
       return false;
     }
   }

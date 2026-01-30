@@ -9,6 +9,37 @@ datasource db {
 }
 
 // ============================================
+// Multi-tenant
+// ============================================
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+model Tenant {
+  id         String       @id @default(cuid())
+  name       String // np. "Kreatywne Papierki"
+  slug       String       @unique // np. "kreatywne-papierki"
+  status     TenantStatus @default(ACTIVE)
+  plan       String       @default("FREE") // FREE, BASIC, PRO, ENTERPRISE
+  limitsJson Json?        @map("limits_json") // { max_shops: 5, max_users: 10, max_cases_per_month: 1000 }
+  createdAt  DateTime     @default(now()) @map("created_at")
+  updatedAt  DateTime     @updatedAt @map("updated_at")
+
+  // Relations
+  users         User[]
+  shops         Shop[]
+  templates     PersonalizationTemplate[]
+  emailSettings EmailSettings[]
+
+  @@index([status])
+  @@index([slug])
+  @@map("tenants")
+}
+
+// ============================================
 // Integracja / Sklepy
 // ============================================
 
@@ -17,36 +48,39 @@ enum ShopPlatform {
   WOOCOMMERCE
   SHOPIFY
   MAGENTO
-  MANUAL        // Ręczne zamówienia (FB, Instagram, email)
-  CUSTOM_API    // Niestandardowe integracje API
+  MANUAL // Ręczne zamówienia (FB, Instagram, email)
+  CUSTOM_API // Niestandardowe integracje API
   OTHER
 }
 
 enum IdentifierType {
-  SKU       // reference w PrestaShop
-  INDEX     // supplier_reference w PrestaShop
-  EAN       // ean13 w PrestaShop
+  SKU // reference w PrestaShop
+  INDEX // supplier_reference w PrestaShop
+  EAN // ean13 w PrestaShop
 }
 
 model Shop {
-  id            String       @id @default(cuid())
-  name          String
-  platform      ShopPlatform @default(PRESTASHOP)
-  baseUrl       String       @map("base_url")
-  apiKey        String       @default("") @map("api_key") // zaszyfrowane
-  apiSecret     String?      @map("api_secret") // zaszyfrowane, opcjonalne
-  status        String       @default("ACTIVE") // ACTIVE, INACTIVE
-  lastSyncAt    DateTime?    @map("last_sync_at")
-  syncInterval  Int          @default(30) @map("sync_interval") // interwał synchronizacji w minutach
-  syncEnabled   Boolean      @default(true) @map("sync_enabled") // czy auto-sync jest włączony
-  configJson    Json?        @map("config_json") // dodatkowa konfiguracja specyficzna dla platformy
-  createdAt     DateTime     @default(now()) @map("created_at")
-  updatedAt     DateTime     @updatedAt @map("updated_at")
+  id           String       @id @default(cuid())
+  tenantId     String       @map("tenant_id")
+  name         String
+  platform     ShopPlatform @default(PRESTASHOP)
+  baseUrl      String       @map("base_url")
+  apiKey       String       @default("") @map("api_key") // zaszyfrowane
+  apiSecret    String?      @map("api_secret") // zaszyfrowane, opcjonalne
+  status       String       @default("ACTIVE") // ACTIVE, INACTIVE
+  lastSyncAt   DateTime?    @map("last_sync_at")
+  syncInterval Int          @default(30) @map("sync_interval") // interwał synchronizacji w minutach
+  syncEnabled  Boolean      @default(true) @map("sync_enabled") // czy auto-sync jest włączony
+  configJson   Json?        @map("config_json") // dodatkowa konfiguracja specyficzna dla platformy
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
 
-  orders              Order[]
-  syncLogs            SyncLog[]
+  tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orders               Order[]
+  syncLogs             SyncLog[]
   personalizedProducts PersonalizedProduct[]
 
+  @@index([tenantId])
   @@index([status])
   @@index([platform])
   @@index([syncEnabled])
@@ -56,7 +90,7 @@ model Shop {
 model PersonalizedProduct {
   id                String         @id @default(cuid())
   shopId            String         @map("shop_id")
-  name              String         // nazwa produktu dla łatwej identyfikacji
+  name              String // nazwa produktu dla łatwej identyfikacji
   identifierType    IdentifierType @default(SKU) @map("identifier_type") // SKU, INDEX, EAN
   identifierValue   String         @map("identifier_value") // wartość identyfikatora (np. "INV-KOMUNIA-001")
   externalProductId String?        @map("external_product_id") // ID produktu w PrestaShop (opcjonalne)
@@ -81,25 +115,25 @@ model PersonalizedProduct {
 // ============================================
 
 model Order {
-  id                 String   @id @default(cuid())
-  shopId             String   @map("shop_id")
-  externalOrderId    String   @map("external_order_id") // ID zamówienia w sklepie
-  orderReference     String   @map("order_reference")
-  customerEmail      String   @map("customer_email")
-  customerName       String?  @map("customer_name")
-  language           String   @default("pl")
-  currency           String   @default("PLN")
-  totalPaid          Decimal  @map("total_paid") @db.Decimal(10, 2)
-  createdAtShop      DateTime @map("created_at_shop")
-  payloadJson        Json     @map("payload_json") // snapshot całego zamówienia z API sklepu
-  syncedAt           DateTime @default(now()) @map("synced_at")
-  createdAt          DateTime @default(now()) @map("created_at")
-  updatedAt          DateTime @updatedAt @map("updated_at")
+  id              String   @id @default(cuid())
+  shopId          String   @map("shop_id")
+  externalOrderId String   @map("external_order_id") // ID zamówienia w sklepie
+  orderReference  String   @map("order_reference")
+  customerEmail   String   @map("customer_email")
+  customerName    String?  @map("customer_name")
+  language        String   @default("pl")
+  currency        String   @default("PLN")
+  totalPaid       Decimal  @map("total_paid") @db.Decimal(10, 2)
+  createdAtShop   DateTime @map("created_at_shop")
+  payloadJson     Json     @map("payload_json") // snapshot całego zamówienia z API sklepu
+  syncedAt        DateTime @default(now()) @map("synced_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
 
-  shop               Shop                  @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  items              OrderItem[]
+  shop                 Shop                  @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  items                OrderItem[]
   personalizationCases PersonalizationCase[]
-  accessPins         OrderAccessPin[]
+  accessPins           OrderAccessPin[]
 
   @@unique([shopId, externalOrderId])
   @@index([shopId, orderReference])
@@ -108,19 +142,19 @@ model Order {
 }
 
 model OrderItem {
-  id                      String   @id @default(cuid())
-  orderId                 String   @map("order_id")
-  externalItemId          String   @map("external_item_id") // ID pozycji w sklepie
-  sku                     String
-  productNameSnapshot     String   @map("product_name_snapshot")
-  quantity                Int
-  personalizedProductId   String?  @map("personalized_product_id")
-  createdAt               DateTime @default(now()) @map("created_at")
-  updatedAt               DateTime @updatedAt @map("updated_at")
+  id                    String   @id @default(cuid())
+  orderId               String   @map("order_id")
+  externalItemId        String   @map("external_item_id") // ID pozycji w sklepie
+  sku                   String
+  productNameSnapshot   String   @map("product_name_snapshot")
+  quantity              Int
+  personalizedProductId String?  @map("personalized_product_id")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
 
-  order                   Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  personalizedProduct     PersonalizedProduct?  @relation(fields: [personalizedProductId], references: [id], onDelete: SetNull)
-  personalizationCase     PersonalizationCase?
+  order               Order                @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  personalizedProduct PersonalizedProduct? @relation(fields: [personalizedProductId], references: [id], onDelete: SetNull)
+  personalizationCase PersonalizationCase?
 
   @@index([orderId])
   @@index([sku])
@@ -133,19 +167,19 @@ model OrderItem {
 // ============================================
 
 model SyncLog {
-  id             String    @id @default(cuid())
-  shopId         String    @map("shop_id")
-  syncType       String    @map("sync_type") // ORDERS, PRODUCTS
-  status         String    @default("SUCCESS") // SUCCESS, FAILED, PARTIAL
-  ordersFetched  Int       @default(0) @map("orders_fetched")
-  ordersCreated  Int       @default(0) @map("orders_created")
-  ordersSkipped  Int       @default(0) @map("orders_skipped")
-  errorMessage   String?   @map("error_message") @db.Text
-  startedAt      DateTime  @default(now()) @map("started_at")
-  finishedAt     DateTime? @map("finished_at")
-  createdAt      DateTime  @default(now()) @map("created_at")
+  id            String    @id @default(cuid())
+  shopId        String    @map("shop_id")
+  syncType      String    @map("sync_type") // ORDERS, PRODUCTS
+  status        String    @default("SUCCESS") // SUCCESS, FAILED, PARTIAL
+  ordersFetched Int       @default(0) @map("orders_fetched")
+  ordersCreated Int       @default(0) @map("orders_created")
+  ordersSkipped Int       @default(0) @map("orders_skipped")
+  errorMessage  String?   @map("error_message") @db.Text
+  startedAt     DateTime  @default(now()) @map("started_at")
+  finishedAt    DateTime? @map("finished_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
 
-  shop           Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
   @@index([shopId])
   @@index([startedAt])
@@ -158,40 +192,44 @@ model SyncLog {
 // ============================================
 
 model PersonalizationTemplate {
-  id            String   @id @default(cuid())
-  code          String   @unique // np. INV_KOMUNIA_01
-  name          String
-  description   String?
-  version       Int      @default(1)
-  isActive      Boolean  @default(true) @map("is_active")
-  layoutJson    Json?    @map("layout_json") // TemplateLayoutJson - pozycje pól, warstwy, czcionki
-  thumbnailUrl  String?  @map("thumbnail_url") // URL miniatury szablonu
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  id           String   @id @default(cuid())
+  tenantId     String   @map("tenant_id")
+  code         String // np. INV_KOMUNIA_01 (unique per tenant)
+  name         String
+  description  String?
+  version      Int      @default(1)
+  isActive     Boolean  @default(true) @map("is_active")
+  layoutJson   Json?    @map("layout_json") // TemplateLayoutJson - pozycje pól, warstwy, czcionki
+  thumbnailUrl String?  @map("thumbnail_url") // URL miniatury szablonu
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
+  tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   forms                Form[]
   cases                PersonalizationCase[]
   personalizedProducts PersonalizedProduct[]
   templateAssets       TemplateAsset[]
 
+  @@unique([tenantId, code])
+  @@index([tenantId])
   @@index([code])
   @@index([isActive])
   @@map("personalization_templates")
 }
 
 model TemplateAsset {
-  id          String   @id @default(cuid())
-  templateId  String   @map("template_id")
-  assetType   String   @map("asset_type") // BACKGROUND, DECORATION, LOGO, CUT_LINE_SVG
-  fileName    String   @map("file_name")
-  filePath    String   @map("file_path") // ścieżka relatywna w storage
-  fileSize    Int      @map("file_size")
-  mimeType    String   @map("mime_type")
-  metadata    Json?    // width, height, originalName
-  sortOrder   Int      @default(0) @map("sort_order")
-  createdAt   DateTime @default(now()) @map("created_at")
+  id         String   @id @default(cuid())
+  templateId String   @map("template_id")
+  assetType  String   @map("asset_type") // BACKGROUND, DECORATION, LOGO, CUT_LINE_SVG
+  fileName   String   @map("file_name")
+  filePath   String   @map("file_path") // ścieżka relatywna w storage
+  fileSize   Int      @map("file_size")
+  mimeType   String   @map("mime_type")
+  metadata   Json? // width, height, originalName
+  sortOrder  Int      @default(0) @map("sort_order")
+  createdAt  DateTime @default(now()) @map("created_at")
 
-  template    PersonalizationTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  template PersonalizationTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
 
   @@index([templateId])
   @@index([assetType])
@@ -199,43 +237,43 @@ model TemplateAsset {
 }
 
 model Form {
-  id              String   @id @default(cuid())
-  templateId      String   @map("template_id")
-  name            String
-  sortOrder       Int      @default(0) @map("sort_order")
-  isActive        Boolean  @default(true) @map("is_active")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  id         String   @id @default(cuid())
+  templateId String   @map("template_id")
+  name       String
+  sortOrder  Int      @default(0) @map("sort_order")
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
 
-  template        PersonalizationTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
-  fields          FormField[]
+  template PersonalizationTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  fields   FormField[]
 
   @@index([templateId])
   @@map("forms")
 }
 
 model FormField {
-  id                 String   @id @default(cuid())
-  formId             String   @map("form_id")
-  key                String   // unikalne w obrębie formularza
-  label              String
-  type               String   // text, textarea, select, checkbox, date, time, repeater, upload
-  required           Boolean  @default(false)
-  minLength          Int?     @map("min_length")
-  maxLength          Int?     @map("max_length")
-  pattern            String?  // regex
-  placeholder        String?
-  helpText           String?  @map("help_text")
-  defaultValue       String?  @map("default_value")
-  optionsJson        Json?    @map("options_json") // dla select
-  repeaterGroupKey   String?  @map("repeater_group_key") // np. "guests"
-  sortOrder          Int      @default(0) @map("sort_order")
-  validationRulesJson Json?   @map("validation_rules_json")
-  createdAt          DateTime @default(now()) @map("created_at")
-  updatedAt          DateTime @updatedAt @map("updated_at")
+  id                  String   @id @default(cuid())
+  formId              String   @map("form_id")
+  key                 String // unikalne w obrębie formularza
+  label               String
+  type                String // text, textarea, select, checkbox, date, time, repeater, upload
+  required            Boolean  @default(false)
+  minLength           Int?     @map("min_length")
+  maxLength           Int?     @map("max_length")
+  pattern             String? // regex
+  placeholder         String?
+  helpText            String?  @map("help_text")
+  defaultValue        String?  @map("default_value")
+  optionsJson         Json?    @map("options_json") // dla select
+  repeaterGroupKey    String?  @map("repeater_group_key") // np. "guests"
+  sortOrder           Int      @default(0) @map("sort_order")
+  validationRulesJson Json?    @map("validation_rules_json")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
 
-  form               Form     @relation(fields: [formId], references: [id], onDelete: Cascade)
-  answers            PersonalizationAnswer[]
+  form    Form                    @relation(fields: [formId], references: [id], onDelete: Cascade)
+  answers PersonalizationAnswer[]
 
   @@unique([formId, key])
   @@index([formId])
@@ -262,13 +300,13 @@ model PersonalizationCase {
   createdAt             DateTime  @default(now()) @map("created_at")
   updatedAt             DateTime  @updatedAt @map("updated_at")
 
-  order                 Order                   @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  orderItem             OrderItem               @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
-  template              PersonalizationTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
-  answers               PersonalizationAnswer[]
-  answerVersions        PersonalizationAnswerVersion[]
-  renderJobs            RenderJob[]
-  assets                Asset[]
+  order          Order                          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderItem      OrderItem                      @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  template       PersonalizationTemplate        @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  answers        PersonalizationAnswer[]
+  answerVersions PersonalizationAnswerVersion[]
+  renderJobs     RenderJob[]
+  assets         Asset[]
 
   @@index([orderId])
   @@index([status])
@@ -277,16 +315,16 @@ model PersonalizationCase {
 }
 
 model PersonalizationAnswer {
-  id         String    @id @default(cuid())
-  caseId     String    @map("case_id")
-  fieldId    String    @map("field_id")
-  valueText  String?   @map("value_text") @db.Text
-  valueJson  Json?     @map("value_json") // dla repeaterów
-  updatedAt  DateTime  @updatedAt @map("updated_at")
-  createdAt  DateTime  @default(now()) @map("created_at")
+  id        String   @id @default(cuid())
+  caseId    String   @map("case_id")
+  fieldId   String   @map("field_id")
+  valueText String?  @map("value_text") @db.Text
+  valueJson Json?    @map("value_json") // dla repeaterów
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
-  case       PersonalizationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  field      FormField           @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  case  PersonalizationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  field FormField           @relation(fields: [fieldId], references: [id], onDelete: Cascade)
 
   @@unique([caseId, fieldId])
   @@index([caseId])
@@ -294,14 +332,14 @@ model PersonalizationAnswer {
 }
 
 model PersonalizationAnswerVersion {
-  id         String   @id @default(cuid())
-  caseId     String   @map("case_id")
-  changedBy  String   @map("changed_by") // CUSTOMER, ADMIN, SYSTEM
-  changesJson Json    @map("changes_json") // diff lub snapshot
-  ip         String?
-  createdAt  DateTime @default(now()) @map("created_at")
+  id          String   @id @default(cuid())
+  caseId      String   @map("case_id")
+  changedBy   String   @map("changed_by") // CUSTOMER, ADMIN, SYSTEM
+  changesJson Json     @map("changes_json") // diff lub snapshot
+  ip          String?
+  createdAt   DateTime @default(now()) @map("created_at")
 
-  case       PersonalizationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  case PersonalizationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   @@index([caseId])
   @@index([createdAt])
@@ -320,7 +358,7 @@ model OrderAccessPin {
   usedAt    DateTime? @map("used_at")
   createdAt DateTime  @default(now()) @map("created_at")
 
-  order     Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@index([orderId])
   @@index([expiresAt])
@@ -332,18 +370,18 @@ model OrderAccessPin {
 // ============================================
 
 model RenderJob {
-  id         String    @id @default(cuid())
-  caseId     String    @map("case_id")
-  jobType    String    @map("job_type") // PDF_PRINT, PNG_PREVIEW
-  status     String    @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
-  attempts   Int       @default(0)
-  error      String?   @db.Text
-  metadata   Json?     // parametry renderowania
-  createdAt  DateTime  @default(now()) @map("created_at")
-  startedAt  DateTime? @map("started_at")
+  id          String    @id @default(cuid())
+  caseId      String    @map("case_id")
+  jobType     String    @map("job_type") // PDF_PRINT, PNG_PREVIEW
+  status      String    @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
+  attempts    Int       @default(0)
+  error       String?   @db.Text
+  metadata    Json? // parametry renderowania
+  createdAt   DateTime  @default(now()) @map("created_at")
+  startedAt   DateTime? @map("started_at")
   completedAt DateTime? @map("completed_at")
 
-  case       PersonalizationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  case PersonalizationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   @@index([caseId])
   @@index([status])
@@ -352,16 +390,16 @@ model RenderJob {
 }
 
 model Asset {
-  id         String    @id @default(cuid())
-  caseId     String    @map("case_id")
-  assetType  String    @map("asset_type") // PNG_PREVIEW, PDF_PRINT
-  filePath   String    @map("file_path") // ścieżka lokalna lub S3
-  fileSize   Int       @map("file_size")
-  mimeType   String    @map("mime_type")
-  metadata   Json?     // dodatkowe dane (width, height, generated, etc)
-  createdAt  DateTime  @default(now()) @map("created_at")
+  id        String   @id @default(cuid())
+  caseId    String   @map("case_id")
+  assetType String   @map("asset_type") // PNG_PREVIEW, PDF_PRINT
+  filePath  String   @map("file_path") // ścieżka lokalna lub S3
+  fileSize  Int      @map("file_size")
+  mimeType  String   @map("mime_type")
+  metadata  Json? // dodatkowe dane (width, height, generated, etc)
+  createdAt DateTime @default(now()) @map("created_at")
 
-  case       PersonalizationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  case PersonalizationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
 
   @@index([caseId])
   @@index([assetType])
@@ -374,17 +412,21 @@ model Asset {
 
 model EmailSettings {
   id        String   @id @default(cuid())
+  tenantId  String   @unique @map("tenant_id") // jeden EmailSettings per tenant
   host      String
   port      Int
   secure    Boolean  @default(false)
   user      String
-  password  String   // zaszyfrowane
+  password  String // zaszyfrowane
   fromEmail String   @map("from_email")
   fromName  String?  @map("from_name")
   isActive  Boolean  @default(true) @map("is_active")
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
   @@map("email_settings")
 }
 
@@ -394,11 +436,11 @@ model EmailSettings {
 
 model Automation {
   id          String   @id @default(cuid())
-  name        String   // Nazwa reguły np. "Wyślij email po utworzeniu case"
-  description String?  // Opcjonalny opis
-  trigger     String   // CASE_CREATED, CASE_STATUS_CHANGED, CASE_SUBMITTED, CASE_TIME_ELAPSED
-  conditions  Json     // Warunki w formacie JSON (status, template, shop, etc.)
-  actions     Json     // Akcje w formacie JSON (send_email, change_status, add_note, webhook)
+  name        String // Nazwa reguły np. "Wyślij email po utworzeniu case"
+  description String? // Opcjonalny opis
+  trigger     String // CASE_CREATED, CASE_STATUS_CHANGED, CASE_SUBMITTED, CASE_TIME_ELAPSED
+  conditions  Json // Warunki w formacie JSON (status, template, shop, etc.)
+  actions     Json // Akcje w formacie JSON (send_email, change_status, add_note, webhook)
   isActive    Boolean  @default(true) @map("is_active")
   priority    Int      @default(0) // Kolejność wykonywania (wyższy = wcześniej)
   createdAt   DateTime @default(now()) @map("created_at")
@@ -415,16 +457,20 @@ model Automation {
 // ============================================
 
 model User {
-  id            String   @id @default(cuid())
-  email         String   @unique
-  passwordHash  String   @map("password_hash")
-  name          String
-  role          String   @default("SELLER") // ADMIN, SELLER
-  isActive      Boolean  @default(true) @map("is_active")
-  lastLoginAt   DateTime? @map("last_login_at")
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  id           String    @id @default(cuid())
+  tenantId     String    @map("tenant_id")
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  name         String
+  role         String    @default("SELLER") // SUPER_ADMIN, ADMIN, SELLER
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
 
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
   @@index([email])
   @@index([role])
   @@map("users")

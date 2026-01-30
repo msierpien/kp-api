@@ -6,12 +6,32 @@ const prisma = new PrismaClient();
 export async function seed() {
   console.log('🌱 Seeding database...');
 
-  // 1. Utwórz przykładowy sklep
+  // 1. Utwórz default tenant
+  const tenant = await prisma.tenant.upsert({
+    where: { id: 'default-tenant-id' },
+    update: {},
+    create: {
+      id: 'default-tenant-id',
+      name: 'Kreatywne Papierki',
+      slug: 'kreatywne-papierki',
+      status: 'ACTIVE',
+      plan: 'PRO',
+      limitsJson: {
+        max_shops: 10,
+        max_users: 20,
+        max_cases_per_month: 10000,
+      },
+    },
+  });
+  console.log('✅ Tenant created:', tenant.name);
+
+  // 2. Utwórz przykładowy sklep
   const shop = await prisma.shop.upsert({
     where: { id: 'shop_1' },
     update: {},
     create: {
       id: 'shop_1',
+      tenantId: tenant.id,
       name: 'Kreatywne Papierki',
       platform: 'PRESTASHOP',
       baseUrl: 'https://kreatywne-papierki.pl',
@@ -22,12 +42,13 @@ export async function seed() {
   });
   console.log('✅ Shop created:', shop.name);
 
-  // 2. Utwórz użytkownika admin
+  // 3. Utwórz użytkownika admin
   const adminPassword = await bcrypt.hash('admin123', 10);
   const admin = await prisma.user.upsert({
     where: { email: 'admin@kreatywne-papierki.pl' },
     update: {},
     create: {
+      tenantId: tenant.id,
       email: 'admin@kreatywne-papierki.pl',
       passwordHash: adminPassword,
       name: 'Administrator',
@@ -37,12 +58,13 @@ export async function seed() {
   });
   console.log('✅ Admin user created:', admin.email);
 
-  // 3. Utwórz użytkownika seller
+  // 4. Utwórz użytkownika seller
   const sellerPassword = await bcrypt.hash('seller123', 10);
   const seller = await prisma.user.upsert({
     where: { email: 'seller@kreatywne-papierki.pl' },
     update: {},
     create: {
+      tenantId: tenant.id,
       email: 'seller@kreatywne-papierki.pl',
       passwordHash: sellerPassword,
       name: 'Sprzedawca',
@@ -52,11 +74,17 @@ export async function seed() {
   });
   console.log('✅ Seller user created:', seller.email);
 
-  // 4. Utwórz przykładowy szablon personalizacji
+  // 5. Utwórz przykładowy szablon personalizacji
   const template = await prisma.personalizationTemplate.upsert({
-    where: { code: 'INV_KOMUNIA_01' },
+    where: { 
+      tenantId_code: {
+        tenantId: tenant.id,
+        code: 'INV_KOMUNIA_01',
+      }
+    },
     update: {},
     create: {
+      tenantId: tenant.id,
       code: 'INV_KOMUNIA_01',
       name: 'Zaproszenie komunijne - wzór 01',
       description: 'Eleganckie zaproszenie na Pierwszą Komunię Świętą',
@@ -149,8 +177,16 @@ export async function seed() {
   console.log(`✅ Created ${fields.length} form fields`);
 
   // 7. Utwórz produkt personalizowany
-  const personalizedProduct = await prisma.personalizedProduct.create({
-    data: {
+  const personalizedProduct = await prisma.personalizedProduct.upsert({
+    where: {
+      shopId_identifierType_identifierValue: {
+        shopId: shop.id,
+        identifierType: 'SKU',
+        identifierValue: 'INV-KOMUNIA-001',
+      },
+    },
+    update: {},
+    create: {
       shopId: shop.id,
       name: 'Zaproszenie komunijne - wzór 01',
       identifierType: 'SKU',

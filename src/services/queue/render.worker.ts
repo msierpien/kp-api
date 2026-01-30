@@ -216,6 +216,26 @@ async function processRenderJob(
   } catch (error) {
     console.error(`[RenderWorker] Job ${job.id} failed:`, error);
 
+    // Enhanced error tracking
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    
+    // Store error details in job data for later inspection
+    try {
+      await job.updateData({
+        ...job.data,
+        lastError: {
+          message: errorMessage,
+          stack: errorStack,
+          timestamp: new Date().toISOString(),
+          attemptNumber: job.attemptsMade + 1,
+          caseId,
+        },
+      });
+    } catch (updateError) {
+      console.error('[RenderWorker] Failed to update job data with error:', updateError);
+    }
+
     // Zaktualizuj case status na FAILED_RENDER (tylko jeśli to final PDF i ostatnia próba)
     if (jobType === 'PDF_PRINT' && job.attemptsMade >= (job.opts.attempts || 3) - 1) {
       await prisma.personalizationCase.update({

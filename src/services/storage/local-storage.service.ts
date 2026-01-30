@@ -5,7 +5,7 @@ import mime from 'mime-types';
 import { config } from '../../config';
 
 const STORAGE_ROOT = config.storage.path;
-const BASE_URL = config.app.url;
+const PUBLIC_STORAGE_URL = config.storage.publicUrl;
 
 interface SaveFileOptions {
   orderId: string;
@@ -60,8 +60,8 @@ export async function saveFile(
   // Relatywna ścieżka od storage root
   const relativePath = path.relative(STORAGE_ROOT, filePath);
 
-  // URL: /storage/{relativePath}
-  const url = `${BASE_URL}/storage/${relativePath.replace(/\\/g, '/')}`;
+  // URL: używamy publicUrl z config
+  const url = buildStorageUrl(relativePath);
 
   return {
     path: relativePath,
@@ -109,6 +109,26 @@ export function getMimeType(filename: string): string {
 }
 
 /**
+ * Buduje publiczny URL do pliku w storage
+ * Używa config.storage.publicUrl (http://localhost:3001/storage)
+ */
+export function buildStorageUrl(relativePath: string): string {
+  return `${PUBLIC_STORAGE_URL}/${relativePath.replace(/\\/g, '/')}`;
+}
+
+/**
+ * Buduje publiczny URL tylko jeśli plik istnieje
+ * Zwraca null jeśli plik nie istnieje
+ */
+export async function buildStorageUrlSafe(relativePath: string): Promise<string | null> {
+  const exists = await fileExists(relativePath);
+  if (!exists) {
+    return null;
+  }
+  return buildStorageUrl(relativePath);
+}
+
+/**
  * Generuje URL z TTL (dla przyszłych signed URLs)
  * Na razie zwraca normalny URL
  */
@@ -118,8 +138,7 @@ export function generateSignedUrl(
 ): string {
   // TODO: Implementacja signed URLs z tokenem lub HMAC
   // Na razie zwracamy normalny URL
-  const url = `${BASE_URL}/storage/${relativePath.replace(/\\/g, '/')}`;
-  return url;
+  return buildStorageUrl(relativePath);
 }
 
 /**

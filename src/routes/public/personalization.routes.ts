@@ -4,7 +4,7 @@ import { config } from '../../config';
 import { hashToken, maskToken } from '../../lib/token';
 import { renderPreview } from '../../services/renderer/fabric-renderer.service';
 import { validateAnswers } from '../../services/renderer/text-validator.service';
-import { saveFile, fileExists } from '../../services/storage/local-storage.service';
+import { saveFile, fileExists, buildStorageUrl } from '../../services/storage/local-storage.service';
 import { addFinalPdfJob } from '../../services/queue/render.queue';
 
 interface PersonalizationParams {
@@ -344,9 +344,8 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         if (existingPreview) {
           const existsOnDisk = await fileExists(existingPreview.filePath);
           if (existsOnDisk) {
-            // Skonstruuj URL z filePath
-            const storageUrl = config.storage.publicUrl;
-            previewUrl = `${storageUrl}/${existingPreview.filePath}`;
+            // Skonstruuj URL używając centralnej funkcji
+            previewUrl = buildStorageUrl(existingPreview.filePath);
             fastify.log.info('[Preview] Using existing frontend-generated preview');
           } else {
             fastify.log.warn('[Preview] Existing preview missing on disk, ignoring');

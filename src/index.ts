@@ -23,6 +23,8 @@ import { closeQueue, getQueueStats } from './services/queue/render.queue';
 import { closeEmailQueue } from './services/queue/email.queue';
 // Puppeteer removed - no browser to close anymore
 import bullBoardPlugin from './plugins/bull-board';
+import { errorHandlerPlugin } from './plugins/error-handler.plugin';
+import { validationPlugin } from './plugins/validation.plugin';
 import type { JwtPayload } from './types';
 
 const server = Fastify({
@@ -87,6 +89,12 @@ server.addContentTypeParser('application/json', { parseAs: 'string' }, function 
 });
 
 // Plugins
+// Error handler (musi być pierwszy)
+server.register(errorHandlerPlugin);
+
+// Validation plugin
+server.register(validationPlugin);
+
 // CORS - dozwolone origins (admin panel + portal klienta)
 const allowedOrigins = [
   config.frontend.adminUrl,

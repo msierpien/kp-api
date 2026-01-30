@@ -74,6 +74,22 @@ export async function seed() {
   });
   console.log('✅ Seller user created:', seller.email);
 
+  // 4. Utwórz użytkownika SUPER_ADMIN
+  const superAdminPassword = await bcrypt.hash('SuperAdmin2024!', 10);
+  const superAdmin = await prisma.user.upsert({
+    where: { email: 'msierpien@rexbit.pl' },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      email: 'msierpien@rexbit.pl',
+      passwordHash: superAdminPassword,
+      name: 'Michał Sierpień',
+      role: 'SUPER_ADMIN',
+      isActive: true,
+    },
+  });
+  console.log('✅ Super Admin user created:', superAdmin.email);
+
   // 5. Utwórz przykładowy szablon personalizacji
   const template = await prisma.personalizationTemplate.upsert({
     where: { 
@@ -310,6 +326,7 @@ export async function seed() {
   console.log('\n📋 Test credentials:');
   console.log('   Admin: admin@kreatywne-papierki.pl / admin123');
   console.log('   Seller: seller@kreatywne-papierki.pl / seller123');
+  console.log('   Super Admin: msierpien@rexbit.pl / SuperAdmin2024!');
 }
 
 // Auto-run if main script (not imported)

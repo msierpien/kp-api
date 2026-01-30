@@ -1,11 +1,6 @@
 import { Worker, Job } from 'bullmq';
 import prisma from '../../lib/prisma';
-import { renderPreview } from '../renderer/fabric-renderer.service';
-// TODO: Implement renderPDF with fabric when needed
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const renderPDF = async (..._args: any[]) => {
-  throw new Error('PDF rendering not yet implemented with Fabric.js');
-};
+import { renderPreview, renderPDF } from '../renderer/fabric-renderer.service';
 import { validateAnswers } from '../renderer/text-validator.service';
 import { saveFile } from '../storage/local-storage.service';
 import {

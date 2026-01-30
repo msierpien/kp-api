@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import prisma from '../../lib/prisma';
 import { syncShopOrders } from '../sync/sync-orders.service';
+import { cleanupStorage } from '../storage/cleanup-storage.service';
 // BullMQ Worker automatycznie przetwarza RenderJobs - nie potrzebujemy crona
 
 /**
@@ -108,9 +109,7 @@ export async function initializeScheduler() {
       where: {
         status: 'ACTIVE',
         syncEnabled: true,
-        platform: {
-          not: 'MANUAL', // Sklepy manualne nie mają auto-sync
-        },
+        platform: { not: 'MANUAL' }, // MANUAL nie ma auto-sync
       },
       select: {
         id: true,
@@ -119,24 +118,54 @@ export async function initializeScheduler() {
       },
     });
     
-    if (shops.length === 0) {
-      console.log('[Scheduler] ℹ️  No shops configured for auto-sync');
-      return;
-    }
-    
     // Scheduleuj każdy sklep
-    for (const shop of shops) {
+    shops.forEach((shop) => {
       scheduleShopSync(shop.id, shop.name, shop.syncInterval);
-    }
+    });
     
     console.log(`[Scheduler] ✅ Initialized ${shops.length} shop sync schedules`);
-
-    // UWAGA: RenderJobs są teraz przetwarzane przez BullMQ Worker (automatycznie)
+    
+    // Scheduleuj storage cleanup - codziennie o 3:00
+    scheduleStorageCleanup();
+    
     console.log('[Scheduler] ℹ️  RenderJobs processing handled by BullMQ Worker');
-
   } catch (error) {
     console.error('[Scheduler] ❌ Failed to initialize scheduler:', error);
+    throw error;
   }
+}
+
+/**
+ * Storage cleanup - codziennie o 3:00
+ */
+function scheduleStorageCleanup() {
+  cron.schedule(
+    '0 3 * * *', // Codziennie o 3:00
+    async () => {
+      console.log('[Scheduler] 🧹 Starting automatic storage cleanup...');
+      try {
+        const stats = await cleanupStorage({
+          dryRun: false,
+          olderThanDays: 30, // Usuń orphaned files starsze niż 30 dni
+          removeOrphanedOnly: true,
+        });
+        
+        console.log(
+          `[Scheduler] ✅ Storage cleanup complete: ` +
+          `${stats.orphanedFilesDeleted} files deleted, ` +
+          `${(stats.spaceSavedBytes / 1024 / 1024).toFixed(2)} MB saved`
+        );
+      } catch (error) {
+        console.error('[Scheduler] ❌ Storage cleanup failed:', error);
+      }
+    },
+    {
+      scheduled: true,
+      timezone: 'Europe/Warsaw',
+    }
+  );
+  
+  console.log('[Scheduler] 📅 Scheduled storage cleanup: daily at 3:00 AM');
 }
 
 /**

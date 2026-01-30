@@ -325,4 +325,70 @@ export async function renderPreview(
   return buffer;
 }
 
+/**
+ * Renderowanie do PDF (wysokiej jakości, do druku)
+ * Używa Fabric.js do renderowania PNG w wysokiej rozdzielczości,
+ * następnie konwertuje do PDF używając PDFKit
+ */
+export async function renderPDF(
+  data: TemplateData,
+  options: Omit<RenderOptions, 'format'>
+): Promise<Buffer> {
+  const PDFDocument = (await import('pdfkit')).default;
+  
+  const {
+    width = 800,
+    height = 600,
+    scale = 1,
+  } = options;
+
+  console.log('[Fabric] Starting PDF render:', {
+    template: data.templateName,
+    size: `${width}x${height}`,
+    scale,
+  });
+
+  // Render PNG w wysokiej rozdzielczości (300 DPI dla druku)
+  const printDPI = 300;
+  const screenDPI = 96;
+  const dpiScale = printDPI / screenDPI;
+  
+  const pngBuffer = await renderPreview(data, {
+    ...options,
+    deviceScaleFactor: dpiScale,
+    format: 'png',
+    quality: 1,
+    includeWatermark: false, // Bez watermark w finalnym PDF
+  });
+
+  // Konwertuj PNG do PDF
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    
+    // Wymiary w punktach (1 punkt = 1/72 cala)
+    const pdfWidth = width * scale;
+    const pdfHeight = height * scale;
+    
+    const doc = new PDFDocument({
+      size: [pdfWidth, pdfHeight],
+      margin: 0,
+      autoFirstPage: false,
+    });
+
+    doc.on('data', (chunk) => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    // Dodaj stronę i umieść PNG
+    doc.addPage({ size: [pdfWidth, pdfHeight], margin: 0 });
+    doc.image(pngBuffer, 0, 0, {
+      width: pdfWidth,
+      height: pdfHeight,
+      fit: [pdfWidth, pdfHeight],
+    });
+
+    doc.end();
+  });
+}
+
 export { RenderOptions, TemplateData, WatermarkConfig };

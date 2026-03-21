@@ -26,6 +26,25 @@ async function processRenderJob(
     // Update progress
     await job.updateProgress(10);
 
+    const activeRenderJob = await prisma.renderJob.findFirst({
+      where: { caseId, jobType },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (activeRenderJob) {
+      await prisma.renderJob.update({
+        where: { id: activeRenderJob.id },
+        data: {
+          status: 'PROCESSING',
+          startedAt: new Date(),
+          metadata: {
+            ...(activeRenderJob.metadata as object || {}),
+            bullmqJobId: job.id,
+          },
+        },
+      });
+    }
+
     // Pobierz case z bazy
     const personalizationCase = await prisma.personalizationCase.findUnique({
       where: { id: caseId },
@@ -242,6 +261,30 @@ async function processRenderJob(
       await prisma.personalizationCase.update({
         where: { id: caseId },
         data: { status: 'FAILED_RENDER' },
+      });
+    }
+
+    const failedRenderJob = await prisma.renderJob.findFirst({
+      where: { caseId, jobType },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (failedRenderJob) {
+      await prisma.renderJob.update({
+        where: { id: failedRenderJob.id },
+        data: {
+          status: 'FAILED',
+          error: errorMessage,
+          completedAt: new Date(),
+          metadata: {
+            ...(failedRenderJob.metadata as object || {}),
+            bullmqJobId: job.id,
+            lastError: {
+              message: errorMessage,
+              timestamp: new Date().toISOString(),
+            },
+          },
+        },
       });
     }
 

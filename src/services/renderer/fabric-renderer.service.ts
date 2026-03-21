@@ -1,4 +1,4 @@
-import { createCanvas as createNodeCanvas, loadImage, registerFont } from 'canvas';
+import { loadImage, registerFont } from 'canvas';
 import { StaticCanvas, FabricImage, IText, Textbox } from 'fabric/node';
 import type { TemplateLayoutJson, Layer, TextFieldProperties, TextBoxProperties, ImageProperties } from '../../types/template-layout';
 import path from 'path';
@@ -104,8 +104,7 @@ function mergeLayoutWithOverrides(
 async function layerToFabricObject(
   layer: Layer,
   answers: Record<string, any>,
-  scale: number,
-  assetBaseUrl: string
+  scale: number
 ): Promise<any> {
   const common = {
     left: layer.x * scale,
@@ -123,7 +122,7 @@ async function layerToFabricObject(
     const props = layer.properties as ImageProperties;
     const imageUrl = props.imageUrl.startsWith('http')
       ? props.imageUrl
-      : `${assetBaseUrl}${props.imageUrl}`;
+      : path.join(config.storage.path, props.imageUrl);
     
     try {
       const img = await loadImage(imageUrl);
@@ -251,19 +250,14 @@ export async function renderPreview(
   const finalHeight = height * deviceScaleFactor;
   const finalScale = scale * deviceScaleFactor;
 
-  // Utwórz node-canvas
-  const nodeCanvas = createNodeCanvas(finalWidth, finalHeight);
-  
-  // Utwórz Static Canvas Fabric.js dla Node.js
-  // fabric/node automatycznie używa node-canvas
-  const fabricCanvas = new StaticCanvas(nodeCanvas as any, {
+  // Pozwól fabric/node utworzyć zgodny element canvas przez JSDOM,
+  // a następnie pobierz powiązany node-canvas do eksportu.
+  const fabricCanvas = new StaticCanvas(undefined, {
     width: finalWidth,
     height: finalHeight,
     backgroundColor: layout.canvas.backgroundColor || '#ffffff',
   });
-
-  // Asset base URL
-  const assetBaseUrl = config.app.url;
+  const nodeCanvas = fabricCanvas.getNodeCanvas();
 
   // Renderuj warstwy w kolejności zIndex
   const sortedLayers = [...layout.layers]
@@ -275,8 +269,7 @@ export async function renderPreview(
       const fabricObj = await layerToFabricObject(
         layer,
         data.answers,
-        finalScale,
-        assetBaseUrl
+        finalScale
       );
       
       if (fabricObj) {

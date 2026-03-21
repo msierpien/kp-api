@@ -78,6 +78,16 @@ pnpm dev
 - `GET /admin/templates/:id` - szczegóły szablonu
 - `GET /admin/templates/:id/form` - konfiguracja formularza
 - `PUT /admin/templates/:id/form` - aktualizacja formularza
+- `GET /admin/templates/:id/layout` - pobranie layoutu wizualnego
+- `PUT /admin/templates/:id/layout` - zapis layoutu wizualnego
+- `GET /admin/templates/:id/assets` - lista assetów szablonu
+- `POST /admin/templates/:id/assets` - upload assetu (PNG/JPG/SVG/WebP, max 10 MB)
+- `DELETE /admin/templates/:id/assets/:assetId` - usunięcie assetu
+
+### Admin - Czcionki (globalne)
+- `GET /admin/fonts` - lista wszystkich czcionek z `storage/fonts/`
+- `POST /admin/fonts` - upload czcionki (TTF/OTF/WOFF/WOFF2, max 10 MB)
+- `DELETE /admin/fonts/:fileName` - usunięcie czcionki
 
 ### Admin - Zamówienia
 - `GET /admin/orders` - lista zamówień z items
@@ -90,11 +100,15 @@ pnpm dev
 ## 💾 Storage
 
 ### Lokalizacja
-Pliki zapisują się w `api/storage/<orderId>/v<templateVersion>/...`
+Pliki zapisują się w `api/storage/...`
 
 ### Struktura
 ```
 storage/
+├── fonts/                              # Globalne czcionki (TTF/OTF/WOFF/WOFF2)
+├── templates/
+│   └── {templateCode}/
+│       └── background/                 # Assety tła szablonu
 └── {orderId}/
     └── v{templateVersion}/
         ├── {timestamp}-preview.png     # PNG z portalu klienta

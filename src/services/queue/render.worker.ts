@@ -18,7 +18,7 @@ let workerInstance: Worker<RenderJobData, RenderJobResult> | null = null;
 async function processRenderJob(
   job: Job<RenderJobData, RenderJobResult>
 ): Promise<RenderJobResult> {
-  const { caseId, jobType, answers, templateName, templateVersion, orderId, renderOptions, layoutConfig } = job.data;
+  const { caseId, jobType, answers, templateName, templateVersion, orderId, renderOptions, layoutConfig, layoutOverrides } = job.data;
 
   console.log(`[RenderWorker] Processing job ${job.id}, type: ${jobType}, case: ${caseId}`);
 
@@ -98,6 +98,7 @@ async function processRenderJob(
       answers,
       templateName: templateName || 'default',
       layoutConfig: layoutConfig || undefined,
+      layoutOverrides: layoutOverrides || undefined,
       watermark: jobType === 'PNG_PREVIEW' ? {
         text: 'PODGLĄD',
         opacity: 0.15,

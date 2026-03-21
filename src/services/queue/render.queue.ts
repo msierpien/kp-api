@@ -3,6 +3,18 @@ import IORedis from 'ioredis';
 import { config } from '../../config';
 import type { TemplateLayoutJson } from '../../types/template-layout';
 
+export interface LayoutLayerOverride {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  rotation?: number;
+}
+
+export interface LayoutOverrides {
+  layers: Record<string, LayoutLayerOverride>;
+}
+
 // Singleton connection
 let redisConnection: IORedis | null = null;
 
@@ -37,6 +49,14 @@ export interface RenderJobData {
   templateName: string;
   templateVersion: number;
   layoutConfig?: TemplateLayoutJson | null;
+  layoutOverrides?: LayoutOverrides | null;
+  lastError?: {
+    message: string;
+    stack?: string;
+    timestamp: string;
+    attemptNumber: number;
+    caseId: string;
+  };
   orderId: string;
   orderReference?: string;
   customerName?: string;

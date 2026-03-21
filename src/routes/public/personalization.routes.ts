@@ -1,8 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import prisma from '../../lib/prisma';
-import { config } from '../../config';
 import { hashToken, maskToken } from '../../lib/token';
-import { renderPreview } from '../../services/renderer/fabric-renderer.service';
 import { validateAnswers } from '../../services/renderer/text-validator.service';
 import { saveFile, fileExists, buildStorageUrl } from '../../services/storage/local-storage.service';
 import { addFinalPdfJob } from '../../services/queue/render.queue';
@@ -13,6 +11,18 @@ interface PersonalizationParams {
 
 interface SaveDesignBody {
   answers: Record<string, string | any>;
+  layoutOverrides?: {
+    layers: Record<
+      string,
+      {
+        x?: number;
+        y?: number;
+        width?: number;
+        height?: number;
+        rotation?: number;
+      }
+    >;
+  };
 }
 
 // Helper: upserts answers rows for case and returns merged answersJson.
@@ -215,6 +225,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           data: {
             status: 'WAITING_FOR_CUSTOMER',
             answersJson: mergedAnswers,
+            layoutOverrides: request.body.layoutOverrides ? JSON.parse(JSON.stringify(request.body.layoutOverrides)) : undefined,
           },
           include: {
             answers: {
@@ -296,6 +307,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
 
         // Zapisz odpowiedzi jeśli przyszły w body
         let mergedAnswers = personalizationCase.answersJson || {};
+        const layoutOverrides = request.body?.layoutOverrides ?? personalizationCase.layoutOverrides;
         if (request.body?.answers) {
           mergedAnswers = await saveAnswers(
             personalizationCase.id,
@@ -357,6 +369,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           where: { id: personalizationCase.id },
           data: {
             answersJson: mergedAnswers,
+            layoutOverrides: layoutOverrides ? JSON.parse(JSON.stringify(layoutOverrides)) : undefined,
             validationSummary: JSON.parse(JSON.stringify(validation)),
             status: previewUrl ? 'PREVIEW_READY' : 'DRAFT',
           },
@@ -438,6 +451,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
 
         // Jeśli w body przyszły odpowiedzi, zapisz je przed walidacją
         let mergedAnswers = personalizationCase.answersJson;
+        const layoutOverrides = request.body?.layoutOverrides ?? personalizationCase.layoutOverrides;
         if (request.body?.answers) {
           mergedAnswers = await saveAnswers(
             personalizationCase.id,
@@ -491,6 +505,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           templateName: templateSlug,
           templateVersion,
           layoutConfig,
+          layoutOverrides: layoutOverrides as any,
           orderId,
           orderReference: orderReference || undefined,
           renderOptions: {
@@ -516,6 +531,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           data: {
             status: 'SUBMITTED',
             submittedAt: new Date(),
+            layoutOverrides: layoutOverrides ? JSON.parse(JSON.stringify(layoutOverrides)) : undefined,
           },
         });
 
@@ -611,7 +627,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         // Zapisz plik
         const savedFile = await saveFile(buffer, {
           orderId: personalizationCase.orderItem?.orderId || 'unknown',
-          templateVersion: personalizationCase.orderItem?.personalizedProduct?.template?.version || '1.0',
+          templateVersion: personalizationCase.orderItem?.personalizedProduct?.template?.version || 1,
           filename: `preview-${personalizationCase.id}`,
           extension: 'png',
         });

@@ -296,6 +296,7 @@ model PersonalizationCase {
   tokenActive           Boolean   @default(true) @map("token_active")
   submittedAt           DateTime? @map("submitted_at")
   answersJson           Json?     @map("answers_json")
+  layoutOverrides       Json?     @map("layout_overrides")
   validationSummary     Json?     @map("validation_summary") // { errors: [], warnings: [] }
   notesInternal         String?   @map("notes_internal")
   

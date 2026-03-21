@@ -7,8 +7,7 @@ import {
   type UpdateShopInput,
   type ShopIdParamsInput,
 } from '../../schemas/admin.schema';
-import { createShop, listShops, testShopConnection, updateShop } from '../../services/admin/shops.service';
-import { syncShopOrders } from '../../services/sync/sync-orders.service';
+import { createShop, deleteShop, listShops, testShopConnection, updateShop } from '../../services/admin/shops.service';
 import {
   triggerManualSync,
   enableShopSync,
@@ -87,6 +86,42 @@ export async function shopsRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           error: 'Internal Server Error',
           message: 'Nie udało się zaktualizować integracji',
+        });
+      }
+    }
+  );
+
+  // DELETE /admin/shops/:id
+  fastify.delete<{ Params: ShopIdParamsInput }>(
+    '/:id',
+    async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
+      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: paramsParsed.error.errors[0].message,
+        });
+      }
+
+      try {
+        await deleteShop(paramsParsed.data.id);
+        return reply.send({
+          success: true,
+          message: 'Integracja została usunięta',
+        });
+      } catch (error) {
+        fastify.log.error(error);
+
+        if (error instanceof Error && error.message === 'Integracja nie istnieje') {
+          return reply.status(404).send({
+            error: 'Not Found',
+            message: error.message,
+          });
+        }
+
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: error instanceof Error ? error.message : 'Nie udało się usunąć integracji',
         });
       }
     }

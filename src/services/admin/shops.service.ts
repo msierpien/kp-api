@@ -3,6 +3,7 @@ import prisma from '../../lib/prisma';
 import { encrypt, decrypt } from '../../lib/encryption';
 import type { CreateShopInput, UpdateShopInput } from '../../schemas/admin.schema';
 import type { ShopItem } from '../../types';
+import { removeShopFromScheduler } from '../scheduler/scheduler.service';
 
 const mapShop = (shop: any): ShopItem => ({
   id: shop.id,
@@ -26,6 +27,7 @@ const mapShop = (shop: any): ShopItem => ({
       scopes: [],
     },
   },
+  tenantId: shop.tenantId, // Multi-tenant isolation
 });
 
 export async function listShops(): Promise<ShopItem[]> {
@@ -68,6 +70,28 @@ export async function updateShop(id: string, input: UpdateShopInput): Promise<Sh
   });
 
   return mapShop(shop);
+}
+
+export async function deleteShop(id: string): Promise<void> {
+  const shop = await prisma.shop.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      syncEnabled: true,
+    },
+  });
+
+  if (!shop) {
+    throw new Error('Integracja nie istnieje');
+  }
+
+  if (shop.syncEnabled) {
+    removeShopFromScheduler(shop.id);
+  }
+
+  await prisma.shop.delete({
+    where: { id },
+  });
 }
 
 export async function testShopConnection(id: string) {

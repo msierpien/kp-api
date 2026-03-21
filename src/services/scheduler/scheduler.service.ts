@@ -94,6 +94,10 @@ function stopShopSync(shopId: string) {
   }
 }
 
+export function removeShopFromScheduler(shopId: string) {
+  stopShopSync(shopId);
+}
+
 // UWAGA: Przetwarzanie RenderJobs jest teraz obsługiwane przez BullMQ Worker
 // Nie potrzebujemy już crona do przetwarzania - worker automatycznie pobiera joby z kolejki Redis
 

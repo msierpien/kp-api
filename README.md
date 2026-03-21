@@ -49,6 +49,8 @@ pnpm dev
 - `POST /personalization/:token/preview` - walidacja + zwrot istniejącego preview (bez renderu)
 - `POST /personalization/:token/submit` - zatwierdzenie i utworzenie render job
 
+**Uwaga:** draft i submit zapisują również `layoutOverrides` dla warstw `text` i `textbox`, dzięki czemu finalny render respektuje pozycję i rozmiar ustawione przez klienta.
+
 ### Auth
 - `POST /auth/login` - logowanie (email + password)
 - `POST /auth/refresh` - odświeżenie tokenu (refresh token)
@@ -112,7 +114,7 @@ storage/
 └── {orderId}/
     └── v{templateVersion}/
         ├── {timestamp}-preview.png     # PNG z portalu klienta
-        ├── final.pdf                   # PDF do druku (TODO)
+        ├── final.pdf                   # Finalny PDF do druku
         └── assets/                     # Uploaded files
 ```
 
@@ -138,7 +140,7 @@ Endpoint: `GET /storage/*` (static file serving)
 - `PersonalizationTemplate` - szablony (INV_KOMUNIA_01, etc.)
 - `Form` - formularze w szablonie
 - `FormField` - pola formularza (text, select, date, etc.)
-- `PersonalizationCase` - przypadki personalizacji (1 per order item)
+- `PersonalizationCase` - przypadki personalizacji (1 per order item, answers + layoutOverrides)
 - `PersonalizationAnswer` - odpowiedzi klienta
 
 **Użytkownicy:**
@@ -219,7 +221,7 @@ Najważniejsze (pełna lista w `.env.example`):
 - `STORAGE_PATH=./storage` - lokalizacja plików
 - `STORAGE_TYPE=local` (docelowo: s3)
 
-**Email:** (TODO)
+**Email:**
 - `SMTP_HOST`
 - `SMTP_PORT`
 - `SMTP_USER`
@@ -239,12 +241,12 @@ Logi zawierają:
 ## 🔄 Synchronizacja zamówień (PULL)
 
 ### Workflow
-1. **Cron job** (TODO) co X minut (5-15 min)
+1. **Cron job** co X minut (5-15 min) - nadal do dokończenia
 2. Pobiera opłacone zamówienia z API sklepu
 3. **Filtruje** po SKU z tabeli `personalized_products`
 4. Tworzy `Order` + `OrderItem` + `PersonalizationCase`
 5. Generuje token dostępowy (hash do DB)
-6. **Wysyła e-mail** z linkiem (TODO)
+6. **Wysyła e-mail** z linkiem
 7. Loguje do `sync_logs`
 
 ### Manualne uruchomienie
@@ -266,17 +268,18 @@ Obsługuje:
 - Error handling i retry
 - Logowanie do `sync_logs`
 
-## 🎨 Render Pipeline (TODO)
+## 🎨 Render Pipeline
 
 ### Obecny stan
 - ✅ PNG generowane w przeglądarce klienta (Fabric.js)
 - ✅ Upload PNG: `POST /personalization/:token/upload-preview`
-- ❌ PDF do druku (render worker) - **NIE ZAIMPLEMENTOWANE**
+- ✅ PDF do druku generowany asynchronicznie przez BullMQ worker
+- ✅ `layoutOverrides` merge'owane z layoutem przy finalnym renderze
 
 ### Docelowa architektura
 1. Klient klika "Zatwierdź" → `POST /personalization/:token/submit`
 2. API tworzy `RenderJob` w kolejce (BullMQ)
-3. **Worker** pobiera job i renderuje PDF (Puppeteer/Playwright)
+3. **Worker** pobiera job i renderuje PDF
 4. PDF zapisany w storage: `{orderId}/v{version}/final.pdf`
 5. Status case: SUBMITTED → READY_FOR_PRINT
 
@@ -295,10 +298,12 @@ pnpm start
 pnpm lint
 pnpm lint:fix
 
-# Testy (TODO)
+# Testy
 pnpm test
 pnpm test:watch
 ```
+
+**Uwaga:** pokrycie testami nadal jest niepełne; krytyczne flow są priorytetem na kolejny etap.
 
 ### Struktura kodu
 ```

@@ -1,6 +1,10 @@
 import prisma from '../../lib/prisma';
 import type { PersonalizedProductInput } from '../../schemas/admin.schema';
 
+function normalizeIdentifier(value: string): string {
+  return value.trim();
+}
+
 export async function listPersonalizedProducts() {
   const items = await prisma.personalizedProduct.findMany({
     orderBy: { createdAt: 'desc' },
@@ -26,9 +30,9 @@ export async function createPersonalizedProduct(input: PersonalizedProductInput)
   const item = await prisma.personalizedProduct.create({
     data: {
       shopId: input.shopId,
-      name: input.name,
+      name: input.name.trim(),
       identifierType: input.identifierType,
-      identifierValue: input.identifierValue,
+      identifierValue: normalizeIdentifier(input.identifierValue),
       templateId: input.templateId,
       isActive: input.isActive,
     },
@@ -45,9 +49,9 @@ export async function updatePersonalizedProduct(id: string, input: PersonalizedP
     where: { id },
     data: {
       shopId: input.shopId,
-      name: input.name,
+      name: input.name.trim(),
       identifierType: input.identifierType,
-      identifierValue: input.identifierValue,
+      identifierValue: normalizeIdentifier(input.identifierValue),
       templateId: input.templateId,
       isActive: input.isActive,
     },

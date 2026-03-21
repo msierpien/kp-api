@@ -1,15 +1,29 @@
 import prisma from '../../lib/prisma';
 import { CreateManualOrderInput } from '../../schemas/admin.schema';
 import type { ManualOrderResponse } from '../../types';
+import { generateAccessToken } from '../../lib/token';
+import { config } from '../../config';
+import { emailService } from '../email/email.service';
+import { queuePersonalizationEmail } from '../queue/email.queue';
 
-// Temporary array to store created cases outside transaction
-const manualCasesCreated: any[] = [];
+function normalizeSku(value: string): string {
+  return value.trim();
+}
 
 /**
  * Tworzy ręczne zamówienie (dla platform MANUAL - FB, Instagram, email itp.)
  */
 export async function createManualOrder(data: CreateManualOrderInput): Promise<ManualOrderResponse> {
-  manualCasesCreated.length = 0; // Clear array before starting
+  const manualCasesCreated: Array<{
+    id: string;
+    token: string;
+    orderReference: string;
+    customerEmail: string;
+    customerName: string;
+    shopName: string;
+    productName: string;
+    quantity: number;
+  }> = [];
 
   // Walidacja: czy sklep istnieje i jest typu MANUAL
   const shop = await prisma.shop.findUnique({
@@ -65,12 +79,12 @@ export async function createManualOrder(data: CreateManualOrderInput): Promise<M
 
     // Utwórz pozycje zamówienia
     for (const item of data.items) {
+      const normalizedSku = normalizeSku(item.sku);
+
       // Sprawdź czy produkt jest personalizowany
-      const personalizedProduct = await tx.personalizedProduct.findFirst({
+      const personalizedProducts = await tx.personalizedProduct.findMany({
         where: {
           shopId: data.shopId,
-          identifierType: 'SKU',
-          identifierValue: item.sku,
           isActive: true,
         },
         include: {
@@ -89,48 +103,51 @@ export async function createManualOrder(data: CreateManualOrderInput): Promise<M
           },
         },
       });
+      const personalizedProduct =
+        personalizedProducts.find((product) =>
+          product.identifierType === 'SKU' &&
+          normalizeSku(product.identifierValue) === normalizedSku
+        ) || null;
 
       // Utwórz pozycję zamówienia
       const orderItem = await tx.orderItem.create({
         data: {
           orderId: newOrder.id,
-          externalItemId: `${data.orderReference}-${item.sku}`,
-          sku: item.sku,
-          productNameSnapshot: item.productName,
+          externalItemId: `${data.orderReference}-${normalizedSku}`,
+          sku: normalizedSku,
+          productNameSnapshot: item.productName.trim(),
           quantity: item.quantity,
           personalizedProductId: personalizedProduct?.id || null,
         },
       });
 
-      // Jeśli produkt jest personalizowany, utwórz case(y)
+      // Jeśli produkt jest personalizowany, utwórz jeden case dla pozycji
       if (personalizedProduct) {
-        for (let i = 0; i < item.quantity; i++) {
-          const newCase = await tx.personalizationCase.create({
-            data: {
-              orderId: newOrder.id,
-              orderItemId: orderItem.id,
-              productIdentifierType: 'SKU',
-              productIdentifierValue: item.sku,
-              productNameSnapshot: item.productName,
-              templateId: personalizedProduct.templateId,
-              status: 'NEW',
-              submissionUrl: '', // TODO: generować link
-              expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 dni
-            },
-            include: {
-              order: {
-                include: {
-                  shop: true,
-                },
-              },
-              orderItem: true,
-              template: true,
-            },
-          });
+        const { token, hash, encrypted } = generateAccessToken();
 
-          // Trigger automation (poza transakcją, po commit)
-          manualCasesCreated.push(newCase);
-        }
+        const newCase = await tx.personalizationCase.create({
+          data: {
+            orderId: newOrder.id,
+            orderItemId: orderItem.id,
+            templateId: personalizedProduct.templateId,
+            templateVersionFrozen: personalizedProduct.template.version,
+            status: 'WAITING_FOR_CUSTOMER',
+            customerTokenHash: hash,
+            customerTokenEncrypted: encrypted,
+            tokenActive: true,
+          },
+        });
+
+        manualCasesCreated.push({
+          id: newCase.id,
+          token,
+          orderReference: newOrder.orderReference,
+          customerEmail: newOrder.customerEmail,
+          customerName: newOrder.customerName || '',
+          shopName: shop.name,
+          productName: orderItem.productNameSnapshot,
+          quantity: orderItem.quantity,
+        });
       }
     }
 
@@ -142,8 +159,26 @@ export async function createManualOrder(data: CreateManualOrderInput): Promise<M
   for (const caseItem of manualCasesCreated) {
     await triggerAutomations({
       trigger: AutomationTrigger.CASE_CREATED,
-      caseItem,
+      caseId: caseItem.id,
     });
+
+    if (emailService.isConfigured() && config.smtp.autoSend) {
+      await queuePersonalizationEmail({
+        to: caseItem.customerEmail,
+        customerName: caseItem.customerName,
+        orderReference: caseItem.orderReference,
+        shopName: caseItem.shopName,
+        items: [
+          {
+            productName: caseItem.productName,
+            quantity: caseItem.quantity,
+            personalizationUrl: `${config.frontend.portalUrl}/${caseItem.token}`,
+          },
+        ],
+        baseUrl: config.frontend.portalUrl,
+        caseId: caseItem.id,
+      });
+    }
   }
 
   // Policz ile cases utworzono

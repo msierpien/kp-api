@@ -9,7 +9,7 @@ services:
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
     ports:
-      - "${DB_PORT:-5432}:5432"
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init:/docker-entrypoint-initdb.d
@@ -26,7 +26,7 @@ services:
     restart: unless-stopped
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis}
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -44,7 +44,7 @@ services:
     container_name: personalization-api
     restart: unless-stopped
     ports:
-      - "${API_PORT:-3001}:3001"
+      - "127.0.0.1:${API_PORT:-3001}:3001"
     environment:
       NODE_ENV: ${NODE_ENV:-development}
       API_PORT: 3001
@@ -77,6 +77,11 @@ services:
       SMTP_FROM: ${SMTP_FROM:-noreply@example.com}
       SMTP_SECURE: ${SMTP_SECURE:-false}
       AUTO_SEND_EMAILS: ${AUTO_SEND_EMAILS:-false}
+      # URLs (CORS and generated links)
+      APP_URL: ${APP_URL:-http://localhost:3001}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      PUBLIC_PORTAL_BASE_URL: ${PUBLIC_PORTAL_BASE_URL:-http://localhost:3002}
+      PUBLIC_STORAGE_URL: ${PUBLIC_STORAGE_URL:-${APP_URL:-http://localhost:3001}/storage}
     volumes:
       - ./src:/app/src
       - ./prisma:/app/prisma
@@ -97,7 +102,7 @@ services:
     container_name: personalization-adminer
     restart: unless-stopped
     ports:
-      - "${ADMINER_PORT:-8081}:8080"
+      - "127.0.0.1:${ADMINER_PORT:-8081}:8080"
     depends_on:
       - postgres
     environment:
@@ -109,8 +114,8 @@ services:
     container_name: personalization-mailhog
     restart: unless-stopped
     ports:
-      - "1025:1025"  # SMTP server
-      - "8025:8025"  # Web UI
+      - "127.0.0.1:1025:1025"  # SMTP server
+      - "127.0.0.1:8025:8025"  # Web UI
     healthcheck:
       test: ["CMD", "echo", "ok"]
       interval: 10s
@@ -120,3 +125,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+

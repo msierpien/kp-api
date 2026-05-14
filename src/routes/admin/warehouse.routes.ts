@@ -1,8 +1,34 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import * as warehouseService from '../../services/admin/warehouse.service';
+import * as barcodeService from '../../services/admin/warehouse-barcodes.service';
 import { getStock, getProductStock } from '../../services/admin/warehouse-stock.service';
 
 export async function warehouseRoutes(fastify: FastifyInstance) {
+  // ─── Barcodes / scanner ──────────────────────────────────────────────────
+
+  fastify.get('/barcodes/:ean/lookup', {
+    schema: { tags: ['warehouse'], summary: 'Znajdź produkt magazynowy po kodzie EAN' },
+  }, async (request: FastifyRequest<{ Params: { ean: string } }>, reply: FastifyReply) => {
+    try {
+      const barcode = await barcodeService.lookupBarcode(request.params.ean);
+      if (!barcode) return reply.status(404).send({ error: 'Not Found', message: 'Kod EAN nie znaleziony' });
+      return reply.send({
+        barcode: {
+          id: barcode.id,
+          ean: barcode.ean,
+          label: barcode.label,
+          quantityMultiplier: barcode.quantityMultiplier,
+          isPrimary: barcode.isPrimary,
+        },
+        product: barcode.warehouseProduct,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd wyszukiwania EAN';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   // ─── Products ─────────────────────────────────────────────────────────────
 
   // GET /admin/warehouse/products
@@ -70,6 +96,47 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.get('/products/:id/barcodes', {
+    schema: { tags: ['warehouse'], summary: 'Lista kodów EAN produktu' },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const product = await warehouseService.getProductById(request.params.id);
+      if (!product) return reply.status(404).send({ error: 'Not Found', message: 'Produkt nie znaleziony' });
+      const barcodes = await barcodeService.getProductBarcodes(request.params.id);
+      return reply.send(barcodes);
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ error: 'Internal Server Error', message: 'Błąd pobierania kodów EAN' });
+    }
+  });
+
+  fastify.post('/products/:id/barcodes', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Dodaj kod EAN do produktu',
+      body: {
+        type: 'object',
+        required: ['ean'],
+        properties: {
+          ean: { type: 'string', minLength: 1 },
+          label: { type: 'string' },
+          quantityMultiplier: { type: 'number', exclusiveMinimum: 0, default: 1 },
+          isPrimary: { type: 'boolean', default: false },
+          isActive: { type: 'boolean', default: true },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: barcodeService.CreateBarcodeInput }>, reply: FastifyReply) => {
+    try {
+      const barcode = await barcodeService.createBarcode(request.params.id, request.body);
+      return reply.status(201).send(barcode);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd dodawania EAN';
+      const status = message.includes('nie znaleziony') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   // PUT /admin/warehouse/products/:id
   fastify.put('/products/:id', {
     schema: {
@@ -105,6 +172,46 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
       return reply.status(204).send();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd usuwania produktu';
+      const status = message.includes('nie znaleziony') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.put('/barcodes/:id', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Edytuj kod EAN',
+      body: {
+        type: 'object',
+        properties: {
+          ean: { type: 'string', minLength: 1 },
+          label: { type: ['string', 'null'] },
+          quantityMultiplier: { type: 'number', exclusiveMinimum: 0 },
+          isPrimary: { type: 'boolean' },
+          isActive: { type: 'boolean' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: barcodeService.UpdateBarcodeInput }>, reply: FastifyReply) => {
+    try {
+      const barcode = await barcodeService.updateBarcode(request.params.id, request.body);
+      return reply.send(barcode);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd edycji EAN';
+      const status = message.includes('nie znaleziony') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.delete('/barcodes/:id', {
+    schema: { tags: ['warehouse'], summary: 'Usuń lub dezaktywuj kod EAN' },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await barcodeService.deleteBarcode(request.params.id);
+      if (result.action === 'deactivated') return reply.send(result.barcode);
+      return reply.status(204).send();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd usuwania EAN';
       const status = message.includes('nie znaleziony') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }

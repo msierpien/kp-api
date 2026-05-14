@@ -276,12 +276,16 @@ export async function confirmDocument(id: string) {
   const where: any = { id };
   if (tenantId) where.tenantId = tenantId;
 
-  const doc = await prisma.warehouseDocument.findFirst({ where });
+  const doc = await prisma.warehouseDocument.findFirst({
+    where,
+    include: { items: { include: { product: true } } },
+  });
   if (!doc) throw new Error('Dokument nie znaleziony');
   if (doc.status !== 'DRAFT') throw new Error('Tylko dokumenty DRAFT można zatwierdzić');
 
-  const itemCount = await prisma.warehouseDocumentItem.count({ where: { documentId: id } });
-  if (itemCount === 0) throw new Error('Dokument nie ma żadnych pozycji');
+  if (doc.items.length === 0) throw new Error('Dokument nie ma żadnych pozycji');
+
+  await assertCanConfirmWithoutNegativeStock(doc.tenantId, doc.type, doc.items);
 
   return prisma.warehouseDocument.update({
     where: { id },
@@ -292,6 +296,80 @@ export async function confirmDocument(id: string) {
     },
     include: { items: { include: { product: true, barcode: true } } },
   });
+}
+
+async function assertCanConfirmWithoutNegativeStock(
+  tenantId: string,
+  type: DocumentType,
+  items: Array<{ productId: string; quantity: Prisma.Decimal; product: { name: string; unit: string } }>,
+) {
+  if (!['WZ', 'RW'].includes(type)) return;
+
+  const settings = await getWarehouseSettings(tenantId);
+  if (settings.allowNegativeStock) return;
+
+  const requestedByProduct = new Map<string, { quantity: number; name: string; unit: string }>();
+
+  for (const item of items) {
+    const existing = requestedByProduct.get(item.productId);
+    const quantity = Number(item.quantity);
+
+    if (existing) {
+      existing.quantity += quantity;
+    } else {
+      requestedByProduct.set(item.productId, {
+        quantity,
+        name: item.product.name,
+        unit: item.product.unit,
+      });
+    }
+  }
+
+  for (const [productId, requested] of requestedByProduct) {
+    const stock = await calculateProductStock(tenantId, productId);
+    const requestedQuantity = requested.quantity;
+    const nextStock = stock - requestedQuantity;
+
+    if (nextStock < 0) {
+      throw new Error(
+        `Niewystarczający stan produktu "${requested.name}": dostępne ${stock} ${requested.unit}, wymagane ${requestedQuantity} ${requested.unit}`,
+      );
+    }
+  }
+}
+
+async function getWarehouseSettings(tenantId: string) {
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { limitsJson: true },
+  });
+
+  const limits = tenant?.limitsJson as any;
+  return {
+    allowNegativeStock: limits?.warehouse?.allowNegativeStock !== false,
+  };
+}
+
+async function calculateProductStock(tenantId: string, productId: string) {
+  const items = await prisma.warehouseDocumentItem.findMany({
+    where: {
+      productId,
+      document: {
+        tenantId,
+        status: 'CONFIRMED',
+      },
+    },
+    include: {
+      document: true,
+    },
+  });
+
+  return items.reduce((stock, item) => {
+    const quantity = Number(item.quantity);
+    if (['PZ', 'PW'].includes(item.document.type)) return stock + quantity;
+    if (['WZ', 'RW'].includes(item.document.type)) return stock - quantity;
+    return stock;
+  }, 0);
 }
 
 export async function cancelDocument(id: string, input: CancelDocumentInput = {}) {

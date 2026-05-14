@@ -7,6 +7,7 @@ import { syncLogsRoutes } from './sync-logs.routes';
 import { shopsRoutes } from './shops.routes';
 import { ordersRoutes } from './orders.routes';
 import { personalizedProductsRoutes } from './personalized-products.routes';
+import { shopMappingsRoutes } from './shop-mappings.routes';
 import { templatesRoutes } from './templates.routes';
 import { emailSettingsRoutes } from './email-settings.routes';
 import { automationsRoutes } from './automations.routes';
@@ -30,6 +31,7 @@ export async function adminRoutes(fastify: FastifyInstance) {
   fastify.register(shopsRoutes, { prefix: '/shops' });
   fastify.register(ordersRoutes, { prefix: '/orders' });
   fastify.register(personalizedProductsRoutes, { prefix: '/personalized-products' });
+  fastify.register(shopMappingsRoutes, { prefix: '/shop-mappings' });
   fastify.register(templatesRoutes, { prefix: '/templates' });
   fastify.register(emailSettingsRoutes, { prefix: '/email-settings' });
   fastify.register(automationsRoutes, { prefix: '/automations' });

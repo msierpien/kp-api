@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import * as warehouseService from '../../services/admin/warehouse.service';
 import * as barcodeService from '../../services/admin/warehouse-barcodes.service';
-import { getStock, getProductStock } from '../../services/admin/warehouse-stock.service';
+import { getStock, getProductStock, recalculateStockCache } from '../../services/admin/warehouse-stock.service';
 
 export async function warehouseRoutes(fastify: FastifyInstance) {
   // ─── Barcodes / scanner ──────────────────────────────────────────────────
@@ -426,6 +426,19 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({ error: 'Internal Server Error', message: 'Błąd pobierania stanów' });
+    }
+  });
+
+  fastify.post('/recalculate-stock', {
+    schema: { tags: ['warehouse'], summary: 'Przelicz cache currentStock z dokumentów CONFIRMED' },
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const result = await recalculateStockCache();
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd przeliczania stanów';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
     }
   });
 }

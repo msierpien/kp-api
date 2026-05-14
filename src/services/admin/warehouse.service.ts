@@ -98,6 +98,8 @@ export async function deleteProduct(id: string) {
 // ─── Documents ───────────────────────────────────────────────────────────────
 
 export type DocumentType = 'PZ' | 'PW' | 'WZ' | 'RW';
+const STOCK_INCOMING_TYPES: DocumentType[] = ['PZ', 'PW'];
+const STOCK_OUTGOING_TYPES: DocumentType[] = ['WZ', 'RW'];
 
 export interface DocumentItemInput {
   productId: string;
@@ -287,14 +289,18 @@ export async function confirmDocument(id: string) {
 
   await assertCanConfirmWithoutNegativeStock(doc.tenantId, doc.type, doc.items);
 
-  return prisma.warehouseDocument.update({
-    where: { id },
-    data: {
-      status: 'CONFIRMED',
-      confirmedAt: new Date(),
-      confirmedByUserId: context?.userId,
-    },
-    include: { items: { include: { product: true, barcode: true } } },
+  return prisma.$transaction(async (tx) => {
+    await applyStockDeltas(tx, doc.type, doc.items);
+
+    return tx.warehouseDocument.update({
+      where: { id },
+      data: {
+        status: 'CONFIRMED',
+        confirmedAt: new Date(),
+        confirmedByUserId: context?.userId,
+      },
+      include: { items: { include: { product: true, barcode: true } } },
+    });
   });
 }
 
@@ -378,19 +384,28 @@ export async function cancelDocument(id: string, input: CancelDocumentInput = {}
   const where: any = { id };
   if (tenantId) where.tenantId = tenantId;
 
-  const doc = await prisma.warehouseDocument.findFirst({ where });
+  const doc = await prisma.warehouseDocument.findFirst({
+    where,
+    include: { items: true },
+  });
   if (!doc) throw new Error('Dokument nie znaleziony');
   if (doc.status === 'CANCELLED') throw new Error('Dokument jest już anulowany');
 
-  return prisma.warehouseDocument.update({
-    where: { id },
-    data: {
-      status: 'CANCELLED',
-      cancelledAt: new Date(),
-      cancelledByUserId: context?.userId,
-      cancelReason: input.reason,
-    },
-    include: { items: { include: { product: true, barcode: true } } },
+  return prisma.$transaction(async (tx) => {
+    if (doc.status === 'CONFIRMED') {
+      await applyStockDeltas(tx, doc.type, doc.items, true);
+    }
+
+    return tx.warehouseDocument.update({
+      where: { id },
+      data: {
+        status: 'CANCELLED',
+        cancelledAt: new Date(),
+        cancelledByUserId: context?.userId,
+        cancelReason: input.reason,
+      },
+      include: { items: { include: { product: true, barcode: true } } },
+    });
   });
 }
 
@@ -456,6 +471,37 @@ async function prepareDocumentItems(
   }
 
   return preparedItems;
+}
+
+async function applyStockDeltas(
+  tx: Prisma.TransactionClient,
+  type: DocumentType,
+  items: Array<{ productId: string; quantity: Prisma.Decimal }>,
+  reverse = false,
+) {
+  const baseSign = getStockDeltaSign(type);
+  if (baseSign === 0) return;
+
+  const sign = reverse ? -baseSign : baseSign;
+  const deltas = new Map<string, Prisma.Decimal>();
+
+  for (const item of items) {
+    const current = deltas.get(item.productId) ?? new Prisma.Decimal(0);
+    deltas.set(item.productId, current.plus(item.quantity.mul(sign)));
+  }
+
+  for (const [productId, delta] of deltas) {
+    await tx.warehouseProduct.update({
+      where: { id: productId },
+      data: { currentStock: { increment: delta } },
+    });
+  }
+}
+
+function getStockDeltaSign(type: DocumentType) {
+  if (STOCK_INCOMING_TYPES.includes(type)) return 1;
+  if (STOCK_OUTGOING_TYPES.includes(type)) return -1;
+  return 0;
 }
 
 // ─── Numeracja dokumentów ─────────────────────────────────────────────────────

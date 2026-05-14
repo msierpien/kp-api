@@ -1,4 +1,5 @@
 import prisma from '../../lib/prisma';
+import { Prisma } from '@prisma/client';
 import { getTenantId } from '../../lib/tenant-context';
 
 export interface StockEntry {
@@ -31,16 +32,7 @@ export async function getStock(): Promise<StockEntry[]> {
   });
 
   return products.map((product) => {
-    let quantity = 0;
-    for (const item of product.items) {
-      const type = item.document.type;
-      const qty = Number(item.quantity);
-      if (INCOMING_TYPES.includes(type)) {
-        quantity += qty;
-      } else if (OUTGOING_TYPES.includes(type)) {
-        quantity -= qty;
-      }
-    }
+    const quantity = calculateQuantity(product.items);
     return { productId: product.id, sku: product.sku, name: product.name, unit: product.unit, quantity };
   });
 }
@@ -62,8 +54,40 @@ export async function getProductStock(productId: string): Promise<StockEntry | n
 
   if (!product) return null;
 
+  const quantity = calculateQuantity(product.items);
+
+  return { productId: product.id, sku: product.sku, name: product.name, unit: product.unit, quantity };
+}
+
+export async function recalculateStockCache() {
+  const tenantId = getTenantId();
+  if (!tenantId) throw new Error('Brak kontekstu tenanta');
+
+  const products = await prisma.warehouseProduct.findMany({
+    where: { tenantId },
+    include: {
+      items: {
+        include: { document: true },
+        where: { document: { status: 'CONFIRMED' } },
+      },
+    },
+  });
+
+  await prisma.$transaction(
+    products.map((product) =>
+      prisma.warehouseProduct.update({
+        where: { id: product.id },
+        data: { currentStock: new Prisma.Decimal(calculateQuantity(product.items)) },
+      }),
+    ),
+  );
+
+  return { updated: products.length };
+}
+
+function calculateQuantity(items: Array<{ quantity: Prisma.Decimal; document: { type: string } }>) {
   let quantity = 0;
-  for (const item of product.items) {
+  for (const item of items) {
     const type = item.document.type;
     const qty = Number(item.quantity);
     if (INCOMING_TYPES.includes(type)) {
@@ -72,6 +96,5 @@ export async function getProductStock(productId: string): Promise<StockEntry | n
       quantity -= qty;
     }
   }
-
-  return { productId: product.id, sku: product.sku, name: product.name, unit: product.unit, quantity };
+  return quantity;
 }

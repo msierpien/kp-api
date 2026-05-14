@@ -11,6 +11,39 @@ export async function authRoutes(fastify: FastifyInstance) {
   // POST /auth/login
   fastify.post<{ Body: LoginInput }>(
     '/login',
+    {
+      schema: {
+        tags: ['auth'],
+        summary: 'Logowanie',
+        security: [],
+        body: {
+          type: 'object',
+          required: ['email', 'password'],
+          properties: {
+            email: { type: 'string', format: 'email' },
+            password: { type: 'string', minLength: 1 },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              accessToken: { type: 'string' },
+              refreshToken: { type: 'string' },
+              user: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  email: { type: 'string' },
+                  role: { type: 'string' },
+                },
+              },
+            },
+          },
+          401: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Body: LoginInput }>, reply: FastifyReply) => {
       try {
         const parsed = loginSchema.safeParse(request.body);
@@ -39,6 +72,29 @@ export async function authRoutes(fastify: FastifyInstance) {
   // POST /auth/refresh
   fastify.post<{ Body: RefreshInput }>(
     '/refresh',
+    {
+      schema: {
+        tags: ['auth'],
+        summary: 'Odśwież token dostępu',
+        security: [],
+        body: {
+          type: 'object',
+          required: ['refreshToken'],
+          properties: {
+            refreshToken: { type: 'string' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              accessToken: { type: 'string' },
+            },
+          },
+          401: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Body: RefreshInput }>, reply: FastifyReply) => {
       try {
         const parsed = refreshSchema.safeParse(request.body);
@@ -65,7 +121,18 @@ export async function authRoutes(fastify: FastifyInstance) {
   );
 
   // POST /auth/logout
-  fastify.post('/logout', async (_request: FastifyRequest, reply: FastifyReply) => {
+  fastify.post('/logout', {
+    schema: {
+      tags: ['auth'],
+      summary: 'Wylogowanie',
+      response: {
+        200: {
+          type: 'object',
+          properties: { message: { type: 'string' } },
+        },
+      },
+    },
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
     // W JWT stateless, logout jest po stronie klienta (usunięcie tokenu)
     // Tutaj możemy dodać blacklistowanie tokenu w Redis w przyszłości
     return reply.send({ message: 'Wylogowano pomyślnie' });
@@ -75,6 +142,27 @@ export async function authRoutes(fastify: FastifyInstance) {
   fastify.get(
     '/me',
     {
+      schema: {
+        tags: ['auth'],
+        summary: 'Pobierz dane zalogowanego użytkownika',
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              user: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  email: { type: 'string' },
+                  role: { type: 'string' },
+                  tenantId: { type: 'string' },
+                },
+              },
+            },
+          },
+          401: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
       preHandler: [async (request, reply) => {
         try {
           const authHeader = request.headers.authorization;

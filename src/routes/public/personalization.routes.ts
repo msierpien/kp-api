@@ -97,6 +97,24 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
   // GET /personalization/:token - Get personalization case by access token
   fastify.get<{ Params: PersonalizationParams }>(
     '/:token',
+    {
+      schema: {
+        tags: ['personalization'],
+        summary: 'Pobierz dane personalizacji po tokenie klienta',
+        security: [],
+        params: {
+          type: 'object',
+          properties: {
+            token: { type: 'string', description: 'Token dostępu klienta' },
+          },
+        },
+        response: {
+          200: { type: 'object', description: 'Dane personalizacji wraz z formularzem i layoutem' },
+          403: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: PersonalizationParams }>, reply: FastifyReply) => {
       try {
         addSecurityHeaders(reply);
@@ -195,6 +213,39 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
   // PUT /personalization/:token/design (alias: /answers) - Save personalization draft
   fastify.put<{ Params: PersonalizationParams; Body: SaveDesignBody }>(
     '/:token/:endpoint(answers|design)',
+    {
+      schema: {
+        tags: ['personalization'],
+        summary: 'Zapisz odpowiedzi / szkic projektu',
+        security: [],
+        params: {
+          type: 'object',
+          properties: {
+            token: { type: 'string' },
+            endpoint: { type: 'string', enum: ['answers', 'design'] },
+          },
+        },
+        body: {
+          type: 'object',
+          required: ['answers'],
+          properties: {
+            answers: { type: 'object', description: 'Mapa klucz pola → wartość' },
+            layoutOverrides: {
+              type: 'object',
+              description: 'Opcjonalne przesunięcia warstw layoutu',
+              properties: {
+                layers: { type: 'object' },
+              },
+            },
+          },
+        },
+        response: {
+          200: { type: 'object' },
+          403: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (
       request: FastifyRequest<{ Params: PersonalizationParams; Body: SaveDesignBody }>,
       reply: FastifyReply
@@ -286,6 +337,38 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
   // POST /personalization/:token/preview - Generate preview and validate
   fastify.post<{ Params: PersonalizationParams; Body: SaveDesignBody }>(
     '/:token/preview',
+    {
+      schema: {
+        tags: ['personalization'],
+        summary: 'Waliduj odpowiedzi i pobierz URL podglądu',
+        security: [],
+        params: {
+          type: 'object',
+          properties: {
+            token: { type: 'string' },
+          },
+        },
+        body: {
+          type: 'object',
+          properties: {
+            answers: { type: 'object' },
+            layoutOverrides: { type: 'object' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              previewUrl: { type: 'string', nullable: true },
+              validation: { type: 'object' },
+              status: { type: 'string' },
+            },
+          },
+          403: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (
       request: FastifyRequest<{ Params: PersonalizationParams; Body: SaveDesignBody }>,
       reply: FastifyReply
@@ -431,6 +514,46 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
   // POST /personalization/:token/submit - Submit personalization for production
   fastify.post<{ Params: PersonalizationParams; Body: SaveDesignBody }>(
     '/:token/submit',
+    {
+      schema: {
+        tags: ['personalization'],
+        summary: 'Zatwierdź personalizację do produkcji (tworzy RenderJob)',
+        security: [],
+        params: {
+          type: 'object',
+          properties: {
+            token: { type: 'string' },
+          },
+        },
+        body: {
+          type: 'object',
+          properties: {
+            answers: { type: 'object' },
+            layoutOverrides: { type: 'object' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              status: { type: 'string' },
+              renderJob: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  bullmqJobId: { type: 'string' },
+                  status: { type: 'string' },
+                },
+              },
+            },
+          },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          403: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (
       request: FastifyRequest<{ Params: PersonalizationParams; Body: SaveDesignBody }>,
       reply: FastifyReply
@@ -596,6 +719,34 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
   // POST /personalization/:token/upload-preview - Upload PNG preview from frontend
   fastify.post<{ Params: PersonalizationParams }>(
     '/:token/upload-preview',
+    {
+      schema: {
+        tags: ['personalization'],
+        summary: 'Wgraj podgląd PNG wygenerowany przez frontend',
+        description: 'Przyjmuje multipart/form-data z plikiem obrazu',
+        security: [],
+        consumes: ['multipart/form-data'],
+        params: {
+          type: 'object',
+          properties: {
+            token: { type: 'string' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              success: { type: 'boolean' },
+              previewUrl: { type: 'string' },
+              size: { type: 'integer' },
+            },
+          },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          403: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: PersonalizationParams }>, reply: FastifyReply) => {
       try {
         addSecurityHeaders(reply);

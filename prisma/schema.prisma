@@ -29,10 +29,12 @@ model Tenant {
   updatedAt  DateTime     @updatedAt @map("updated_at")
 
   // Relations
-  users         User[]
-  shops         Shop[]
-  templates     PersonalizationTemplate[]
-  emailSettings EmailSettings[]
+  users              User[]
+  shops              Shop[]
+  templates          PersonalizationTemplate[]
+  emailSettings      EmailSettings[]
+  warehouseProducts  WarehouseProduct[]
+  warehouseDocuments WarehouseDocument[]
 
   @@index([status])
   @@index([slug])
@@ -134,6 +136,7 @@ model Order {
   items                OrderItem[]
   personalizationCases PersonalizationCase[]
   accessPins           OrderAccessPin[]
+  warehouseDocuments   WarehouseDocument[]
 
   @@unique([shopId, externalOrderId])
   @@index([shopId, orderReference])
@@ -472,7 +475,7 @@ model User {
   email        String    @unique
   passwordHash String    @map("password_hash")
   name         String
-  role         String    @default("SELLER") // SUPER_ADMIN, ADMIN, SELLER
+  role         String    @default("ADMIN") // SUPER_ADMIN, ADMIN
   isActive     Boolean   @default(true) @map("is_active")
   lastLoginAt  DateTime? @map("last_login_at")
   createdAt    DateTime  @default(now()) @map("created_at")
@@ -484,4 +487,81 @@ model User {
   @@index([email])
   @@index([role])
   @@map("users")
+}
+
+// ============================================
+// MODUŁ MAGAZYNOWY
+// ============================================
+
+enum WarehouseDocumentType {
+  PZ // Przyjęcie Zewnętrzne (od dostawcy)
+  PW // Przyjęcie Wewnętrzne (np. z produkcji)
+  WZ // Wydanie Zewnętrzne (do klienta)
+  RW // Rozchód Wewnętrzny (zużycie)
+}
+
+enum WarehouseDocumentStatus {
+  DRAFT     // Roboczy — nie wpływa na stany
+  CONFIRMED // Zatwierdzony — wpływa na stany
+  CANCELLED // Anulowany
+}
+
+model WarehouseProduct {
+  id          String   @id @default(cuid())
+  tenantId    String   @map("tenant_id")
+  sku         String
+  name        String
+  unit        String   @default("szt")
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  items  WarehouseDocumentItem[]
+
+  @@unique([tenantId, sku])
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@map("warehouse_products")
+}
+
+model WarehouseDocument {
+  id          String                  @id @default(cuid())
+  tenantId    String                  @map("tenant_id")
+  number      String
+  type        WarehouseDocumentType
+  status      WarehouseDocumentStatus @default(DRAFT)
+  date        DateTime                @default(now())
+  description String?
+  orderId     String?                 @map("order_id")
+  createdAt   DateTime                @default(now()) @map("created_at")
+  updatedAt   DateTime                @updatedAt @map("updated_at")
+
+  tenant Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order  Order?                  @relation(fields: [orderId], references: [id])
+  items  WarehouseDocumentItem[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId])
+  @@index([tenantId, type])
+  @@index([tenantId, status])
+  @@index([tenantId, date])
+  @@map("warehouse_documents")
+}
+
+model WarehouseDocumentItem {
+  id         String   @id @default(cuid())
+  documentId String   @map("document_id")
+  productId  String   @map("product_id")
+  quantity   Decimal  @db.Decimal(10, 3)
+  unitPrice  Decimal? @map("unit_price") @db.Decimal(10, 2)
+  notes      String?
+
+  document WarehouseDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  product  WarehouseProduct  @relation(fields: [productId], references: [id])
+
+  @@index([documentId])
+  @@index([productId])
+  @@map("warehouse_document_items")
 }

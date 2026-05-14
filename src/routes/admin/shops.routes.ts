@@ -17,7 +17,15 @@ import {
 
 export async function shopsRoutes(fastify: FastifyInstance) {
   // GET /admin/shops
-  fastify.get('/', async (_request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/', {
+    schema: {
+      tags: ['shops'],
+      summary: 'Lista integracji z platformami e-commerce',
+      response: {
+        200: { type: 'array', items: { type: 'object' } },
+      },
+    },
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
       const shops = await listShops();
       return reply.send(shops);
@@ -33,6 +41,27 @@ export async function shopsRoutes(fastify: FastifyInstance) {
   // POST /admin/shops
   fastify.post<{ Body: CreateShopInput }>(
     '/',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Dodaj nową integrację z platformą e-commerce',
+        body: {
+          type: 'object',
+          required: ['name', 'platform', 'baseUrl'],
+          properties: {
+            name: { type: 'string' },
+            platform: { type: 'string', enum: ['PRESTASHOP', 'WOOCOMMERCE', 'SHOPIFY', 'OTHER'] },
+            baseUrl: { type: 'string', format: 'uri' },
+            apiKey: { type: 'string' },
+            apiSecret: { type: 'string' },
+            webhookSecret: { type: 'string' },
+          },
+        },
+        response: {
+          201: { type: 'object' },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Body: CreateShopInput }>, reply: FastifyReply) => {
       const parsed = createShopSchema.safeParse(request.body);
       if (!parsed.success) {
@@ -58,6 +87,26 @@ export async function shopsRoutes(fastify: FastifyInstance) {
   // PUT /admin/shops/:id
   fastify.put<{ Params: ShopIdParamsInput; Body: UpdateShopInput }>(
     '/:id',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Zaktualizuj integrację',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        body: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            baseUrl: { type: 'string', format: 'uri' },
+            apiKey: { type: 'string' },
+            apiSecret: { type: 'string' },
+          },
+        },
+        response: {
+          200: { type: 'object' },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (
       request: FastifyRequest<{ Params: ShopIdParamsInput; Body: UpdateShopInput }>,
       reply: FastifyReply
@@ -94,6 +143,17 @@ export async function shopsRoutes(fastify: FastifyInstance) {
   // DELETE /admin/shops/:id
   fastify.delete<{ Params: ShopIdParamsInput }>(
     '/:id',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Usuń integrację',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          200: { type: 'object', properties: { success: { type: 'boolean' }, message: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
       const paramsParsed = shopIdParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
@@ -130,6 +190,16 @@ export async function shopsRoutes(fastify: FastifyInstance) {
   // POST /admin/shops/:id/test
   fastify.post<{ Params: ShopIdParamsInput }>(
     '/:id/test',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Przetestuj połączenie z API sklepu',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          200: { type: 'object' },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
       const paramsParsed = shopIdParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
@@ -155,6 +225,14 @@ export async function shopsRoutes(fastify: FastifyInstance) {
   // POST /admin/shops/:id/sync - Manual sync trigger
   fastify.post<{ Params: ShopIdParamsInput }>(
     '/:id/sync',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Ręcznie uruchom synchronizację zamówień',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: { 200: { type: 'object' } },
+      },
+    },
     async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
       const paramsParsed = shopIdParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
@@ -181,6 +259,14 @@ export async function shopsRoutes(fastify: FastifyInstance) {
   // POST /admin/shops/:id/sync/enable - Enable auto-sync
   fastify.post<{ Params: ShopIdParamsInput }>(
     '/:id/sync/enable',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Włącz auto-synchronizację dla sklepu',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: { 200: { type: 'object' } },
+      },
+    },
     async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
       const paramsParsed = shopIdParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
@@ -209,6 +295,14 @@ export async function shopsRoutes(fastify: FastifyInstance) {
   // POST /admin/shops/:id/sync/disable - Disable auto-sync
   fastify.post<{ Params: ShopIdParamsInput }>(
     '/:id/sync/disable',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Wyłącz auto-synchronizację dla sklepu',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: { 200: { type: 'object' } },
+      },
+    },
     async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
       const paramsParsed = shopIdParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
@@ -237,6 +331,21 @@ export async function shopsRoutes(fastify: FastifyInstance) {
   // PUT /admin/shops/:id/sync/interval - Update sync interval
   fastify.put<{ Params: ShopIdParamsInput; Body: { intervalMinutes: number } }>(
     '/:id/sync/interval',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Ustaw interwał synchronizacji (5–1440 minut)',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        body: {
+          type: 'object',
+          required: ['intervalMinutes'],
+          properties: {
+            intervalMinutes: { type: 'integer', minimum: 5, maximum: 1440 },
+          },
+        },
+        response: { 200: { type: 'object' } },
+      },
+    },
     async (
       request: FastifyRequest<{ Params: ShopIdParamsInput; Body: { intervalMinutes: number } }>,
       reply: FastifyReply

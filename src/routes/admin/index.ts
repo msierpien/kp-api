@@ -16,6 +16,7 @@ import { usersRoutes } from './users.routes';
 import { storageRoutes } from './storage.routes';
 import { queueRoutes } from './queue.routes';
 import { fontsRoutes } from './fonts.routes';
+import { warehouseRoutes } from './warehouse.routes';
 
 export async function adminRoutes(fastify: FastifyInstance) {
   // Apply auth middleware to all admin routes
@@ -38,4 +39,5 @@ export async function adminRoutes(fastify: FastifyInstance) {
   fastify.register(storageRoutes, { prefix: '/storage' });
   fastify.register(queueRoutes, { prefix: '/queues' });
   fastify.register(fontsRoutes, { prefix: '/fonts' });
+  fastify.register(warehouseRoutes, { prefix: '/warehouse' });
 }

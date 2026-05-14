@@ -1,0 +1,608 @@
+# Plan rozbudowy modułu magazynowego
+
+> **Data:** 2026-05-14 | **Status:** Do implementacji
+
+---
+
+## Kontekst
+
+System kp-api obsługuje spersonalizowane produkty sprzedawane w wielu sklepach (PrestaShop, WooCommerce itp.). Istnieje już bazowy moduł magazynowy (produkty, dokumenty WZ/RW/PZ/PW, obliczanie stanów), ale brakuje:
+
+- powiązania produktów sklepu z produktami magazynowymi
+- synchronizacji stanów i cen ze sklepu/do sklepu
+- integracji z hurtownią (inbound stany i ceny)
+- automatycznego tworzenia WZ z zamówień
+- kilku napraw technicznych (race condition w numeracji, audyt, ujemne stany)
+
+---
+
+## Stan obecny – co już istnieje
+
+| Element | Plik |
+|---|---|
+| Produkty magazynowe (CRUD) | `src/routes/admin/warehouse.routes.ts` |
+| Dokumenty PZ/PW/WZ/RW | `src/services/admin/warehouse.service.ts` |
+| Obliczanie stanów z dokumentów | `src/services/admin/warehouse-stock.service.ts` |
+| Integracja sklepów (Shop model) | `src/services/admin/shops.service.ts` |
+| Mapowanie SKU→szablon | `src/services/admin/personalized-products.service.ts` |
+| Sync zamówień z PrestaShop | `src/services/sync/sync-orders.service.ts` |
+| Kolejki BullMQ | `src/services/queue/render.queue.ts` + `.worker.ts` |
+| Harmonogram (cron per-shop) | `src/services/scheduler/scheduler.service.ts` |
+
+---
+
+## Decyzje architektoniczne
+
+### PersonalizedProduct vs WarehouseProduct – brak duplikacji
+
+Oba modele służą **różnym celom** i nie powinny być scalane:
+
+- `PersonalizedProduct` = routing personalizacji: *"ten SKU ze sklepu X dostaje szablon Y"*
+- `WarehouseProduct` = fizyczny stan: *"tego produktu mamy N sztuk"*
+
+Most między nimi to nowa tabela **`ShopProductMapping`**:
+
+```
+SKU w sklepie
+    ├──[PersonalizedProduct]──▶ szablon do druku
+    └──[ShopProductMapping]───▶ WarehouseProduct (stan fizyczny)
+```
+
+Produkty niepersonalizowane (koperty, kartony, materiały) trafiają tylko do `WarehouseProduct` bez `PersonalizedProduct`.
+
+### EAN i skanowanie kodów kreskowych
+
+`WarehouseProduct` jest bazowym produktem fizycznym, a kody EAN są osobną warstwą identyfikacji tego produktu. Standardowo produkt ma jeden główny EAN, ale system musi obsługiwać wiele kodów, bo w praktyce zdarzają się zmiany etykiet producenta, alternatywne kody dostawców oraz opakowania zbiorcze.
+
+Przykład:
+
+- EAN produktu jednostkowego: `5901234567890`, `quantityMultiplier = 1`
+- EAN kartonu: `5901234567000`, `quantityMultiplier = 25`
+
+Skan kartonu w panelu admina Next.js powinien dodać do pozycji dokumentu ilość wynikającą z przelicznika. Skaner kodów kreskowych traktujemy jak szybkie wpisywanie kodu do pola input, dlatego API powinno mieć prosty lookup po EAN zwracający produkt magazynowy, kod kreskowy i przelicznik.
+
+### Przepływ danych
+
+```
+HURTOWNIA (XML/CSV/REST)
+    │
+    ▼  [WholesaleSyncJob co X godzin]
+    ├──▶ PZ dokument ──▶ WarehouseProduct.currentStock++
+    └──▶ aktualizacja purchasePrice / retailPrice
+                │
+                ▼  [po każdym CONFIRMED dokumencie]
+        WarehouseProduct.currentStock
+                │
+                ▼  [StockSyncJob w kolejce]
+    ┌───────────┴───────────┐
+    ▼                       ▼
+PrestaShop              WooCommerce
+(PUT stock_availables)  (PUT products/:id)
+
+ZAMÓWIENIE ze sklepu
+    │
+    ▼  [przy tworzeniu Order]
+WZ dokument DRAFT (powiązany orderId)
+    │
+    ▼  [ręczne potwierdzenie przez operatora]
+CONFIRMED WZ ──▶ currentStock-- ──▶ StockSyncJob
+```
+
+### currentStock jako cache
+
+Stan "prawdziwy" nadal liczy się z dokumentów CONFIRMED (istniejąca logika). Pole `currentStock` na `WarehouseProduct` to cache do szybkich operacji (sync do sklepów). Aktualizowany synchronicznie przy `confirmDocument` / `cancelDocument`. Endpoint `POST /admin/warehouse/recalculate-stock` przelicza cache z dokumentów (do uruchamiania raz na dobę lub po awarii).
+
+### Auto-WZ z zamówień
+
+WZ tworzony jako **DRAFT**, nie auto-potwierdzany — wymagane ręczne potwierdzenie przez operatora w momencie realnej wysyłki. Wyjątek: per-tenant flaga `limitsJson.warehouse.autoConfirmWzOnOrder = true`.
+
+### Ochrona przed ujemnym stanem
+
+Opcjonalna per tenant (`limitsJson.warehouse.allowNegativeStock: false`). Blokuje `confirmDocument` dla WZ gdy stan spadłby poniżej 0. Domyślnie: dozwolone (zachowanie obecne).
+
+---
+
+## Faza 1 – Import produktów i mapowanie SKU
+
+### Nowe modele Prisma
+
+```prisma
+model ShopProductMapping {
+  id                 String    @id @default(cuid())
+  shopId             String    @map("shop_id")
+  externalProductId  String    @map("external_product_id")  // ID w sklepie
+  externalSku        String    @map("external_sku")
+  externalName       String?   @map("external_name")         // snapshot nazwy
+  warehouseProductId String?   @map("warehouse_product_id")  // null = niezamapowany
+  isActive           Boolean   @default(true) @map("is_active")
+  lastSyncAt         DateTime? @map("last_sync_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  shop             Shop              @relation(...)
+  warehouseProduct WarehouseProduct? @relation(...)
+
+  @@unique([shopId, externalProductId])
+  @@map("shop_product_mappings")
+}
+```
+
+Modyfikacje `WarehouseProduct` – dodać pola:
+
+```prisma
+purchasePrice Decimal?  @db.Decimal(10, 2)
+retailPrice   Decimal?  @db.Decimal(10, 2)
+currentStock  Decimal   @default(0) @db.Decimal(10, 3)
+```
+
+Dodać relację do kodów kreskowych:
+
+```prisma
+barcodes WarehouseProductBarcode[]
+```
+
+Nowy model kodów EAN:
+
+```prisma
+model WarehouseProductBarcode {
+  id                 String   @id @default(cuid())
+  tenantId           String   @map("tenant_id")
+  warehouseProductId String   @map("warehouse_product_id")
+  ean                String
+  label              String?
+  quantityMultiplier Decimal  @default(1) @map("quantity_multiplier") @db.Decimal(10, 3)
+  isPrimary          Boolean  @default(false) @map("is_primary")
+  isActive           Boolean  @default(true) @map("is_active")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  warehouseProduct WarehouseProduct @relation(fields: [warehouseProductId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, ean])
+  @@index([tenantId])
+  @@index([warehouseProductId])
+  @@map("warehouse_product_barcodes")
+}
+```
+
+Reguły:
+
+- jeden `WarehouseProduct` może mieć wiele kodów EAN
+- dany EAN musi być unikalny w ramach tenanta
+- główny EAN produktu to rekord `isPrimary = true`
+- dodatkowe EAN-y mogą reprezentować opakowania zbiorcze, alternatywne etykiety lub kody dostawców
+- `quantityMultiplier` określa, ile jednostek produktu reprezentuje skan danego EAN-u
+
+Modyfikacje `WarehouseDocumentItem` – dodać opcjonalne pola snapshotu skanowania:
+
+```prisma
+barcodeId          String?  @map("barcode_id")
+scannedEan         String?  @map("scanned_ean")
+baseQuantity       Decimal? @map("base_quantity") @db.Decimal(10, 3)
+quantityMultiplier Decimal? @map("quantity_multiplier") @db.Decimal(10, 3)
+```
+
+Pozycja dokumentu może opcjonalnie przechowywać informację o skanowaniu:
+
+- `barcodeId` – użyty kod EAN, jeśli pozycja powstała ze skanera
+- `scannedEan` – snapshot zeskanowanego kodu
+- `baseQuantity` – ilość wpisana lub zeskanowana przez operatora
+- `quantityMultiplier` – snapshot przelicznika z EAN
+- `quantity` – finalna ilość wpływająca na magazyn
+
+Przykład: operator skanuje EAN kartonu 1 raz, `baseQuantity = 1`, `quantityMultiplier = 25`, więc finalne `quantity = 25`.
+
+### Nowe pliki
+
+| Plik | Zawartość |
+|---|---|
+| `src/services/woocommerce/woocommerce-client.ts` | Klient WooCommerce REST API (fetchProducts, updateStock, updatePrice) |
+| `src/services/admin/shop-product-import.service.ts` | `importProductsFromShop(shopId)`, `mapShopProductToWarehouse(mappingId, warehouseProductId)`, `createWarehouseProductFromMapping(mappingId)` |
+| `src/services/admin/shop-mappings.service.ts` | CRUD mapowań, `getUnmappedProducts(shopId)`, `bulkMap(...)` |
+| `src/services/admin/warehouse-barcodes.service.ts` | Lookup EAN, CRUD kodów kreskowych, pilnowanie głównego EAN |
+| `src/routes/admin/shop-mappings.routes.ts` | Endpointy mapowań |
+| `src/routes/admin/warehouse-barcodes.routes.ts` | Endpointy skanera i kodów EAN |
+
+### Nowe endpointy
+
+```
+GET    /admin/shop-mappings?shopId=X           – lista mapowań dla sklepu
+POST   /admin/shop-mappings/import/:shopId      – import katalogu produktów ze sklepu
+PUT    /admin/shop-mappings/:id/map             – powiąż z WarehouseProduct
+POST   /admin/shop-mappings/:id/create-product  – utwórz nowy WarehouseProduct z danych sklepu
+DELETE /admin/shop-mappings/:id/unmap           – odpnij od produktu magazynowego
+GET    /admin/shop-mappings/unmapped/:shopId    – tylko niezamapowane
+
+GET    /admin/warehouse/barcodes/:ean/lookup    – znajdź produkt po zeskanowanym EAN
+POST   /admin/warehouse/products/:id/barcodes   – dodaj EAN do produktu
+PUT    /admin/warehouse/barcodes/:id            – edytuj EAN, etykietę, przelicznik lub aktywność
+DELETE /admin/warehouse/barcodes/:id            – usuń/dezaktywuj EAN
+```
+
+Lookup po EAN powinien zwracać minimum:
+
+```json
+{
+  "barcode": {
+    "id": "barcode_id",
+    "ean": "5901234567000",
+    "quantityMultiplier": "25",
+    "isPrimary": false
+  },
+  "product": {
+    "id": "warehouse_product_id",
+    "sku": "SKU-123",
+    "name": "Nazwa produktu",
+    "unit": "szt"
+  }
+}
+```
+
+### Modyfikacje istniejących plików
+
+- `prisma/schema.prisma` – dodać modele i pola (migracja: `add_shop_product_mapping`)
+- `src/services/admin/warehouse.service.ts` – po `confirmDocument()` i `cancelDocument()` aktualizować `currentStock` (delta ±quantity zależna od typu PZ/PW/WZ/RW)
+- `src/routes/admin/index.ts` – rejestracja `shopMappingsRoutes`
+- `src/routes/admin/warehouse.routes.ts` – przyjmowanie pól skanowania na pozycjach dokumentów oraz rejestracja endpointów EAN
+- `src/services/prestashop/prestashop-client.ts` – dodać `fetchProducts()`, `updateStockQuantity()`, `fetchStockAvailables()`, `updateProductPrice()`
+
+---
+
+## Faza 2 – Integracja z hurtownią (Wholesale)
+
+### Nowe modele Prisma
+
+```prisma
+enum WholesalePlatform { XML_FEED, REST_API, FTP_CSV }
+enum WholesaleSyncType { STOCK, PRICES, STOCK_AND_PRICES }
+
+model WholesaleProvider {
+  id                   String            @id @default(cuid())
+  tenantId             String
+  name                 String
+  platform             WholesalePlatform
+  feedUrl              String
+  apiKey               String?           // zaszyfrowane
+  apiSecret            String?           // zaszyfrowane
+  ftpConfig            Json?
+  syncType             WholesaleSyncType @default(STOCK_AND_PRICES)
+  syncInterval         Int               @default(60)  // minuty
+  syncEnabled          Boolean           @default(true)
+  defaultMarkupPercent Decimal           @default(30) @db.Decimal(5, 2)
+  lastSyncAt           DateTime?
+  isActive             Boolean           @default(true)
+  ...
+  productMappings      WholesaleProductMapping[]
+  syncLogs             WholesaleSyncLog[]
+}
+
+model WholesaleProductMapping {
+  id                 String   @id @default(cuid())
+  providerId         String
+  externalSku        String
+  externalName       String?
+  warehouseProductId String?
+  markupPercent      Decimal? @db.Decimal(5, 2)   // null = użyj z providera
+  lastKnownStock     Decimal? @db.Decimal(10, 3)
+  lastKnownPrice     Decimal? @db.Decimal(10, 2)
+  autoCreatePz       Boolean  @default(true)
+  ...
+  @@unique([providerId, externalSku])
+}
+
+model WholesaleSyncLog {
+  id            String   @id @default(cuid())
+  providerId    String
+  status        String   // SUCCESS, FAILED, PARTIAL
+  itemsFetched  Int      @default(0)
+  stockUpdated  Int      @default(0)
+  pricesUpdated Int      @default(0)
+  pzCreated     Int      @default(0)
+  errorMessage  String?  @db.Text
+  startedAt     DateTime @default(now())
+  finishedAt    DateTime?
+}
+```
+
+### Nowe pliki
+
+| Plik | Zawartość |
+|---|---|
+| `src/services/wholesale/xml-feed.parser.ts` | Parsowanie XML feedu z konfigurowalnymi ścieżkami pól |
+| `src/services/wholesale/csv-feed.parser.ts` | Parsowanie CSV przez HTTP/FTP, kolumny z `configJson` |
+| `src/services/wholesale/wholesale-sync.service.ts` | `syncWholesaleProvider(providerId)` – główna logika: pobierz feed → porównaj `lastKnownStock` → utwórz PZ/RW → zaktualizuj ceny |
+| `src/services/queue/wholesale-sync.queue.ts` | BullMQ queue `wholesale-sync` |
+| `src/services/queue/wholesale-sync.worker.ts` | Worker – wywołuje `syncWholesaleProvider`, loguje do `WholesaleSyncLog` |
+| `src/routes/admin/wholesale.routes.ts` | CRUD providerów, mapowań, logi, ręczny sync |
+
+### Nowe endpointy
+
+```
+GET    /admin/wholesale/providers                 – lista
+POST   /admin/wholesale/providers                 – utwórz
+PUT    /admin/wholesale/providers/:id             – edytuj
+DELETE /admin/wholesale/providers/:id             – usuń
+POST   /admin/wholesale/providers/:id/sync        – ręczny sync
+GET    /admin/wholesale/providers/:id/mappings    – mapowania produktów
+PUT    /admin/wholesale/mappings/:id              – edytuj mapowanie
+GET    /admin/wholesale/providers/:id/logs        – historia
+```
+
+### Modyfikacje istniejących plików
+
+- `prisma/schema.prisma` – dodać modele (migracja: `add_wholesale_provider`)
+- `src/services/scheduler/scheduler.service.ts` – `initializeWholesaleScheduler()` na wzór schedulera sklepów
+- `src/index.ts` – start workera `wholesale-sync`
+- `src/routes/admin/index.ts` – rejestracja `wholesaleRoutes`
+
+**Uwaga dotycząca wydajności feedów:** Przy dużych feedach (50 000+ SKU) – zbudować `Set` zamapowanych SKU z `WholesaleProductMapping`, potem iterować tylko po zamapowanych (nie po całym feedzie).
+
+---
+
+## Faza 3 – Synchronizacja stanów magazynowych do sklepów
+
+### Nowe modele Prisma
+
+```prisma
+model StockSyncLog {
+  id                 String    @id @default(cuid())
+  tenantId           String
+  warehouseProductId String
+  shopId             String
+  triggeredBy        String    // DOCUMENT_CONFIRM | MANUAL | WHOLESALE_SYNC
+  documentId         String?
+  stockBefore        Decimal   @db.Decimal(10, 3)
+  stockAfter         Decimal   @db.Decimal(10, 3)
+  status             String    @default("PENDING")  // PENDING | SUCCESS | FAILED
+  errorMessage       String?   @db.Text
+  attemptCount       Int       @default(0)
+  syncedAt           DateTime?
+  createdAt          DateTime  @default(now())
+}
+```
+
+### Nowe pliki
+
+| Plik | Zawartość |
+|---|---|
+| `src/services/shops/shop-stock-client.interface.ts` | Interfejs `ShopStockClient { updateStockQuantity, updateProductPrice }` |
+| `src/services/shops/prestashop-stock-client.ts` | Implementacja dla PrestaShop (krok 1: znajdź `stockAvailableId`, krok 2: PUT) |
+| `src/services/shops/woocommerce-stock-client.ts` | Implementacja dla WooCommerce (`PUT /products/:id { stock_quantity, manage_stock: true }`) |
+| `src/services/shops/shop-client.factory.ts` | `createShopStockClient(shop)` – factory według `shop.platform` |
+| `src/services/stock/stock-sync.service.ts` | `syncStockToAllShops(warehouseProductId, triggeredBy, documentId?)` – dodaje `StockSyncJob` do kolejki dla każdego zmapowanego sklepu |
+| `src/services/queue/stock-sync.queue.ts` | BullMQ queue `stock-sync` |
+| `src/services/queue/stock-sync.worker.ts` | Worker – wywołuje `updateStockQuantity`, używa bieżącej wartości `currentStock` z bazy (nie z job data) dla idempotentności, loguje `StockSyncLog`; retry: 3x backoff 4s/16s/64s |
+
+### Modyfikacje istniejących plików
+
+- `src/services/admin/warehouse.service.ts` – w `confirmDocument()` po aktualizacji `currentStock` wywołać `syncStockToAllShops(productId, 'DOCUMENT_CONFIRM', documentId)` dla każdego produktu z dokumentu
+- `src/index.ts` – start workera `stock-sync`
+- `prisma/schema.prisma` – dodać `StockSyncLog` (migracja: `add_stock_sync_log`)
+
+---
+
+## Faza 4 – Synchronizacja cen
+
+### Nowe modele Prisma
+
+```prisma
+model PriceSyncLog {
+  id                 String    @id @default(cuid())
+  tenantId           String
+  warehouseProductId String
+  shopId             String
+  priceType          String    // RETAIL | PURCHASE
+  priceBefore        Decimal?  @db.Decimal(10, 2)
+  priceAfter         Decimal   @db.Decimal(10, 2)
+  status             String    @default("PENDING")
+  errorMessage       String?   @db.Text
+  createdAt          DateTime  @default(now())
+}
+```
+
+### Nowe pliki
+
+| Plik | Zawartość |
+|---|---|
+| `src/services/stock/price-sync.service.ts` | `syncPriceToAllShops(warehouseProductId)`, `syncPricesFromWholesale(providerId)` |
+| `src/services/queue/price-sync.queue.ts` | BullMQ queue `price-sync` |
+| `src/services/queue/price-sync.worker.ts` | Worker – wywołuje `updateProductPrice` z factory, loguje `PriceSyncLog` |
+
+### Nowe endpointy
+
+```
+PUT /admin/warehouse/products/:id/prices
+    body: { purchasePrice?, retailPrice?, autoCalculateRetail?: boolean }
+```
+
+### Modyfikacje istniejących plików
+
+- `src/services/admin/warehouse.service.ts` – `updateProductPrices(id, prices)`: gdy zmienia się `retailPrice`, wywołuje `syncPriceToAllShops(id)`
+- `src/services/wholesale/wholesale-sync.service.ts` – po aktualizacji cen zakupu wywołuje `syncPricesFromWholesale`
+- `src/index.ts` – start workera `price-sync`
+
+---
+
+## Przyszłe dokumenty handlowe i faktury
+
+Faktury, paragony i dokumenty sprzedażowe będą osobnym modułem. Dokumenty magazynowe pozostają odpowiedzialne za ruch towaru i stany, a dokumenty handlowe za rozliczenie sprzedaży. W przyszłości faktura może być powiązana z `Order` oraz opcjonalnie z `WarehouseDocument`, ale nie powinna zastępować dokumentów WZ/PZ/RW/PW.
+
+Na tym etapie magazyn powinien jedynie zachować gotowość integracyjną:
+
+- `WarehouseDocument.orderId` zostaje głównym punktem połączenia z zamówieniem
+- przyszły moduł faktur powinien mieć własną numerację, statusy, kontrahenta, stawki VAT i generowanie PDF
+- dokument handlowy może referencjonować dokument WZ, ale nie powinien samodzielnie zmieniać stanu magazynowego
+- dane ze skanera EAN zostają w magazynie jako snapshot pozycji dokumentu, co ułatwi później wyjaśnianie rozbieżności między sprzedażą, fakturą i wydaniem
+
+---
+
+## Faza 5 – Zamówienia→WZ, audyt, naprawy techniczne
+
+### Modyfikacje schematu
+
+Rozszerzyć `WarehouseDocument` o pola audytu:
+
+```prisma
+confirmedAt      DateTime?
+confirmedBy      String?     // userId
+cancelledAt      DateTime?
+cancelledBy      String?     // userId
+cancelReason     String?     @db.Text
+createdByUserId  String?
+isAutoGenerated  Boolean     @default(false)   // true = utworzony z zamówienia
+metadataJson     Json?       // { stockWarning: true, ... }
+```
+
+Per-tenant ustawienia magazynowe w `Tenant.limitsJson`:
+
+```json
+{
+  "warehouse": {
+    "allowNegativeStock": false,
+    "autoCreateWzOnOrder": true,
+    "autoConfirmWzOnOrder": false
+  }
+}
+```
+
+### Auto-tworzenie WZ z zamówień
+
+Nowa funkcja `createWzForOrder(orderId)` w `src/services/admin/warehouse.service.ts`:
+
+1. Pobierz `Order` z `items`
+2. Dla każdej pozycji: znajdź `WarehouseProduct` przez `ShopProductMapping.externalSku === orderItem.sku`
+3. Jeśli znaleziono produkty – utwórz WZ DRAFT z `orderId`, z pozycjami
+4. Jeśli stan byłby ujemny – ustaw `metadataJson.stockWarning = true` (nie blokuj)
+5. Sprawdź czy WZ DRAFT dla tego `orderId` już istnieje – jeśli tak, nie twórz drugiego (zabezpieczenie przed re-sync)
+
+Wywołać z `src/services/sync/sync-orders.service.ts` po `Order.create()`, gdy `limitsJson.warehouse.autoCreateWzOnOrder !== false`.
+
+### Naprawa race condition w numeracji
+
+Zastąpić `generateDocumentNumber` w `warehouse.service.ts` wersją z PostgreSQL advisory lock:
+
+```typescript
+async function generateDocumentNumber(type, tx: Prisma.TransactionClient): Promise<string> {
+  const lockKey = hashToInt64(`${tenantId}:${type}:${year}`);
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${lockKey})`;
+  // ... reszta logiki bez zmian
+}
+```
+
+`createDocument()` musi być opakowany w `prisma.$transaction()` i przekazywać `tx` do `generateDocumentNumber`.
+
+### Ochrona przed ujemnym stanem
+
+W `confirmDocument()` dla dokumentów WZ (gdy `!allowNegativeStock`):
+
+```typescript
+for (const item of doc.items) {
+  const stock = await getProductStock(item.productId);
+  if (stock.quantity - item.quantity < 0) {
+    throw new Error(`Niewystarczający stan: "${item.product.name}" (${stock.quantity} szt., wymagane: ${item.quantity})`);
+  }
+}
+```
+
+### Endpoint rekalibracji cache
+
+```
+POST /admin/warehouse/recalculate-stock
+```
+
+Przelicza `currentStock` dla wszystkich produktów tenantu z dokumentów CONFIRMED. Uruchamiać raz na dobę jako cron.
+
+---
+
+## Kolejność implementacji
+
+```
+Faza 1 (ShopProductMapping, import, currentStock)
+    │
+    ├── Faza 2 (Hurtownia)          ← równolegle z Fazą 1
+    │
+    └── Faza 3 (Stock sync do sklepów)    ← wymaga Fazy 1
+                │
+                └── Faza 4 (Price sync)  ← wymaga Faz 1 i 3
+
+Faza 5 (Audyt, WZ z zamówień, race fix)  ← można równolegle z dowolną fazą
+```
+
+**Rekomendowana kolejność sprintów:**
+1. Faza 1 + naprawy z Fazy 5 (race condition, audyt) – bezpieczne, bez nowych zależności
+2. Faza 2 + Faza 3 równolegle – różne obszary kodu
+3. Faza 4 – wymaga gotowej infrastruktury z Fazy 3
+4. Dopięcie Fazy 5 (auto-WZ) – wymaga `ShopProductMapping` z Fazy 1
+
+---
+
+## Ryzyka i mitigacje
+
+| Ryzyko | Mitigacja |
+|---|---|
+| Shop API niedostępne podczas sync stanów | BullMQ retry 3x (backoff 4s/16s/64s), `StockSyncLog` ze statusem FAILED, alert po wyczerpaniu prób |
+| Rozbieżność stanów (stan zmienił się zanim job doszedł do kolejki) | Worker zawsze odpytuje `currentStock` z bazy tuż przed wysłaniem – nie ufa wartości z job data |
+| To samo zamówienie tworzy dwa WZ (re-sync) | `createWzForOrder()` sprawdza istniejące DRAFT WZ z tym `orderId` przed utworzeniem |
+| XML feed zmienia format bez ostrzeżenia | Parsery konfigurowalne przez `configJson` (ścieżki/kolumny); błąd parsowania = `WholesaleSyncLog.status = PARTIAL` + alert |
+| Przeciążenie API sklepu przy wielu produktach | BullMQ `rateLimiter` na queue `stock-sync`; opcjonalnie debounce: jeśli ten sam produkt zmienił stan kilka razy w ciągu minuty – jeden job z ostatnią wartością |
+| `currentStock` rozjeżdża się z dokumentami | Endpoint `POST /admin/warehouse/recalculate-stock` + cron raz na dobę |
+| Duży feed hurtowni (50k+ SKU) | Buduj `Set` zamapowanych SKU przed iteracją – przetwarzaj tylko zamapowane produkty |
+
+---
+
+## Kompletna lista plików
+
+### Nowe pliki
+
+```
+src/services/woocommerce/woocommerce-client.ts
+src/services/admin/shop-product-import.service.ts
+src/services/admin/shop-mappings.service.ts
+src/services/admin/warehouse-barcodes.service.ts
+src/services/wholesale/xml-feed.parser.ts
+src/services/wholesale/csv-feed.parser.ts
+src/services/wholesale/wholesale-sync.service.ts
+src/services/shops/shop-stock-client.interface.ts
+src/services/shops/prestashop-stock-client.ts
+src/services/shops/woocommerce-stock-client.ts
+src/services/shops/shop-client.factory.ts
+src/services/stock/stock-sync.service.ts
+src/services/stock/price-sync.service.ts
+src/services/queue/wholesale-sync.queue.ts
+src/services/queue/wholesale-sync.worker.ts
+src/services/queue/stock-sync.queue.ts
+src/services/queue/stock-sync.worker.ts
+src/services/queue/price-sync.queue.ts
+src/services/queue/price-sync.worker.ts
+src/routes/admin/shop-mappings.routes.ts
+src/routes/admin/warehouse-barcodes.routes.ts
+src/routes/admin/wholesale.routes.ts
+```
+
+### Modyfikowane pliki
+
+```
+prisma/schema.prisma
+src/index.ts
+src/routes/admin/index.ts
+src/routes/admin/warehouse.routes.ts
+src/services/admin/warehouse.service.ts
+src/services/admin/warehouse-stock.service.ts
+src/services/prestashop/prestashop-client.ts
+src/services/sync/sync-orders.service.ts
+src/services/admin/orders.service.ts
+src/services/scheduler/scheduler.service.ts
+src/lib/tenant-context.ts
+```
+
+---
+
+## Weryfikacja (jak sprawdzić po implementacji)
+
+1. **Faza 1:** Import produktów ze sklepu testowego → widoczne w `ShopProductMapping` → mapowanie do `WarehouseProduct` → `currentStock` aktualizuje się po `confirmDocument`
+2. **EAN i skaner:** Utwórz produkt z głównym EAN → dodaj drugi EAN dla kartonu z `quantityMultiplier = 25` → lookup po obu EAN-ach zwraca ten sam produkt i właściwy przelicznik → PZ po skanie kartonu zwiększa stock o 25
+3. **Walidacja EAN:** Próba dodania tego samego EAN do innego produktu w tym samym tenancie zwraca błąd → ten sam EAN w innym tenancie jest niezależny, bo unikalność jest per tenant
+4. **Faza 2:** Skonfiguruj testowy XML feed → ręczny sync → sprawdź `WholesaleSyncLog` → sprawdź czy PZ dokument powstał → czy `purchasePrice` się zaktualizował
+5. **Faza 3:** Potwierdź dokument PZ → sprawdź `StockSyncLog` → zweryfikuj stan w panelu sklepu (PrestaShop/WooCommerce)
+6. **Faza 4:** Zmień `retailPrice` produktu → sprawdź `PriceSyncLog` → zweryfikuj cenę w sklepie
+7. **Faza 5:** Zsynchronizuj zamówienie ze sklepu → sprawdź czy WZ DRAFT powstał z `orderId` → potwierdź WZ → sprawdź czy stock się zaktualizował → sprawdź `confirmedBy`, `confirmedAt`

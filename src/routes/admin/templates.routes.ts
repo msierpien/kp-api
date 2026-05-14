@@ -31,7 +31,13 @@ import {
 
 export async function templatesRoutes(fastify: FastifyInstance) {
   // GET /admin/templates
-  fastify.get('/', async (_request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/', {
+    schema: {
+      tags: ['templates'],
+      summary: 'Lista szablonów personalizacji',
+      response: { 200: { type: 'array', items: { type: 'object' } } },
+    },
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
     const templates = await listTemplates();
     return reply.send(templates);
   });
@@ -39,6 +45,25 @@ export async function templatesRoutes(fastify: FastifyInstance) {
   // POST /admin/templates
   fastify.post<{ Body: CreateTemplateInput }>(
     '/',
+    {
+      schema: {
+        tags: ['templates'],
+        summary: 'Utwórz nowy szablon',
+        body: {
+          type: 'object',
+          required: ['name', 'code'],
+          properties: {
+            name: { type: 'string' },
+            code: { type: 'string' },
+            description: { type: 'string' },
+          },
+        },
+        response: {
+          201: { type: 'object' },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Body: CreateTemplateInput }>, reply: FastifyReply) => {
       const bodyParsed = createTemplateSchema.safeParse(request.body);
       if (!bodyParsed.success) {
@@ -57,6 +82,14 @@ export async function templatesRoutes(fastify: FastifyInstance) {
   // GET /admin/templates/:id/form
   fastify.get<{ Params: TemplateIdParams }>(
     '/:id/form',
+    {
+      schema: {
+        tags: ['templates'],
+        summary: 'Pobierz konfigurację formularza szablonu',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: { 200: { type: 'object' } },
+      },
+    },
     async (request: FastifyRequest<{ Params: TemplateIdParams }>, reply: FastifyReply) => {
       const paramsParsed = templateIdParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
@@ -70,6 +103,24 @@ export async function templatesRoutes(fastify: FastifyInstance) {
   // PUT /admin/templates/:id - Update metadata (not forms)
   fastify.put<{ Params: TemplateIdParams; Body: UpdateTemplateMetadataInput }>(
     '/:id',
+    {
+      schema: {
+        tags: ['templates'],
+        summary: 'Zaktualizuj metadane szablonu',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        body: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            description: { type: 'string' },
+          },
+        },
+        response: {
+          200: { type: 'object' },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: TemplateIdParams; Body: UpdateTemplateMetadataInput }>, reply: FastifyReply) => {
       const paramsParsed = templateIdParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
@@ -92,6 +143,15 @@ export async function templatesRoutes(fastify: FastifyInstance) {
   // PUT /admin/templates/:id/form
   fastify.put<{ Params: TemplateIdParams; Body: TemplateFormInput }>(
     '/:id/form',
+    {
+      schema: {
+        tags: ['templates'],
+        summary: 'Zastąp konfigurację formularza szablonu',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        body: { type: 'object', description: 'Konfiguracja formularza z polami (TemplateFormInput)' },
+        response: { 200: { type: 'object' } },
+      },
+    },
     async (request: FastifyRequest<{ Params: TemplateIdParams; Body: TemplateFormInput }>, reply: FastifyReply) => {
       const paramsParsed = templateIdParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
@@ -109,6 +169,17 @@ export async function templatesRoutes(fastify: FastifyInstance) {
   // DELETE /admin/templates/:id
   fastify.delete<{ Params: TemplateIdParams }>(
     '/:id',
+    {
+      schema: {
+        tags: ['templates'],
+        summary: 'Usuń szablon',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          200: { type: 'object', properties: { success: { type: 'boolean' } } },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: TemplateIdParams }>, reply: FastifyReply) => {
       const paramsParsed = templateIdParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
@@ -131,6 +202,17 @@ export async function templatesRoutes(fastify: FastifyInstance) {
   // GET /admin/templates/:id/layout
   fastify.get<{ Params: TemplateIdParams }>(
     '/:id/layout',
+    {
+      schema: {
+        tags: ['templates'],
+        summary: 'Pobierz konfigurację wizualnego layoutu (Fabric.js JSON)',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          200: { type: 'object', properties: { layout: { type: 'object' } } },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: TemplateIdParams }>, reply: FastifyReply) => {
       const paramsParsed = templateIdParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
@@ -149,6 +231,18 @@ export async function templatesRoutes(fastify: FastifyInstance) {
   // PUT /admin/templates/:id/layout
   fastify.put<{ Params: TemplateIdParams; Body: TemplateLayoutInput }>(
     '/:id/layout',
+    {
+      schema: {
+        tags: ['templates'],
+        summary: 'Zapisz wizualny layout szablonu (Fabric.js JSON)',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        body: { type: 'object', description: 'Konfiguracja layoutu Fabric.js z warstwami i fontami' },
+        response: {
+          200: { type: 'object', properties: { layout: { type: 'object' } } },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: TemplateIdParams; Body: TemplateLayoutInput }>, reply: FastifyReply) => {
       const paramsParsed = templateIdParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
@@ -179,6 +273,14 @@ export async function templatesRoutes(fastify: FastifyInstance) {
   // GET /admin/templates/:id/assets
   fastify.get<{ Params: TemplateIdParams }>(
     '/:id/assets',
+    {
+      schema: {
+        tags: ['templates'],
+        summary: 'Lista zasobów graficznych szablonu',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: { 200: { type: 'object', properties: { assets: { type: 'array', items: { type: 'object' } } } } },
+      },
+    },
     async (request: FastifyRequest<{ Params: TemplateIdParams }>, reply: FastifyReply) => {
       const paramsParsed = templateIdParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
@@ -192,6 +294,19 @@ export async function templatesRoutes(fastify: FastifyInstance) {
   // POST /admin/templates/:id/assets
   fastify.post<{ Params: TemplateIdParams }>(
     '/:id/assets',
+    {
+      schema: {
+        tags: ['templates'],
+        summary: 'Wgraj zasób graficzny do szablonu (PNG/JPG/SVG/WebP)',
+        description: 'Przyjmuje multipart/form-data z plikiem obrazu i opcjonalnym polem assetType',
+        consumes: ['multipart/form-data'],
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          201: { type: 'object', properties: { asset: { type: 'object' } } },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: TemplateIdParams }>, reply: FastifyReply) => {
       const paramsParsed = templateIdParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
@@ -236,6 +351,23 @@ export async function templatesRoutes(fastify: FastifyInstance) {
   // DELETE /admin/templates/:id/assets/:assetId
   fastify.delete<{ Params: TemplateAssetParams }>(
     '/:id/assets/:assetId',
+    {
+      schema: {
+        tags: ['templates'],
+        summary: 'Usuń zasób graficzny szablonu',
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            assetId: { type: 'string' },
+          },
+        },
+        response: {
+          200: { type: 'object', properties: { success: { type: 'boolean' } } },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: TemplateAssetParams }>, reply: FastifyReply) => {
       const paramsParsed = templateAssetParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {

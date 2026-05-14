@@ -16,7 +16,13 @@ import {
 
 export const emailSettingsRoutes: FastifyPluginAsync = async (server) => {
   // GET /admin/email-settings - lista wszystkich konfiguracji
-  server.get('/', async (request, reply) => {
+  server.get('/', {
+    schema: {
+      tags: ['email'],
+      summary: 'Lista konfiguracji email SMTP',
+      response: { 200: { type: 'array', items: { type: 'object' } } },
+    },
+  }, async (request, reply) => {
     try {
       const settings = await getAllEmailSettings();
       return reply.send(settings);
@@ -30,7 +36,25 @@ export const emailSettingsRoutes: FastifyPluginAsync = async (server) => {
   });
 
   // POST /admin/email-settings/test - MUSI BYĆ PRZED POST / i /:id
-  server.post('/test', async (request, reply) => {
+  server.post('/test', {
+    schema: {
+      tags: ['email'],
+      summary: 'Przetestuj konfigurację email SMTP',
+      body: {
+        type: 'object',
+        required: ['host', 'port', 'from'],
+        properties: {
+          host: { type: 'string' },
+          port: { type: 'integer' },
+          user: { type: 'string' },
+          password: { type: 'string' },
+          from: { type: 'string', format: 'email' },
+          secure: { type: 'boolean' },
+        },
+      },
+      response: { 200: { type: 'object', properties: { success: { type: 'boolean' }, message: { type: 'string' } } } },
+    },
+  }, async (request, reply) => {
     try {
       const parsed = emailSettingsSchema.safeParse(request.body);
       
@@ -58,7 +82,27 @@ export const emailSettingsRoutes: FastifyPluginAsync = async (server) => {
   });
 
   // POST /admin/email-settings - utworzenie nowej konfiguracji
-  server.post('/', async (request, reply) => {
+  server.post('/', {
+    schema: {
+      tags: ['email'],
+      summary: 'Utwórz konfigurację email SMTP',
+      body: {
+        type: 'object',
+        required: ['host', 'port', 'from'],
+        properties: {
+          tenantId: { type: 'string' },
+          host: { type: 'string' },
+          port: { type: 'integer' },
+          user: { type: 'string' },
+          password: { type: 'string' },
+          from: { type: 'string', format: 'email' },
+          secure: { type: 'boolean' },
+          isActive: { type: 'boolean' },
+        },
+      },
+      response: { 201: { type: 'object' } },
+    },
+  }, async (request, reply) => {
     try {
       const parsed = emailSettingsSchema.safeParse(request.body);
       
@@ -81,7 +125,17 @@ export const emailSettingsRoutes: FastifyPluginAsync = async (server) => {
   });
 
   // GET /admin/email-settings/:id - szczegóły jednej konfiguracji
-  server.get('/:id', async (request, reply) => {
+  server.get('/:id', {
+    schema: {
+      tags: ['email'],
+      summary: 'Szczegóły konfiguracji email SMTP',
+      params: { type: 'object', properties: { id: { type: 'string' } } },
+      response: {
+        200: { type: 'object' },
+        404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+      },
+    },
+  }, async (request, reply) => {
     try {
       const params = request.params as { id: string };
       const parsed = emailSettingsIdParamsSchema.safeParse(params);
@@ -110,7 +164,18 @@ export const emailSettingsRoutes: FastifyPluginAsync = async (server) => {
   });
 
   // PUT /admin/email-settings/:id - aktualizacja konfiguracji
-  server.put('/:id', async (request, reply) => {
+  server.put('/:id', {
+    schema: {
+      tags: ['email'],
+      summary: 'Zaktualizuj konfigurację email SMTP',
+      params: { type: 'object', properties: { id: { type: 'string' } } },
+      body: { type: 'object' },
+      response: {
+        200: { type: 'object' },
+        404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+      },
+    },
+  }, async (request, reply) => {
     try {
       const params = request.params as { id: string };
       const paramsValidation = emailSettingsIdParamsSchema.safeParse(params);
@@ -139,7 +204,17 @@ export const emailSettingsRoutes: FastifyPluginAsync = async (server) => {
   });
 
   // DELETE /admin/email-settings/:id - usunięcie konfiguracji
-  server.delete('/:id', async (request, reply) => {
+  server.delete('/:id', {
+    schema: {
+      tags: ['email'],
+      summary: 'Usuń konfigurację email SMTP',
+      params: { type: 'object', properties: { id: { type: 'string' } } },
+      response: {
+        200: { type: 'object', properties: { success: { type: 'boolean' } } },
+        404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+      },
+    },
+  }, async (request, reply) => {
     try {
       const params = request.params as { id: string };
       const parsed = emailSettingsIdParamsSchema.safeParse(params);

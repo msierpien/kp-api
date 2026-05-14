@@ -11,7 +11,20 @@ export async function usersRoutes(fastify: FastifyInstance) {
   // Query param: ?tenantId=xxx (SUPER_ADMIN only)
   fastify.get<{ Querystring: { tenantId?: string } }>(
     '/',
-    { preHandler: adminOrSuper },
+    {
+      preHandler: adminOrSuper,
+      schema: {
+        tags: ['users'],
+        summary: 'Lista użytkowników',
+        querystring: {
+          type: 'object',
+          properties: {
+            tenantId: { type: 'string', description: 'Filtr po tenancie (tylko SUPER_ADMIN)' },
+          },
+        },
+        response: { 200: { type: 'array', items: { type: 'object' } } },
+      },
+    },
     async (request: FastifyRequest<{ Querystring: { tenantId?: string } }>, reply: FastifyReply) => {
       try {
         const tenantIdFilter = request.query.tenantId;
@@ -27,7 +40,15 @@ export async function usersRoutes(fastify: FastifyInstance) {
   // GET /admin/users/:id - get single user
   fastify.get<{ Params: { id: string } }>(
     '/:id',
-    { preHandler: adminOrSuper },
+    {
+      preHandler: adminOrSuper,
+      schema: {
+        tags: ['users'],
+        summary: 'Szczegóły użytkownika',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: { 200: { type: 'object' }, 404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+      },
+    },
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       try {
         const user = await usersService.getUserById(request.params.id);
@@ -42,7 +63,24 @@ export async function usersRoutes(fastify: FastifyInstance) {
   // POST /admin/users - create new user
   fastify.post<{ Body: CreateUserInput }>(
     '/',
-    { preHandler: adminOrSuper },
+    {
+      preHandler: adminOrSuper,
+      schema: {
+        tags: ['users'],
+        summary: 'Utwórz nowego użytkownika',
+        body: {
+          type: 'object',
+          required: ['email', 'password', 'role'],
+          properties: {
+            email: { type: 'string', format: 'email' },
+            password: { type: 'string', minLength: 8 },
+            role: { type: 'string', enum: ['ADMIN', 'SUPER_ADMIN'] },
+            tenantId: { type: 'string' },
+          },
+        },
+        response: { 201: { type: 'object' }, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+      },
+    },
     async (request: FastifyRequest<{ Body: CreateUserInput }>, reply: FastifyReply) => {
       try {
         const user = await usersService.createUser(request.body);
@@ -57,7 +95,16 @@ export async function usersRoutes(fastify: FastifyInstance) {
   // PATCH /admin/users/:id - update user
   fastify.patch<{ Params: { id: string }; Body: UpdateUserInput }>(
     '/:id',
-    { preHandler: adminOrSuper },
+    {
+      preHandler: adminOrSuper,
+      schema: {
+        tags: ['users'],
+        summary: 'Zaktualizuj użytkownika',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        body: { type: 'object' },
+        response: { 200: { type: 'object' }, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+      },
+    },
     async (
       request: FastifyRequest<{ Params: { id: string }; Body: UpdateUserInput }>,
       reply: FastifyReply
@@ -75,7 +122,15 @@ export async function usersRoutes(fastify: FastifyInstance) {
   // DELETE /admin/users/:id - deactivate user
   fastify.delete<{ Params: { id: string } }>(
     '/:id',
-    { preHandler: adminOrSuper },
+    {
+      preHandler: adminOrSuper,
+      schema: {
+        tags: ['users'],
+        summary: 'Dezaktywuj użytkownika',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: { 204: { type: 'null' }, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+      },
+    },
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       try {
         await usersService.deleteUser(request.params.id);

@@ -3,13 +3,30 @@ import { listFonts, uploadFont, deleteFont } from '../../services/admin/fonts.se
 
 export async function fontsRoutes(fastify: FastifyInstance) {
   // GET /admin/fonts
-  fastify.get('/', async (_request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/', {
+    schema: {
+      tags: ['fonts'],
+      summary: 'Lista globalnych czcionek',
+      response: { 200: { type: 'object', properties: { fonts: { type: 'array', items: { type: 'object' } } } } },
+    },
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
     const fonts = await listFonts();
     return reply.send({ fonts });
   });
 
   // POST /admin/fonts
-  fastify.post('/', async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.post('/', {
+    schema: {
+      tags: ['fonts'],
+      summary: 'Wgraj czcionkę (TTF/OTF/WOFF/WOFF2)',
+      description: 'Przyjmuje multipart/form-data z plikiem czcionki',
+      consumes: ['multipart/form-data'],
+      response: {
+        201: { type: 'object', properties: { font: { type: 'object' } } },
+        400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+      },
+    },
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
     const data = await request.file();
     if (!data) {
       return reply.status(400).send({ error: 'Upload Error', message: 'Brak pliku' });
@@ -36,6 +53,17 @@ export async function fontsRoutes(fastify: FastifyInstance) {
   // DELETE /admin/fonts/:fileName
   fastify.delete<{ Params: { fileName: string } }>(
     '/:fileName',
+    {
+      schema: {
+        tags: ['fonts'],
+        summary: 'Usuń czcionkę',
+        params: { type: 'object', properties: { fileName: { type: 'string' } } },
+        response: {
+          200: { type: 'object', properties: { success: { type: 'boolean' } } },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: { fileName: string } }>, reply: FastifyReply) => {
       const { fileName } = request.params;
       try {

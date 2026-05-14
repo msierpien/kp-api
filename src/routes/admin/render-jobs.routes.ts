@@ -6,6 +6,13 @@ export async function renderJobsRoutes(fastify: FastifyInstance) {
   // GET /admin/render-jobs/stats - Statystyki RenderJobs (z BullMQ + bazy)
   fastify.get(
     '/stats',
+    {
+      schema: {
+        tags: ['render-jobs'],
+        summary: 'Statystyki kolejki renderowania (BullMQ + baza)',
+        response: { 200: { type: 'object' } },
+      },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         // Statystyki z BullMQ
@@ -41,6 +48,13 @@ export async function renderJobsRoutes(fastify: FastifyInstance) {
   // GET /admin/render-jobs - Lista wszystkich RenderJobs
   fastify.get(
     '/',
+    {
+      schema: {
+        tags: ['render-jobs'],
+        summary: 'Lista ostatnich 100 zadań renderowania',
+        response: { 200: { type: 'array', items: { type: 'object' } } },
+      },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const jobs = await prisma.renderJob.findMany({
@@ -82,6 +96,18 @@ export async function renderJobsRoutes(fastify: FastifyInstance) {
   // POST /admin/render-jobs/retry/:id - Retry pojedynczego joba
   fastify.post<{ Params: { id: string } }>(
     '/retry/:id',
+    {
+      schema: {
+        tags: ['render-jobs'],
+        summary: 'Ponów renderowanie dla pojedynczego joba',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          200: { type: 'object' },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       try {
         // Pobierz job z bazy
@@ -135,6 +161,13 @@ export async function renderJobsRoutes(fastify: FastifyInstance) {
   // POST /admin/render-jobs/retry-failed - Retry wszystkich failed jobs
   fastify.post(
     '/retry-failed',
+    {
+      schema: {
+        tags: ['render-jobs'],
+        summary: 'Ponów wszystkie nieudane zadania renderowania',
+        response: { 200: { type: 'object', properties: { count: { type: 'integer' } } } },
+      },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         // Pobierz wszystkie failed joby z bazy
@@ -176,6 +209,17 @@ export async function renderJobsRoutes(fastify: FastifyInstance) {
   // GET /admin/render-jobs/:id - Szczegóły pojedynczego RenderJob
   fastify.get<{ Params: { id: string } }>(
     '/:id',
+    {
+      schema: {
+        tags: ['render-jobs'],
+        summary: 'Szczegóły zadania renderowania wraz ze statusem BullMQ',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          200: { type: 'object' },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       try {
         const job = await prisma.renderJob.findUnique({

@@ -103,7 +103,7 @@ export async function seed() {
       email: 'seller@kreatywne-papierki.pl',
       passwordHash: sellerPassword,
       name: 'Sprzedawca',
-      role: 'SELLER',
+      role: 'ADMIN',
       isActive: true,
     },
   });
@@ -119,7 +119,7 @@ export async function seed() {
       email: 'seller2@tenant2.pl',
       passwordHash: seller2Password,
       name: 'Sprzedawca Tenant 2',
-      role: 'SELLER',
+      role: 'ADMIN',
       isActive: true,
     },
   });

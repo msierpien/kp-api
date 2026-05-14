@@ -23,6 +23,7 @@ import { closeQueue, getQueueStats } from './services/queue/render.queue';
 import { closeEmailQueue } from './services/queue/email.queue';
 // Puppeteer removed - no browser to close anymore
 import bullBoardPlugin from './plugins/bull-board';
+import swaggerDocsPlugin from './plugins/swagger-docs.plugin';
 import { errorHandlerPlugin } from './plugins/error-handler.plugin';
 import { validationPlugin } from './plugins/validation.plugin';
 import type { JwtPayload } from './types';
@@ -173,6 +174,11 @@ server.register(fastifyStatic, {
     res.setHeader('Cache-Control', 'public, max-age=3600');
   },
 });
+
+// API Docs (Swagger UI — dostępne za autentykacją)
+if (process.env.DOCS_ENABLED !== 'false') {
+  server.register(swaggerDocsPlugin);
+}
 
 // Routes
 server.register(authRoutes, { prefix: '/auth' });

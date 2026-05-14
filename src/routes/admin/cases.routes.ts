@@ -27,6 +27,35 @@ export async function casesRoutes(fastify: FastifyInstance) {
   // GET /admin/cases
   fastify.get<{ Querystring: CasesQueryInput }>(
     '/',
+    {
+      schema: {
+        tags: ['cases'],
+        summary: 'Lista case\'ów personalizacji',
+        querystring: {
+          type: 'object',
+          properties: {
+            page: { type: 'integer', default: 1 },
+            limit: { type: 'integer', default: 20 },
+            status: { type: 'string', description: 'Filtr po statusie' },
+            search: { type: 'string', description: 'Szukaj po referencji zamówienia lub emailu' },
+            shopId: { type: 'string' },
+            sortBy: { type: 'string', default: 'createdAt' },
+            sortOrder: { type: 'string', enum: ['asc', 'desc'], default: 'desc' },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              data: { type: 'array', items: { type: 'object' } },
+              total: { type: 'integer' },
+              page: { type: 'integer' },
+              limit: { type: 'integer' },
+            },
+          },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Querystring: CasesQueryInput }>, reply: FastifyReply) => {
       try {
         const parsed = casesQuerySchema.safeParse(request.query);
@@ -53,6 +82,20 @@ export async function casesRoutes(fastify: FastifyInstance) {
   // GET /admin/cases/:id
   fastify.get<{ Params: CaseIdParams }>(
     '/:id',
+    {
+      schema: {
+        tags: ['cases'],
+        summary: 'Szczegóły case\'u',
+        params: {
+          type: 'object',
+          properties: { id: { type: 'string' } },
+        },
+        response: {
+          200: { type: 'object' },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: CaseIdParams }>, reply: FastifyReply) => {
       try {
         const parsed = caseIdParamsSchema.safeParse(request.params);
@@ -85,6 +128,24 @@ export async function casesRoutes(fastify: FastifyInstance) {
   // PUT /admin/cases/:id/answers
   fastify.put<{ Params: CaseIdParams; Body: UpdateCaseAnswersInput }>(
     '/:id/answers',
+    {
+      schema: {
+        tags: ['cases'],
+        summary: 'Aktualizuj odpowiedzi case\'u (korekta sprzedawcy)',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        body: {
+          type: 'object',
+          required: ['answers'],
+          properties: {
+            answers: { type: 'object', description: 'Mapa klucz pola → wartość' },
+          },
+        },
+        response: {
+          200: { type: 'object' },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (
       request: FastifyRequest<{ Params: CaseIdParams; Body: UpdateCaseAnswersInput }>,
       reply: FastifyReply
@@ -126,6 +187,27 @@ export async function casesRoutes(fastify: FastifyInstance) {
   // PUT /admin/cases/:id/status
   fastify.put<{ Params: CaseIdParams; Body: UpdateCaseStatusInput }>(
     '/:id/status',
+    {
+      schema: {
+        tags: ['cases'],
+        summary: 'Zmień status case\'u',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        body: {
+          type: 'object',
+          required: ['status'],
+          properties: {
+            status: {
+              type: 'string',
+              enum: ['PENDING', 'WAITING_FOR_CUSTOMER', 'DRAFT', 'PREVIEW_READY', 'SUBMITTED', 'IN_PRODUCTION', 'COMPLETED', 'CANCELLED'],
+            },
+          },
+        },
+        response: {
+          200: { type: 'object' },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (
       request: FastifyRequest<{ Params: CaseIdParams; Body: UpdateCaseStatusInput }>,
       reply: FastifyReply
@@ -167,6 +249,24 @@ export async function casesRoutes(fastify: FastifyInstance) {
   // POST /admin/cases/:id/notes
   fastify.post<{ Params: CaseIdParams; Body: AddCaseNoteInput }>(
     '/:id/notes',
+    {
+      schema: {
+        tags: ['cases'],
+        summary: 'Dodaj notatkę wewnętrzną do case\'u',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        body: {
+          type: 'object',
+          required: ['note'],
+          properties: {
+            note: { type: 'string', minLength: 1 },
+          },
+        },
+        response: {
+          200: { type: 'object' },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (
       request: FastifyRequest<{ Params: CaseIdParams; Body: AddCaseNoteInput }>,
       reply: FastifyReply
@@ -205,6 +305,18 @@ export async function casesRoutes(fastify: FastifyInstance) {
   // POST /admin/cases/:id/resend-email
   fastify.post<{ Params: CaseIdParams }>(
     '/:id/resend-email',
+    {
+      schema: {
+        tags: ['cases'],
+        summary: 'Ponownie wyślij email personalizacji do klienta',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          200: { type: 'object' },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          503: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: CaseIdParams }>, reply: FastifyReply) => {
       try {
         const paramsValidation = caseIdParamsSchema.safeParse(request.params);
@@ -243,6 +355,23 @@ export async function casesRoutes(fastify: FastifyInstance) {
   // GET /admin/cases/:id/token - Get personalization token for case
   fastify.get<{ Params: CaseIdParams }>(
     '/:id/token',
+    {
+      schema: {
+        tags: ['cases'],
+        summary: 'Pobierz token klienta i URL personalizacji',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              token: { type: 'string' },
+              url: { type: 'string' },
+            },
+          },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: CaseIdParams }>, reply: FastifyReply) => {
       try {
         const paramsValidation = caseIdParamsSchema.safeParse(request.params);

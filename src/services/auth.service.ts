@@ -42,7 +42,7 @@ export class AuthService {
     const payload: JwtPayload = {
       userId: user.id,
       email: user.email,
-      role: user.role as 'ADMIN' | 'SELLER' | 'SUPER_ADMIN',
+      role: user.role as 'ADMIN' | 'SUPER_ADMIN',
       tenantId: user.tenantId,
     };
 
@@ -84,7 +84,7 @@ export class AuthService {
       const payload: JwtPayload = {
         userId: user.id,
         email: user.email,
-        role: user.role as 'ADMIN' | 'SELLER' | 'SUPER_ADMIN',
+        role: user.role as 'ADMIN' | 'SUPER_ADMIN',
         tenantId: user.tenantId,
       };
 

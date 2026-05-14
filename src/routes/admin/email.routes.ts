@@ -27,6 +27,25 @@ export async function emailRoutes(fastify: FastifyInstance) {
    */
   fastify.post<{ Body: TestEmailInput }>(
     '/test',
+    {
+      schema: {
+        tags: ['email'],
+        summary: 'Wyślij testowy email (weryfikacja SMTP)',
+        body: {
+          type: 'object',
+          required: ['to'],
+          properties: {
+            to: { type: 'string', format: 'email' },
+            subject: { type: 'string' },
+            message: { type: 'string' },
+          },
+        },
+        response: {
+          200: { type: 'object', properties: { success: { type: 'boolean' }, jobId: { type: 'string' } } },
+          503: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Body: TestEmailInput }>, reply: FastifyReply) => {
       try {
         const parsed = testEmailSchema.safeParse(request.body);
@@ -73,6 +92,29 @@ export async function emailRoutes(fastify: FastifyInstance) {
    */
   fastify.post<{ Body: BulkSendEmailInput }>(
     '/cases/bulk-send-email',
+    {
+      schema: {
+        tags: ['email'],
+        summary: 'Masowe wysyłanie emaili personalizacji dla listy case\'ów',
+        body: {
+          type: 'object',
+          required: ['caseIds'],
+          properties: {
+            caseIds: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 50 },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              success: { type: 'boolean' },
+              summary: { type: 'object' },
+              queuedCaseIds: { type: 'array', items: { type: 'string' } },
+            },
+          },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Body: BulkSendEmailInput }>, reply: FastifyReply) => {
       try {
         const parsed = bulkSendEmailSchema.safeParse(request.body);

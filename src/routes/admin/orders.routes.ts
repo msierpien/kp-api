@@ -9,7 +9,13 @@ interface OrderParams {
 
 export async function ordersRoutes(fastify: FastifyInstance) {
   // GET /admin/orders - List all orders
-  fastify.get('/', async (_request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/', {
+    schema: {
+      tags: ['orders'],
+      summary: 'Lista zamówień z pozycjami',
+      response: { 200: { type: 'array', items: { type: 'object' } } },
+    },
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
       const orders = await prisma.order.findMany({
         include: {
@@ -63,6 +69,17 @@ export async function ordersRoutes(fastify: FastifyInstance) {
   // GET /admin/orders/:id - Get order details
   fastify.get<{ Params: OrderParams }>(
     '/:id',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Szczegóły zamówienia',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          200: { type: 'object' },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: OrderParams }>, reply: FastifyReply) => {
       try {
         const order = await prisma.order.findUnique({
@@ -128,6 +145,27 @@ export async function ordersRoutes(fastify: FastifyInstance) {
   // POST /admin/orders/manual - Create manual order
   fastify.post<{ Body: CreateManualOrderInput }>(
     '/manual',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Utwórz ręczne zamówienie testowe',
+        body: {
+          type: 'object',
+          required: ['shopId', 'customerEmail', 'orderReference'],
+          properties: {
+            shopId: { type: 'string' },
+            customerEmail: { type: 'string', format: 'email' },
+            customerName: { type: 'string' },
+            orderReference: { type: 'string' },
+            items: { type: 'array', items: { type: 'object' } },
+          },
+        },
+        response: {
+          201: { type: 'object' },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Body: CreateManualOrderInput }>, reply: FastifyReply) => {
       const bodyParsed = createManualOrderSchema.safeParse(request.body);
       if (!bodyParsed.success) {
@@ -154,6 +192,17 @@ export async function ordersRoutes(fastify: FastifyInstance) {
   // DELETE /admin/orders/:id - Delete order
   fastify.delete<{ Params: OrderParams }>(
     '/:id',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Usuń zamówienie',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          200: { type: 'object', properties: { success: { type: 'boolean' }, message: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
     async (request: FastifyRequest<{ Params: OrderParams }>, reply: FastifyReply) => {
       try {
         await deleteOrder(request.params.id);

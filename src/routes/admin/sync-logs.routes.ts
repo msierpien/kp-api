@@ -6,6 +6,19 @@ export async function syncLogsRoutes(fastify: FastifyInstance) {
   // GET /admin/sync-logs
   fastify.get<{ Querystring: SyncLogsQueryInput }>(
     '/',
+    {
+      schema: {
+        tags: ['sync-logs'],
+        summary: 'Historia synchronizacji zamówień',
+        querystring: {
+          type: 'object',
+          properties: {
+            limit: { type: 'integer', default: 50, description: 'Maksymalna liczba logów' },
+          },
+        },
+        response: { 200: { type: 'array', items: { type: 'object' } } },
+      },
+    },
     async (request: FastifyRequest<{ Querystring: SyncLogsQueryInput }>, reply: FastifyReply) => {
       try {
         const parsed = syncLogsQuerySchema.safeParse(request.query);

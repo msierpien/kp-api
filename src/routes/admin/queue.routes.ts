@@ -19,7 +19,14 @@ export async function queueRoutes(fastify: FastifyInstance) {
   // GET /admin/queues - List all queues with stats
   fastify.get(
     '/',
-    { preHandler: superAdminOnly },
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['queues'],
+        summary: 'Lista kolejek BullMQ ze statystykami (SUPER_ADMIN)',
+        response: { 200: { type: 'object' } },
+      },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const stats = await getAllQueuesStats();
@@ -41,7 +48,14 @@ export async function queueRoutes(fastify: FastifyInstance) {
   // GET /admin/queues/names - Get available queue names
   fastify.get(
     '/names',
-    { preHandler: superAdminOnly },
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['queues'],
+        summary: 'Lista nazw dostępnych kolejek',
+        response: { 200: { type: 'object' } },
+      },
+    },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const names = getQueueNames();
       return reply.send({
@@ -54,7 +68,15 @@ export async function queueRoutes(fastify: FastifyInstance) {
   // GET /admin/queues/:name/stats - Get stats for specific queue
   fastify.get<{ Params: { name: string } }>(
     '/:name/stats',
-    { preHandler: superAdminOnly },
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['queues'],
+        summary: 'Statystyki konkretnej kolejki',
+        params: { type: 'object', properties: { name: { type: 'string' } } },
+        response: { 200: { type: 'object' } },
+      },
+    },
     async (request: FastifyRequest<{ Params: { name: string } }>, reply: FastifyReply) => {
       try {
         const { name } = request.params;
@@ -80,7 +102,23 @@ export async function queueRoutes(fastify: FastifyInstance) {
     Querystring: { status?: string; page?: number; limit?: number };
   }>(
     '/:name/jobs',
-    { preHandler: superAdminOnly },
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['queues'],
+        summary: 'Lista zadań z kolejki',
+        params: { type: 'object', properties: { name: { type: 'string' } } },
+        querystring: {
+          type: 'object',
+          properties: {
+            status: { type: 'string', enum: ['waiting', 'active', 'completed', 'failed', 'delayed', 'paused'], default: 'waiting' },
+            page: { type: 'integer', default: 1 },
+            limit: { type: 'integer', default: 20 },
+          },
+        },
+        response: { 200: { type: 'object' } },
+      },
+    },
     async (request: FastifyRequest<{
       Params: { name: string };
       Querystring: { status?: string; page?: number; limit?: number };
@@ -142,7 +180,15 @@ export async function queueRoutes(fastify: FastifyInstance) {
   // GET /admin/queues/:name/jobs/:id - Get job details
   fastify.get<{ Params: { name: string; id: string } }>(
     '/:name/jobs/:id',
-    { preHandler: superAdminOnly },
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['queues'],
+        summary: 'Szczegóły zadania w kolejce',
+        params: { type: 'object', properties: { name: { type: 'string' }, id: { type: 'string' } } },
+        response: { 200: { type: 'object' }, 404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+      },
+    },
     async (request: FastifyRequest<{ Params: { name: string; id: string } }>, reply: FastifyReply) => {
       try {
         const { name, id } = request.params;
@@ -173,7 +219,15 @@ export async function queueRoutes(fastify: FastifyInstance) {
   // POST /admin/queues/:name/jobs/:id/retry - Retry a job
   fastify.post<{ Params: { name: string; id: string } }>(
     '/:name/jobs/:id/retry',
-    { preHandler: superAdminOnly },
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['queues'],
+        summary: 'Ponów zadanie w kolejce',
+        params: { type: 'object', properties: { name: { type: 'string' }, id: { type: 'string' } } },
+        response: { 200: { type: 'object' } },
+      },
+    },
     async (request: FastifyRequest<{ Params: { name: string; id: string } }>, reply: FastifyReply) => {
       try {
         const { name, id } = request.params;
@@ -197,7 +251,15 @@ export async function queueRoutes(fastify: FastifyInstance) {
   // POST /admin/queues/:name/retry-failed - Retry all failed jobs
   fastify.post<{ Params: { name: string } }>(
     '/:name/retry-failed',
-    { preHandler: superAdminOnly },
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['queues'],
+        summary: 'Ponów wszystkie nieudane zadania w kolejce',
+        params: { type: 'object', properties: { name: { type: 'string' } } },
+        response: { 200: { type: 'object' } },
+      },
+    },
     async (request: FastifyRequest<{ Params: { name: string } }>, reply: FastifyReply) => {
       try {
         const { name } = request.params;
@@ -222,7 +284,15 @@ export async function queueRoutes(fastify: FastifyInstance) {
   // DELETE /admin/queues/:name/jobs/:id - Delete a job
   fastify.delete<{ Params: { name: string; id: string } }>(
     '/:name/jobs/:id',
-    { preHandler: superAdminOnly },
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['queues'],
+        summary: 'Usuń zadanie z kolejki',
+        params: { type: 'object', properties: { name: { type: 'string' }, id: { type: 'string' } } },
+        response: { 200: { type: 'object' } },
+      },
+    },
     async (request: FastifyRequest<{ Params: { name: string; id: string } }>, reply: FastifyReply) => {
       try {
         const { name, id } = request.params;
@@ -249,7 +319,23 @@ export async function queueRoutes(fastify: FastifyInstance) {
     Body: { grace?: number; limit?: number; type?: 'completed' | 'failed' };
   }>(
     '/:name/clean',
-    { preHandler: superAdminOnly },
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['queues'],
+        summary: 'Wyczyść stare zadania z kolejki',
+        params: { type: 'object', properties: { name: { type: 'string' } } },
+        body: {
+          type: 'object',
+          properties: {
+            grace: { type: 'integer', description: 'Czas w ms po którym zadanie jest uznane za stare' },
+            limit: { type: 'integer', description: 'Maksymalna liczba zadań do usunięcia' },
+            type: { type: 'string', enum: ['completed', 'failed'] },
+          },
+        },
+        response: { 200: { type: 'object' } },
+      },
+    },
     async (request: FastifyRequest<{
       Params: { name: string };
       Body: { grace?: number; limit?: number; type?: 'completed' | 'failed' };

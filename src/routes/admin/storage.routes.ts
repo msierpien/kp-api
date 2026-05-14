@@ -9,7 +9,20 @@ export async function storageRoutes(fastify: FastifyInstance) {
   // POST /admin/storage/cleanup - manual cleanup
   fastify.post<{ Body: CleanupOptions }>(
     '/cleanup',
-    { preHandler: superAdminOnly },
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['storage'],
+        summary: 'Wyczyść osierocone pliki z storage (SUPER_ADMIN)',
+        body: {
+          type: 'object',
+          properties: {
+            dryRun: { type: 'boolean', description: 'Tylko symulacja — nie usuwa plików' },
+          },
+        },
+        response: { 200: { type: 'object' } },
+      },
+    },
     async (request: FastifyRequest<{ Body: CleanupOptions }>, reply: FastifyReply) => {
       try {
         const options = request.body || {};
@@ -32,7 +45,14 @@ export async function storageRoutes(fastify: FastifyInstance) {
   // GET /admin/storage/stats - storage statistics
   fastify.get(
     '/stats',
-    { preHandler: superAdminOnly },
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['storage'],
+        summary: 'Statystyki storage (SUPER_ADMIN)',
+        response: { 200: { type: 'object' } },
+      },
+    },
     async (_request: FastifyRequest, reply: FastifyReply) => {
       try {
         // Dry run aby zobaczyć statystyki bez usuwania

@@ -77,6 +77,8 @@ services:
       SMTP_FROM: ${SMTP_FROM:-noreply@example.com}
       SMTP_SECURE: ${SMTP_SECURE:-false}
       AUTO_SEND_EMAILS: ${AUTO_SEND_EMAILS:-false}
+      # API Docs
+      DOCS_ENABLED: ${DOCS_ENABLED:-true}
       # URLs (CORS and generated links)
       APP_URL: ${APP_URL:-http://localhost:3001}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}

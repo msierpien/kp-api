@@ -10,7 +10,14 @@ export async function tenantsRoutes(fastify: FastifyInstance) {
   // GET /admin/tenants - list all tenants
   fastify.get(
     '/',
-    { preHandler: superAdminOnly },
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['tenants'],
+        summary: 'Lista tenantów (SUPER_ADMIN)',
+        response: { 200: { type: 'array', items: { type: 'object' } } },
+      },
+    },
     async (_request: FastifyRequest, reply: FastifyReply) => {
       try {
         const tenants = await tenantsService.getAllTenants();
@@ -25,7 +32,15 @@ export async function tenantsRoutes(fastify: FastifyInstance) {
   // GET /admin/tenants/:id - get single tenant
   fastify.get<{ Params: { id: string } }>(
     '/:id',
-    { preHandler: superAdminOnly },
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['tenants'],
+        summary: 'Szczegóły tenanta',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: { 200: { type: 'object' }, 404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+      },
+    },
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       try {
         const tenant = await tenantsService.getTenantById(request.params.id);
@@ -40,7 +55,22 @@ export async function tenantsRoutes(fastify: FastifyInstance) {
   // POST /admin/tenants - create new tenant
   fastify.post<{ Body: CreateTenantInput }>(
     '/',
-    { preHandler: superAdminOnly },
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['tenants'],
+        summary: 'Utwórz nowego tenanta',
+        body: {
+          type: 'object',
+          required: ['name', 'slug'],
+          properties: {
+            name: { type: 'string' },
+            slug: { type: 'string' },
+          },
+        },
+        response: { 201: { type: 'object' }, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+      },
+    },
     async (request: FastifyRequest<{ Body: CreateTenantInput }>, reply: FastifyReply) => {
       try {
         const tenant = await tenantsService.createTenant(request.body);
@@ -55,7 +85,16 @@ export async function tenantsRoutes(fastify: FastifyInstance) {
   // PATCH /admin/tenants/:id - update tenant
   fastify.patch<{ Params: { id: string }; Body: UpdateTenantInput }>(
     '/:id',
-    { preHandler: superAdminOnly },
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['tenants'],
+        summary: 'Zaktualizuj tenanta',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        body: { type: 'object' },
+        response: { 200: { type: 'object' }, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+      },
+    },
     async (
       request: FastifyRequest<{ Params: { id: string }; Body: UpdateTenantInput }>,
       reply: FastifyReply
@@ -73,7 +112,15 @@ export async function tenantsRoutes(fastify: FastifyInstance) {
   // DELETE /admin/tenants/:id - soft delete tenant
   fastify.delete<{ Params: { id: string } }>(
     '/:id',
-    { preHandler: superAdminOnly },
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['tenants'],
+        summary: 'Soft delete tenanta',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: { 204: { type: 'null' }, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+      },
+    },
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       try {
         await tenantsService.deleteTenant(request.params.id);

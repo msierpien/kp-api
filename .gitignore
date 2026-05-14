@@ -6,9 +6,9 @@ yarn.lock
 .pnpm-debug.log
 
 # Environment
-.env
-.env.local
-.env.production
+.env*
+!.env.example
+!.env*.example
 
 # Build
 dist/

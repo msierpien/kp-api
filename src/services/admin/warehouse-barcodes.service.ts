@@ -86,6 +86,11 @@ export async function createBarcode(warehouseProductId: string, input: CreateBar
   const ean = normalizeEan(input.ean);
   const isPrimary = input.isPrimary ?? false;
 
+  const existing = await prisma.warehouseProductBarcode.findUnique({
+    where: { tenantId_ean: { tenantId, ean } },
+  });
+  if (existing) throw new Error(`Kod EAN "${ean}" już istnieje`);
+
   if (isPrimary) {
     await unsetPrimaryBarcodes(tenantId, warehouseProductId);
   }
@@ -111,6 +116,14 @@ export async function updateBarcode(id: string, input: UpdateBarcodeInput) {
     where: { id, tenantId },
   });
   if (!barcode) throw new Error('Kod EAN nie znaleziony');
+
+  if (input.ean !== undefined) {
+    const ean = normalizeEan(input.ean);
+    const existing = await prisma.warehouseProductBarcode.findUnique({
+      where: { tenantId_ean: { tenantId, ean } },
+    });
+    if (existing && existing.id !== id) throw new Error(`Kod EAN "${ean}" już istnieje`);
+  }
 
   if (input.isPrimary === true) {
     await unsetPrimaryBarcodes(tenantId, barcode.warehouseProductId, id);

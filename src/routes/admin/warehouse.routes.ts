@@ -278,10 +278,14 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
             minItems: 1,
             items: {
               type: 'object',
-              required: ['productId', 'quantity'],
+              required: ['productId'],
               properties: {
                 productId: { type: 'string' },
                 quantity: { type: 'number', exclusiveMinimum: 0 },
+                barcodeId: { type: 'string' },
+                scannedEan: { type: 'string' },
+                baseQuantity: { type: 'number', exclusiveMinimum: 0 },
+                quantityMultiplier: { type: 'number', exclusiveMinimum: 0 },
                 unitPrice: { type: 'number', minimum: 0 },
                 notes: { type: 'string' },
               },
@@ -330,10 +334,14 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
             minItems: 1,
             items: {
               type: 'object',
-              required: ['productId', 'quantity'],
+              required: ['productId'],
               properties: {
                 productId: { type: 'string' },
                 quantity: { type: 'number', exclusiveMinimum: 0 },
+                barcodeId: { type: 'string' },
+                scannedEan: { type: 'string' },
+                baseQuantity: { type: 'number', exclusiveMinimum: 0 },
+                quantityMultiplier: { type: 'number', exclusiveMinimum: 0 },
                 unitPrice: { type: 'number', minimum: 0 },
                 notes: { type: 'string' },
               },

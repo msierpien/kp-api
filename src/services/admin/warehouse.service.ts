@@ -100,7 +100,11 @@ export type DocumentType = 'PZ' | 'PW' | 'WZ' | 'RW';
 
 export interface DocumentItemInput {
   productId: string;
-  quantity: number;
+  quantity?: number;
+  barcodeId?: string;
+  scannedEan?: string;
+  baseQuantity?: number;
+  quantityMultiplier?: number;
   unitPrice?: number;
   notes?: string;
 }
@@ -129,6 +133,17 @@ export interface DocumentsQuery {
   dateTo?: string;
 }
 
+interface PreparedDocumentItem {
+  productId: string;
+  quantity: number;
+  barcodeId?: string;
+  scannedEan?: string;
+  baseQuantity?: number;
+  quantityMultiplier?: number;
+  unitPrice?: number;
+  notes?: string;
+}
+
 export async function getDocuments(query: DocumentsQuery = {}) {
   const tenantId = getTenantId();
   const { page = 1, limit = 20, type, status, dateFrom, dateTo } = query;
@@ -150,7 +165,7 @@ export async function getDocuments(query: DocumentsQuery = {}) {
       skip,
       take: limit,
       orderBy: { date: 'desc' },
-      include: { items: { include: { product: true } } },
+      include: { items: { include: { product: true, barcode: true } } },
     }),
     prisma.warehouseDocument.count({ where }),
   ]);
@@ -165,7 +180,7 @@ export async function getDocumentById(id: string) {
 
   return prisma.warehouseDocument.findFirst({
     where,
-    include: { items: { include: { product: true } }, order: true },
+    include: { items: { include: { product: true, barcode: true } }, order: true },
   });
 }
 
@@ -173,14 +188,7 @@ export async function createDocument(input: CreateDocumentInput) {
   const tenantId = getTenantId();
   if (!tenantId) throw new Error('Brak kontekstu tenanta');
 
-  // Weryfikacja produktów
-  for (const item of input.items) {
-    const product = await prisma.warehouseProduct.findFirst({
-      where: { id: item.productId, tenantId },
-    });
-    if (!product) throw new Error(`Produkt ${item.productId} nie znaleziony`);
-    if (!product.isActive) throw new Error(`Produkt "${product.name}" jest nieaktywny`);
-  }
+  const preparedItems = await prepareDocumentItems(tenantId, input.items, true);
 
   const number = await generateDocumentNumber(tenantId, input.type);
 
@@ -194,15 +202,19 @@ export async function createDocument(input: CreateDocumentInput) {
       description: input.description,
       orderId: input.orderId,
       items: {
-        create: input.items.map((item) => ({
+        create: preparedItems.map((item) => ({
           productId: item.productId,
           quantity: item.quantity,
+          barcodeId: item.barcodeId,
+          scannedEan: item.scannedEan,
+          baseQuantity: item.baseQuantity,
+          quantityMultiplier: item.quantityMultiplier,
           unitPrice: item.unitPrice,
           notes: item.notes,
         })),
       },
     },
-    include: { items: { include: { product: true } } },
+    include: { items: { include: { product: true, barcode: true } } },
   });
 }
 
@@ -221,19 +233,17 @@ export async function updateDocument(id: string, input: UpdateDocumentInput) {
   if (input.orderId !== undefined) data.orderId = input.orderId;
 
   if (input.items) {
-    // Weryfikacja produktów
-    for (const item of input.items) {
-      const product = await prisma.warehouseProduct.findFirst({
-        where: { id: item.productId, tenantId: tenantId ?? undefined },
-      });
-      if (!product) throw new Error(`Produkt ${item.productId} nie znaleziony`);
-    }
+    const preparedItems = await prepareDocumentItems(tenantId ?? doc.tenantId, input.items, true);
 
     await prisma.warehouseDocumentItem.deleteMany({ where: { documentId: id } });
     data.items = {
-      create: input.items.map((item) => ({
+      create: preparedItems.map((item) => ({
         productId: item.productId,
         quantity: item.quantity,
+        barcodeId: item.barcodeId,
+        scannedEan: item.scannedEan,
+        baseQuantity: item.baseQuantity,
+        quantityMultiplier: item.quantityMultiplier,
         unitPrice: item.unitPrice,
         notes: item.notes,
       })),
@@ -243,7 +253,7 @@ export async function updateDocument(id: string, input: UpdateDocumentInput) {
   return prisma.warehouseDocument.update({
     where: { id },
     data,
-    include: { items: { include: { product: true } } },
+    include: { items: { include: { product: true, barcode: true } } },
   });
 }
 
@@ -262,7 +272,7 @@ export async function confirmDocument(id: string) {
   return prisma.warehouseDocument.update({
     where: { id },
     data: { status: 'CONFIRMED' },
-    include: { items: { include: { product: true } } },
+    include: { items: { include: { product: true, barcode: true } } },
   });
 }
 
@@ -278,7 +288,7 @@ export async function cancelDocument(id: string) {
   return prisma.warehouseDocument.update({
     where: { id },
     data: { status: 'CANCELLED' },
-    include: { items: { include: { product: true } } },
+    include: { items: { include: { product: true, barcode: true } } },
   });
 }
 
@@ -292,6 +302,58 @@ export async function deleteDocument(id: string) {
   if (doc.status !== 'DRAFT') throw new Error('Można usunąć tylko dokumenty w statusie DRAFT');
 
   return prisma.warehouseDocument.delete({ where: { id } });
+}
+
+async function prepareDocumentItems(
+  tenantId: string,
+  items: DocumentItemInput[],
+  requireActiveProduct: boolean,
+): Promise<PreparedDocumentItem[]> {
+  const preparedItems: PreparedDocumentItem[] = [];
+
+  for (const item of items) {
+    const product = await prisma.warehouseProduct.findFirst({
+      where: { id: item.productId, tenantId },
+    });
+    if (!product) throw new Error(`Produkt ${item.productId} nie znaleziony`);
+    if (requireActiveProduct && !product.isActive) throw new Error(`Produkt "${product.name}" jest nieaktywny`);
+
+    let scannedEan = item.scannedEan?.trim() || undefined;
+    let quantityMultiplier = item.quantityMultiplier;
+    let barcodeId = item.barcodeId;
+
+    if (barcodeId) {
+      const barcode = await prisma.warehouseProductBarcode.findFirst({
+        where: { id: barcodeId, tenantId, warehouseProductId: item.productId },
+      });
+      if (!barcode) throw new Error(`Kod EAN ${barcodeId} nie znaleziony dla produktu "${product.name}"`);
+      if (!barcode.isActive) throw new Error(`Kod EAN "${barcode.ean}" jest nieaktywny`);
+      scannedEan = scannedEan ?? barcode.ean;
+      quantityMultiplier = quantityMultiplier ?? Number(barcode.quantityMultiplier);
+    }
+
+    const baseQuantity = item.baseQuantity ?? item.quantity;
+    if (baseQuantity === undefined || baseQuantity <= 0) throw new Error('Ilość pozycji musi być większa od 0');
+
+    quantityMultiplier = quantityMultiplier ?? 1;
+    if (quantityMultiplier <= 0) throw new Error('Przelicznik EAN musi być większy od 0');
+
+    const quantity = item.quantity ?? baseQuantity * quantityMultiplier;
+    if (quantity <= 0) throw new Error('Ilość pozycji musi być większa od 0');
+
+    preparedItems.push({
+      productId: item.productId,
+      quantity,
+      barcodeId,
+      scannedEan,
+      baseQuantity,
+      quantityMultiplier,
+      unitPrice: item.unitPrice,
+      notes: item.notes,
+    });
+  }
+
+  return preparedItems;
 }
 
 // ─── Numeracja dokumentów ─────────────────────────────────────────────────────

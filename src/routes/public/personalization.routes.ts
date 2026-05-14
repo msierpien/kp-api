@@ -4,6 +4,7 @@ import { hashToken, maskToken } from '../../lib/token';
 import { validateAnswers } from '../../services/renderer/text-validator.service';
 import { saveFile, fileExists, buildStorageUrl } from '../../services/storage/local-storage.service';
 import { addFinalPdfJob } from '../../services/queue/render.queue';
+import { listFonts } from '../../services/admin/fonts.service';
 
 interface PersonalizationParams {
   token: string;
@@ -70,6 +71,26 @@ async function saveAnswers(
 function addSecurityHeaders(reply: FastifyReply) {
   reply.header('Referrer-Policy', 'no-referrer');
   reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+}
+
+async function enrichTemplateLayoutWithGlobalFonts(template: any) {
+  if (!template?.layoutJson) return template;
+
+  const globalFonts = await listFonts();
+  const layoutJson = template.layoutJson as any;
+
+  return {
+    ...template,
+    layoutJson: {
+      ...layoutJson,
+      fonts: globalFonts.map((font) => ({
+        family: font.family,
+        src: font.filePath,
+        weight: 400,
+        style: 'normal' as const,
+      })),
+    },
+  };
 }
 
 export async function personalizationRoutes(fastify: FastifyInstance) {
@@ -143,7 +164,24 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
-        return reply.send(personalizationCase);
+        const enrichedTemplate = await enrichTemplateLayoutWithGlobalFonts(
+          personalizationCase.orderItem?.personalizedProduct?.template
+        );
+
+        return reply.send({
+          ...personalizationCase,
+          orderItem: personalizationCase.orderItem
+            ? {
+                ...personalizationCase.orderItem,
+                personalizedProduct: personalizationCase.orderItem.personalizedProduct
+                  ? {
+                      ...personalizationCase.orderItem.personalizedProduct,
+                      template: enrichedTemplate,
+                    }
+                  : personalizationCase.orderItem.personalizedProduct,
+              }
+            : personalizationCase.orderItem,
+        });
       } catch (error) {
         fastify.log.error(error);
         return reply.status(500).send({

@@ -29,14 +29,24 @@ const TENANT_MODELS = new Set([
  */
 export function createTenantMiddleware(getTenantId: () => string | null) {
   const middleware: Prisma.Middleware = async (params, next) => {
+    const model = params.model;
+    const action = params.action;
+
+    // Debug: Log EVERY query to verify middleware is running
+    console.log(`[Tenant Middleware] CALLED - Model: ${model || 'N/A'}, Action: ${action}`);
+
     const tenantId = getTenantId();
+
+    // Debug logging
+    if (model && TENANT_MODELS.has(model)) {
+      console.log(`[Tenant Middleware] TENANT MODEL - Model: ${model}, Action: ${action}, TenantID: ${tenantId || 'NULL'}`);
+    }
 
     // If no tenantId in context, pass through (e.g., public routes)
     if (!tenantId) {
       return next(params);
     }
 
-    const model = params.model;
     if (!model) {
       return next(params);
     }

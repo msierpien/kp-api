@@ -1,0 +1,91 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: personalization-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-personalization}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Nie eksponuj portu na zewnątrz - tylko wewnętrzna sieć Dockera
+
+  # Redis Cache & Queue
+  redis:
+    image: redis:7-alpine
+    container_name: personalization-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    # Nie eksponuj portu na zewnątrz - tylko wewnętrzna sieć Dockera
+
+  # Fastify API
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: personalization-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${API_PORT:-3001}:3001"  # Tylko localhost - Nginx jest reverse proxy
+    environment:
+      NODE_ENV: production
+      API_PORT: 3001
+      API_HOST: 0.0.0.0
+      # Database
+      DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-personalization}?schema=public
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # JWT
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-15m}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+      # Encryption
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      # Webhook
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+      # Email (produkcja - prawdziwy SMTP)
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM: ${SMTP_FROM}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      AUTO_SEND_EMAILS: ${AUTO_SEND_EMAILS:-true}
+      # URLs (wymagane dla CORS i generowania linków)
+      APP_URL: ${APP_URL}
+      FRONTEND_URL: ${FRONTEND_URL}
+      PUBLIC_PORTAL_BASE_URL: ${PUBLIC_PORTAL_BASE_URL}
+      # Storage
+      STORAGE_PATH: /app/storage
+      PUBLIC_STORAGE_URL: ${APP_URL}
+    volumes:
+      - api_storage:/app/storage  # Trwały wolumin dla plików
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  api_storage:

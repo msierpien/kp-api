@@ -50,6 +50,7 @@ pnpm dev
 - `POST /personalization/:token/submit` - zatwierdzenie i utworzenie render job
 
 **Uwaga:** draft i submit zapisują również `layoutOverrides` dla warstw `text` i `textbox`, dzięki czemu finalny render respektuje pozycję i rozmiar ustawione przez klienta.
+Publiczny endpoint personalizacji wzbogaca też `layoutJson` o globalne czcionki, tak aby portal klienta renderował ten sam zestaw fontów co admin.
 
 ### Auth
 - `POST /auth/login` - logowanie (email + password)
@@ -69,6 +70,7 @@ pnpm dev
 - `PUT /admin/shops/:id` - edycja integracji
 - `POST /admin/shops/:id/test` - test połączenia z API sklepu
 - `POST /admin/shops/:id/sync` - manualne uruchomienie synchronizacji zamówień
+- `DELETE /admin/shops/:id` - usunięcie integracji
 
 ### Admin - Produkty personalizowane
 - `GET /admin/personalized-products` - lista mapowań SKU → template
@@ -94,6 +96,7 @@ pnpm dev
 ### Admin - Zamówienia
 - `GET /admin/orders` - lista zamówień z items
 - `GET /admin/orders/:id` - szczegóły zamówienia
+- `POST /admin/orders` - ręczne utworzenie zamówienia testowego / manualnego
 
 ### Admin - Logi i statystyki
 - `GET /admin/sync-logs` - historia synchronizacji z platformami
@@ -248,6 +251,12 @@ Logi zawierają:
 5. Generuje token dostępowy (hash do DB)
 6. **Wysyła e-mail** z linkiem
 7. Loguje do `sync_logs`
+
+### Zamówienia manualne
+
+- Zamówienie manualne może być utworzone z panelu admin
+- Dla pozycji dopasowanej do `PersonalizedProduct` tworzony jest `PersonalizationCase`
+- Case otrzymuje token klienta i może wejść do standardowego flow draft / submit / render
 
 ### Manualne uruchomienie
 ```bash

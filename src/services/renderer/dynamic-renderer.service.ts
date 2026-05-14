@@ -12,6 +12,18 @@ interface GenerateOptions {
 
 const px = (value: number) => `${value}px`;
 
+function getFontUnit(value: unknown): 'px' | 'pt' {
+  return value === 'px' ? 'px' : 'pt';
+}
+
+function fontSizeToCssPx(
+  fontSize: number,
+  fontUnit: 'px' | 'pt' = 'pt',
+  dpi: number = 300
+): number {
+  return fontUnit === 'pt' ? (fontSize / 72) * dpi : fontSize;
+}
+
 /**
  * Buduje pełny HTML (inline CSS) na podstawie layoutJson z wizualnego edytora.
  * Render jest prosty, ale odzwierciedla pozycjonowanie absolutne warstw.
@@ -47,7 +59,7 @@ export function generateHTMLFromLayout(
   const layersHtml = layout.layers
     .filter((l) => l.visible !== false)
     .sort((a, b) => a.zIndex - b.zIndex)
-    .map((layer) => renderLayer(layer, answers, assetBaseUrl))
+    .map((layer) => renderLayer(layer, answers, assetBaseUrl, layout.canvas.dpi || 300))
     .join('\n');
 
   const watermarkHtml = options.watermark
@@ -85,7 +97,12 @@ export function generateHTMLFromLayout(
 </html>`;
 }
 
-function renderLayer(layer: Layer, answers: Record<string, any>, assetBaseUrl: string): string {
+function renderLayer(
+  layer: Layer,
+  answers: Record<string, any>,
+  assetBaseUrl: string,
+  canvasDpi: number
+): string {
   const common = `
     position:absolute;
     left:${px(layer.x)};
@@ -119,7 +136,7 @@ function renderLayer(layer: Layer, answers: Record<string, any>, assetBaseUrl: s
     }
     return `<div style="${common}
       font-family:'${props.fontFamily}', sans-serif;
-      font-size:${px(props.fontSize)};
+      font-size:${px(fontSizeToCssPx(props.fontSize, getFontUnit(props.fontUnit), canvasDpi))};
       font-weight:${props.fontWeight};
       font-style:${props.fontStyle};
       color:${props.fill};
@@ -141,7 +158,7 @@ function renderLayer(layer: Layer, answers: Record<string, any>, assetBaseUrl: s
     const value = replaceFieldPlaceholders(props.text ?? '', answers);
     return `<div style="${common}
       font-family:'${props.fontFamily}', sans-serif;
-      font-size:${px(props.fontSize)};
+      font-size:${px(fontSizeToCssPx(props.fontSize, getFontUnit(props.fontUnit), canvasDpi))};
       font-weight:${props.fontWeight};
       font-style:${props.fontStyle};
       color:${props.fill};
@@ -194,7 +211,7 @@ function renderLayer(layer: Layer, answers: Record<string, any>, assetBaseUrl: s
 
     return `<div style="${common}
       font-family:'${props.fontFamily}', sans-serif;
-      font-size:${px(props.fontSize)};
+      font-size:${px(fontSizeToCssPx(props.fontSize, getFontUnit(props.fontUnit), canvasDpi))};
       font-weight:${props.fontWeight};
       font-style:${props.fontStyle};
       color:${props.fill};
@@ -262,5 +279,3 @@ function replaceFieldPlaceholders(text: string, answers: Record<string, any>): s
     return match; // Pozostaw placeholder jeśli brak wartości
   });
 }
-
-

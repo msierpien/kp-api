@@ -133,6 +133,7 @@ export interface TextFieldProperties {
   fieldKey: string;           // KLUCZ POWIĄZANIA z FormField.key
   placeholder: string;
   fontSize: number;
+  fontUnit?: 'px' | 'pt';
   fontFamily: string;
   fontWeight: number;
   fontStyle: 'normal' | 'italic';
@@ -156,6 +157,7 @@ export interface StaticTextProperties {
   type: 'static_text';
   text: string;               // stały tekst
   fontSize: number;
+  fontUnit?: 'px' | 'pt';
   fontFamily: string;
   fontWeight: number;
   fontStyle: 'normal' | 'italic';
@@ -174,6 +176,7 @@ export interface TextBoxProperties {
   fieldKey?: string;          // opcjonalny klucz powiązania z FormField.key
   text: string;               // tekst (może zawierać {{ fieldKey }})
   fontSize: number;
+  fontUnit?: 'px' | 'pt';
   fontFamily: string;
   fontWeight: number;
   fontStyle: 'normal' | 'italic';

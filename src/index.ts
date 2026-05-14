@@ -9,7 +9,7 @@ import multipart from '@fastify/multipart';
 import path from 'path';
 import { config } from './config';
 import prisma from './lib/prisma';
-import { tenantContext } from './lib/tenant-context';
+import requestContext from '@fastify/request-context';
 import { authRoutes } from './routes/auth.routes';
 import { adminRoutes } from './routes/admin';
 import { personalizationRoutes } from './routes/public/personalization.routes';
@@ -42,39 +42,45 @@ const server = Fastify({
   },
 });
 
+// Async request context for tenant isolation
+server.register(requestContext, {
+  defaultStoreValues: {
+    tenantContext: null,
+  },
+});
+
 // Tenant context hook - runs for every request
 server.addHook('onRequest', async (request) => {
-  return tenantContext.run(
-    { tenantId: '', userId: '', role: '' }, // default empty context
-    async () => {
-      try {
-        const authHeader = request.headers.authorization;
-        if (authHeader && authHeader.startsWith('Bearer ')) {
-          const token = authHeader.substring(7);
-          const decoded = (await server.jwt.verify(token)) as JwtPayload;
-          
-          // Update context with user data
-          const store = tenantContext.getStore();
-          if (store) {
-            store.tenantId = decoded.tenantId;
-            store.userId = decoded.userId;
-            store.role = decoded.role;
-            
-            // SUPER_ADMIN can override tenantId via query param
-            if (decoded.role === 'SUPER_ADMIN') {
-              const overrideTenantId = (request.query as any)?.tenantId;
-              if (overrideTenantId && typeof overrideTenantId === 'string') {
-                store.overrideTenantId = overrideTenantId;
-              }
-            }
-          }
+  // Prepare context data
+  let contextData = { tenantId: '', userId: '', role: '' };
+
+  try {
+    const authHeader = request.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      const decoded = (await server.jwt.verify(token)) as JwtPayload;
+
+      // Build context with user data
+      contextData = {
+        tenantId: decoded.tenantId,
+        userId: decoded.userId,
+        role: decoded.role,
+      };
+
+      // SUPER_ADMIN can override tenantId via query param
+      if (decoded.role === 'SUPER_ADMIN') {
+        const overrideTenantId = (request.query as any)?.tenantId;
+        if (overrideTenantId && typeof overrideTenantId === 'string') {
+          (contextData as any).overrideTenantId = overrideTenantId;
         }
-      } catch {
-        // Token invalid or missing - continue with empty context
-        // Public routes don't need auth
       }
     }
-  );
+  } catch {
+    // Token invalid or missing - continue with empty context
+    // Public routes don't need auth
+  }
+
+  request.requestContext.set('tenantContext', contextData);
 });
 
 // Custom content type parser to allow empty JSON bodies (Fastify v5 fix)

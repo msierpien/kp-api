@@ -33,6 +33,20 @@ interface WatermarkConfig {
 // Cache załadowanych czcionek
 const loadedFonts = new Set<string>();
 
+function getFontUnit(value: unknown): 'px' | 'pt' {
+  return value === 'px' ? 'px' : 'pt';
+}
+
+function fontSizeToRenderPx(
+  fontSize: number,
+  fontUnit: 'px' | 'pt' = 'pt',
+  dpi: number = 300,
+  scale: number = 1
+): number {
+  const baseSize = fontUnit === 'pt' ? (fontSize / 72) * dpi : fontSize;
+  return baseSize * scale;
+}
+
 /**
  * Ładuje czcionkę Google Fonts do node-canvas
  */
@@ -104,7 +118,8 @@ function mergeLayoutWithOverrides(
 async function layerToFabricObject(
   layer: Layer,
   answers: Record<string, any>,
-  scale: number
+  scale: number,
+  dpi: number
 ): Promise<any> {
   const common = {
     left: layer.x * scale,
@@ -145,7 +160,7 @@ async function layerToFabricObject(
     
     return new IText(String(value), {
       ...common,
-      fontSize: props.fontSize * scale,
+      fontSize: fontSizeToRenderPx(props.fontSize, getFontUnit(props.fontUnit), dpi, scale),
       fontFamily: props.fontFamily,
       fontWeight: String(props.fontWeight || 400),
       fontStyle: props.fontStyle || 'normal',
@@ -168,7 +183,7 @@ async function layerToFabricObject(
     
     return new IText(value, {
       ...common,
-      fontSize: props.fontSize * scale,
+      fontSize: fontSizeToRenderPx(props.fontSize, getFontUnit(props.fontUnit), dpi, scale),
       fontFamily: props.fontFamily,
       fontWeight: String(props.fontWeight || 400),
       fontStyle: props.fontStyle || 'normal',
@@ -196,14 +211,14 @@ async function layerToFabricObject(
     
     return new Textbox(value, {
       ...common,
-      fontSize: props.fontSize * scale,
+      fontSize: fontSizeToRenderPx(props.fontSize, getFontUnit(props.fontUnit), dpi, scale),
       fontFamily: props.fontFamily,
       fontWeight: String(props.fontWeight || 400),
       fontStyle: props.fontStyle || 'normal',
       fill: props.fill,
       textAlign: props.textAlign as any,
       backgroundColor: props.backgroundColor,
-      padding: props.padding || 10,
+      padding: (props.padding || 10) * scale,
       originX: 'center',
       originY: 'center',
     });
@@ -249,6 +264,7 @@ export async function renderPreview(
   const finalWidth = width * deviceScaleFactor;
   const finalHeight = height * deviceScaleFactor;
   const finalScale = scale * deviceScaleFactor;
+  const dpi = Number(layout.canvas.dpi || 300);
 
   // Pozwól fabric/node utworzyć zgodny element canvas przez JSDOM,
   // a następnie pobierz powiązany node-canvas do eksportu.
@@ -269,7 +285,8 @@ export async function renderPreview(
       const fabricObj = await layerToFabricObject(
         layer,
         data.answers,
-        finalScale
+        finalScale,
+        dpi
       );
       
       if (fabricObj) {

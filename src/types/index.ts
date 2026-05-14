@@ -98,6 +98,7 @@ export interface ShopItem {
   apiSecret: string | null;
   authType?: 'WEB_SERVICE' | 'ADMIN_API' | 'REST_API' | 'OAUTH' | 'MANUAL';
   config: any; // Elastyczna konfiguracja JSON per platforma
+  tenantId: string; // Multi-tenant isolation
 }
 
 export interface CreateShopDto {

@@ -201,6 +201,7 @@ const textFieldPropertiesSchema = z.object({
   fieldKey: z.string().min(1),
   placeholder: z.string().default(''),
   fontSize: z.number().positive(),
+  fontUnit: z.enum(['px', 'pt']).default('pt'),
   fontFamily: z.string().min(1),
   fontWeight: z.number().int().min(100).max(900).default(400),
   fontStyle: z.enum(['normal', 'italic']).default('normal'),
@@ -210,12 +211,16 @@ const textFieldPropertiesSchema = z.object({
   maxLines: z.number().int().positive().default(1),
   textTransform: z.enum(['none', 'uppercase', 'lowercase', 'capitalize']).default('none'),
   editable: z.literal(true).default(true),
+  clientDraggable: z.boolean().optional(),
+  clientResizable: z.boolean().optional(),
+  clientRotatable: z.boolean().optional(),
 });
 
 const staticTextPropertiesSchema = z.object({
   type: z.literal('static_text'),
   text: z.string().default(''),
   fontSize: z.number().positive(),
+  fontUnit: z.enum(['px', 'pt']).default('pt'),
   fontFamily: z.string().min(1),
   fontWeight: z.number().int().min(100).max(900).default(400),
   fontStyle: z.enum(['normal', 'italic']).default('normal'),
@@ -230,6 +235,7 @@ const textboxPropertiesSchema = z.object({
   fieldKey: z.string().optional(),
   text: z.string().default(''),
   fontSize: z.number().positive(),
+  fontUnit: z.enum(['px', 'pt']).default('pt'),
   fontFamily: z.string().min(1),
   fontWeight: z.number().int().min(100).max(900).default(400),
   fontStyle: z.enum(['normal', 'italic']).default('normal'),
@@ -242,6 +248,9 @@ const textboxPropertiesSchema = z.object({
   borderColor: z.string().default('transparent'),
   borderWidth: z.number().min(0).default(0),
   editable: z.boolean().default(true),
+  clientDraggable: z.boolean().optional(),
+  clientResizable: z.boolean().optional(),
+  clientRotatable: z.boolean().optional(),
 });
 
 const shapePropertiesSchema = z.object({

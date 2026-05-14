@@ -25,7 +25,7 @@ export async function seed() {
   });
   console.log('✅ Tenant created:', tenant.name);
 
-  // 2. Utwórz przykładowy sklep
+  // 2. Utwórz przykładowy sklep (tenant 1)
   const shop = await prisma.shop.upsert({
     where: { id: 'shop_1' },
     update: {},
@@ -42,7 +42,42 @@ export async function seed() {
   });
   console.log('✅ Shop created:', shop.name);
 
-  // 3. Utwórz użytkownika admin
+  // 2b. Utwórz drugi tenant + sklep (do testów izolacji)
+  const tenant2 = await prisma.tenant.upsert({
+    where: { id: 'tenant-2-id' },
+    update: {},
+    create: {
+      id: 'tenant-2-id',
+      name: 'Test Shop Tenant 2',
+      slug: 'tenant-2',
+      status: 'ACTIVE',
+      plan: 'FREE',
+      limitsJson: {
+        max_shops: 2,
+        max_users: 5,
+        max_cases_per_month: 1000,
+      },
+    },
+  });
+  console.log('✅ Tenant2 created:', tenant2.name);
+
+  const shop2 = await prisma.shop.upsert({
+    where: { id: 'shop_2' },
+    update: {},
+    create: {
+      id: 'shop_2',
+      tenantId: tenant2.id,
+      name: 'Test Shop (Tenant 2)',
+      platform: 'PRESTASHOP',
+      baseUrl: 'https://tenant2.example.com',
+      apiKey: 'dev-api-key-tenant-2',
+      apiSecret: null,
+      status: 'ACTIVE',
+    },
+  });
+  console.log('✅ Shop2 created:', shop2.name);
+
+  // 3. Utwórz użytkownika admin (tenant 1)
   const adminPassword = await bcrypt.hash('admin123', 10);
   const admin = await prisma.user.upsert({
     where: { email: 'admin@kreatywne-papierki.pl' },
@@ -58,7 +93,7 @@ export async function seed() {
   });
   console.log('✅ Admin user created:', admin.email);
 
-  // 4. Utwórz użytkownika seller
+  // 4. Utwórz użytkownika seller (tenant 1)
   const sellerPassword = await bcrypt.hash('seller123', 10);
   const seller = await prisma.user.upsert({
     where: { email: 'seller@kreatywne-papierki.pl' },
@@ -74,7 +109,23 @@ export async function seed() {
   });
   console.log('✅ Seller user created:', seller.email);
 
-  // 4. Utwórz użytkownika SUPER_ADMIN
+  // 4b. Utwórz użytkownika seller (tenant 2)
+  const seller2Password = await bcrypt.hash('seller456', 10);
+  const seller2 = await prisma.user.upsert({
+    where: { email: 'seller2@tenant2.pl' },
+    update: {},
+    create: {
+      tenantId: tenant2.id,
+      email: 'seller2@tenant2.pl',
+      passwordHash: seller2Password,
+      name: 'Sprzedawca Tenant 2',
+      role: 'SELLER',
+      isActive: true,
+    },
+  });
+  console.log('✅ Seller2 user created:', seller2.email);
+
+  // 4c. Utwórz użytkownika SUPER_ADMIN
   const superAdminPassword = await bcrypt.hash('SuperAdmin2024!', 10);
   const superAdmin = await prisma.user.upsert({
     where: { email: 'msierpien@rexbit.pl' },

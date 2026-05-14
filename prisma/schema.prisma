@@ -35,6 +35,7 @@ model Tenant {
   emailSettings      EmailSettings[]
   warehouseProducts  WarehouseProduct[]
   warehouseDocuments WarehouseDocument[]
+  warehouseBarcodes  WarehouseProductBarcode[]
 
   @@index([status])
   @@index([slug])
@@ -518,12 +519,36 @@ model WarehouseProduct {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   tenant Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  items  WarehouseDocumentItem[]
+  items    WarehouseDocumentItem[]
+  barcodes WarehouseProductBarcode[]
 
   @@unique([tenantId, sku])
   @@index([tenantId])
   @@index([tenantId, isActive])
   @@map("warehouse_products")
+}
+
+model WarehouseProductBarcode {
+  id                 String   @id @default(cuid())
+  tenantId           String   @map("tenant_id")
+  warehouseProductId String   @map("warehouse_product_id")
+  ean                String
+  label              String?
+  quantityMultiplier Decimal  @default(1) @map("quantity_multiplier") @db.Decimal(10, 3)
+  isPrimary          Boolean  @default(false) @map("is_primary")
+  isActive           Boolean  @default(true) @map("is_active")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseProduct WarehouseProduct @relation(fields: [warehouseProductId], references: [id], onDelete: Cascade)
+  documentItems    WarehouseDocumentItem[]
+
+  @@unique([tenantId, ean])
+  @@index([tenantId])
+  @@index([warehouseProductId])
+  @@index([tenantId, isActive])
+  @@map("warehouse_product_barcodes")
 }
 
 model WarehouseDocument {
@@ -551,17 +576,23 @@ model WarehouseDocument {
 }
 
 model WarehouseDocumentItem {
-  id         String   @id @default(cuid())
-  documentId String   @map("document_id")
-  productId  String   @map("product_id")
-  quantity   Decimal  @db.Decimal(10, 3)
-  unitPrice  Decimal? @map("unit_price") @db.Decimal(10, 2)
-  notes      String?
+  id                 String   @id @default(cuid())
+  documentId         String   @map("document_id")
+  productId          String   @map("product_id")
+  barcodeId          String?  @map("barcode_id")
+  quantity           Decimal  @db.Decimal(10, 3)
+  unitPrice          Decimal? @map("unit_price") @db.Decimal(10, 2)
+  scannedEan         String?  @map("scanned_ean")
+  baseQuantity       Decimal? @map("base_quantity") @db.Decimal(10, 3)
+  quantityMultiplier Decimal? @map("quantity_multiplier") @db.Decimal(10, 3)
+  notes              String?
 
   document WarehouseDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
   product  WarehouseProduct  @relation(fields: [productId], references: [id])
+  barcode  WarehouseProductBarcode? @relation(fields: [barcodeId], references: [id], onDelete: SetNull)
 
   @@index([documentId])
   @@index([productId])
+  @@index([barcodeId])
   @@map("warehouse_document_items")
 }

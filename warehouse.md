@@ -892,6 +892,45 @@ Presety kolumn:
 | Godan | `Kod produktu` | `Kod EAN` | `Nazwa` | `Stan magazynowy` | `Cena netto jednostkowa` | brak |
 | PartyDeco | `code` | `ean` | `name` | `stock` | `price_net` | `category_path` |
 
+#### Status konfiguracji testowej
+
+Na środowisku deweloperskim dodano bezpośrednio do bazy dwóch providerów hurtowni dla tenanta `default-tenant-id`:
+
+| Provider | ID | Status | Sync |
+|---|---|---|---|
+| Godan | `wholesale_provider_godan_default` | aktywny | jeszcze nieuruchomiony |
+| PartyDeco | `wholesale_provider_partydeco_default` | aktywny | jeszcze nieuruchomiony |
+
+Oba providery mają:
+
+- `platform = CSV_FEED`;
+- `syncEnabled = true`;
+- `isActive = true`;
+- zapisany `feedUrl` w bazie;
+- zapisany `configJson` z presetem, separatorem `;` i mapperem kolumn.
+
+Ważne:
+
+- konfiguracje providerów są w bazie, nie w seedzie i nie w migracji;
+- URL-e feedów zawierają tokeny/dostęp integracyjny, więc nie powinny być przepisywane do kodu frontendu ani commitowane w dokumentacji publicznej;
+- synchronizacja produktów nie była jeszcze uruchomiona, więc `WholesaleProductMapping` i `WholesaleSyncLog` mają na start po `0` rekordów dla obu providerów;
+- kolejnym krokiem testowym jest ręczne uruchomienie `POST /admin/wholesale/providers/:id/sync`, najpierw najlepiej z małym `limit`, żeby sprawdzić mapowanie pól i licznik `skipped`.
+
+Przykład testowego syncu z ograniczeniem:
+
+```json
+{
+  "limit": 20
+}
+```
+
+Po syncu należy sprawdzić:
+
+- `GET /admin/wholesale/providers/:id/logs` - czy status jest `SUCCESS`;
+- `GET /admin/wholesale/providers/:id/mappings` - czy powstały kandydaty produktów hurtowni;
+- czy `externalSku`, `externalEan`, `externalName`, `lastKnownStock`, `lastKnownPrice` są uzupełnione zgodnie z feedem;
+- czy `payloadJson` zawiera oryginalny wiersz CSV.
+
 #### Plan elastycznych importerów i mapperów
 
 Docelowo integracja hurtowni nie powinna być listą warunków `if provider === GODAN`. Provider ma mieć konfigurację importu, a parser CSV ma działać tak samo dla wielu plików:

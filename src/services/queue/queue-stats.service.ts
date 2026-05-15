@@ -1,11 +1,11 @@
-import { Queue, Job } from 'bullmq';
-import { renderQueue } from './render.queue';
-import { emailQueue } from './email.queue';
+import { Queue, Job, type JobType } from 'bullmq';
+import { getRenderQueue } from './render.queue';
+import { getEmailQueue } from './email.queue';
 
 // Map queue names to queue instances
-const queues: Record<string, Queue> = {
-  'render': renderQueue,
-  'email': emailQueue,
+const queues: Record<string, () => Queue> = {
+  render: getRenderQueue,
+  email: getEmailQueue,
 };
 
 export interface QueueStats {
@@ -46,29 +46,22 @@ export interface JobDetails {
  */
 export async function getAllQueuesStats(): Promise<QueueStats[]> {
   const queueNames = Object.keys(queues);
-  const stats = await Promise.all(
-    queueNames.map(name => getQueueStats(name))
-  );
-  return stats;
+  return Promise.all(queueNames.map((name) => getQueueStats(name)));
 }
 
 /**
  * Get stats for a specific queue
  */
 export async function getQueueStats(queueName: string): Promise<QueueStats> {
-  const queue = queues[queueName];
-  if (!queue) {
-    throw new Error(`Queue '${queueName}' not found`);
-  }
+  const queue = getQueue(queueName);
 
-  const [waiting, active, completed, failed, delayed, paused] = await Promise.all([
-    queue.getWaitingCount(),
-    queue.getActiveCount(),
-    queue.getCompletedCount(),
-    queue.getFailedCount(),
-    queue.getDelayedCount(),
-    queue.getPausedCount(),
-  ]);
+  const counts = await queue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed', 'paused');
+  const waiting = counts.waiting ?? 0;
+  const active = counts.active ?? 0;
+  const completed = counts.completed ?? 0;
+  const failed = counts.failed ?? 0;
+  const delayed = counts.delayed ?? 0;
+  const paused = counts.paused ?? 0;
 
   // Get last processed job
   const completedJobs = await queue.getCompleted(0, 0);
@@ -101,35 +94,8 @@ export async function getQueueJobs(
   start: number = 0,
   end: number = 19
 ): Promise<Job[]> {
-  const queue = queues[queueName];
-  if (!queue) {
-    throw new Error(`Queue '${queueName}' not found`);
-  }
-
-  let jobs: Job[] = [];
-
-  switch (status) {
-    case 'waiting':
-      jobs = await queue.getWaiting(start, end);
-      break;
-    case 'active':
-      jobs = await queue.getActive(start, end);
-      break;
-    case 'completed':
-      jobs = await queue.getCompleted(start, end);
-      break;
-    case 'failed':
-      jobs = await queue.getFailed(start, end);
-      break;
-    case 'delayed':
-      jobs = await queue.getDelayed(start, end);
-      break;
-    case 'paused':
-      jobs = await queue.getPaused(start, end);
-      break;
-  }
-
-  return jobs;
+  const queue = getQueue(queueName);
+  return queue.getJobs(status as JobType, start, end) as Promise<Job[]>;
 }
 
 /**
@@ -149,10 +115,7 @@ export async function getJobDetails(
   queueName: string,
   jobId: string
 ): Promise<JobDetails | null> {
-  const queue = queues[queueName];
-  if (!queue) {
-    throw new Error(`Queue '${queueName}' not found`);
-  }
+  const queue = getQueue(queueName);
 
   const job = await queue.getJob(jobId);
   if (!job) {
@@ -164,7 +127,7 @@ export async function getJobDetails(
     name: job.name,
     data: job.data,
     opts: job.opts,
-    progress: await job.progress(),
+    progress: typeof job.progress === 'number' ? job.progress : 0,
     returnvalue: job.returnvalue,
     stacktrace: job.stacktrace || [],
     attemptsMade: job.attemptsMade,
@@ -183,10 +146,7 @@ export async function retryJob(
   queueName: string,
   jobId: string
 ): Promise<void> {
-  const queue = queues[queueName];
-  if (!queue) {
-    throw new Error(`Queue '${queueName}' not found`);
-  }
+  const queue = getQueue(queueName);
 
   const job = await queue.getJob(jobId);
   if (!job) {
@@ -223,10 +183,7 @@ export async function deleteJob(
   queueName: string,
   jobId: string
 ): Promise<void> {
-  const queue = queues[queueName];
-  if (!queue) {
-    throw new Error(`Queue '${queueName}' not found`);
-  }
+  const queue = getQueue(queueName);
 
   const job = await queue.getJob(jobId);
   if (!job) {
@@ -245,10 +202,7 @@ export async function cleanQueue(
   limit: number = 1000,
   type: 'completed' | 'failed' = 'completed'
 ): Promise<string[]> {
-  const queue = queues[queueName];
-  if (!queue) {
-    throw new Error(`Queue '${queueName}' not found`);
-  }
+  const queue = getQueue(queueName);
 
   return await queue.clean(grace, limit, type);
 }
@@ -258,4 +212,13 @@ export async function cleanQueue(
  */
 export function getQueueNames(): string[] {
   return Object.keys(queues);
+}
+
+function getQueue(queueName: string): Queue {
+  const queueFactory = queues[queueName];
+  if (!queueFactory) {
+    throw new Error(`Queue '${queueName}' not found`);
+  }
+
+  return queueFactory();
 }

@@ -12,6 +12,53 @@ import {
   getQueueNames,
 } from '../../services/queue/queue-stats.service';
 
+const queueStatsSchema = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    counts: {
+      type: 'object',
+      properties: {
+        waiting: { type: 'number' },
+        active: { type: 'number' },
+        completed: { type: 'number' },
+        failed: { type: 'number' },
+        delayed: { type: 'number' },
+        paused: { type: 'number' },
+      },
+    },
+    lastJob: {
+      anyOf: [
+        {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            processedOn: { type: 'number' },
+            finishedOn: { type: 'number' },
+          },
+        },
+        { type: 'null' },
+      ],
+    },
+  },
+};
+
+const queueListResponseSchema = {
+  type: 'object',
+  properties: {
+    success: { type: 'boolean' },
+    queues: { type: 'array', items: queueStatsSchema },
+  },
+};
+
+const queueErrorResponseSchema = {
+  type: 'object',
+  properties: {
+    success: { type: 'boolean' },
+    message: { type: 'string' },
+  },
+};
+
 export async function queueRoutes(fastify: FastifyInstance) {
   // Only SUPER_ADMIN can access queue management
   const superAdminOnly = [authMiddleware(fastify), requireRole('SUPER_ADMIN')];
@@ -24,7 +71,7 @@ export async function queueRoutes(fastify: FastifyInstance) {
       schema: {
         tags: ['queues'],
         summary: 'Lista kolejek BullMQ ze statystykami (SUPER_ADMIN)',
-        response: { 200: { type: 'object' } },
+        response: { 200: queueListResponseSchema, 500: queueErrorResponseSchema },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -53,7 +100,15 @@ export async function queueRoutes(fastify: FastifyInstance) {
       schema: {
         tags: ['queues'],
         summary: 'Lista nazw dostępnych kolejek',
-        response: { 200: { type: 'object' } },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              success: { type: 'boolean' },
+              queues: { type: 'array', items: { type: 'string' } },
+            },
+          },
+        },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -74,7 +129,16 @@ export async function queueRoutes(fastify: FastifyInstance) {
         tags: ['queues'],
         summary: 'Statystyki konkretnej kolejki',
         params: { type: 'object', properties: { name: { type: 'string' } } },
-        response: { 200: { type: 'object' } },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              success: { type: 'boolean' },
+              stats: queueStatsSchema,
+            },
+          },
+          404: queueErrorResponseSchema,
+        },
       },
     },
     async (request: FastifyRequest<{ Params: { name: string } }>, reply: FastifyReply) => {

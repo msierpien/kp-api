@@ -32,6 +32,10 @@ export interface ProductsQuery {
   search?: string;
   catalogId?: string;
   isActive?: boolean;
+  stockBelow?: number;
+  hasBarcode?: boolean;
+  hasShopMapping?: boolean;
+  hasWholesaleOffer?: boolean;
 }
 
 function requireTenantId() {
@@ -43,13 +47,39 @@ function requireTenantId() {
 
 export async function getProducts(query: ProductsQuery = {}) {
   const tenantId = requireTenantId();
-  const { page = 1, limit = 50, search, catalogId, isActive } = query;
+  const {
+    page = 1,
+    limit = 50,
+    search,
+    catalogId,
+    isActive,
+    stockBelow,
+    hasBarcode,
+    hasShopMapping,
+    hasWholesaleOffer,
+  } = query;
   const skip = (page - 1) * limit;
 
   const where: any = {};
   if (tenantId) where.tenantId = tenantId;
   if (catalogId) where.catalogId = catalogId;
   if (isActive !== undefined) where.isActive = isActive;
+  if (stockBelow !== undefined) where.currentStock = { lt: stockBelow };
+  if (hasBarcode !== undefined) {
+    where.barcodes = hasBarcode
+      ? { some: { isActive: true } }
+      : { none: { isActive: true } };
+  }
+  if (hasShopMapping !== undefined) {
+    where.shopProductMappings = hasShopMapping
+      ? { some: { isActive: true } }
+      : { none: { isActive: true } };
+  }
+  if (hasWholesaleOffer !== undefined) {
+    where.wholesaleMappings = hasWholesaleOffer
+      ? { some: { isActive: true } }
+      : { none: { isActive: true } };
+  }
   if (search) {
     where.OR = [
       { sku: { contains: search, mode: 'insensitive' } },
@@ -63,7 +93,16 @@ export async function getProducts(query: ProductsQuery = {}) {
       skip,
       take: limit,
       orderBy: { name: 'asc' },
-      include: { catalog: true },
+      include: {
+        catalog: true,
+        _count: {
+          select: {
+            barcodes: { where: { isActive: true } },
+            shopProductMappings: { where: { isActive: true } },
+            wholesaleMappings: { where: { isActive: true } },
+          },
+        },
+      },
     }),
     prisma.warehouseProduct.count({ where }),
   ]);
@@ -651,7 +690,7 @@ async function prepareDocumentItems(
 
     let scannedEan = item.scannedEan?.trim() || undefined;
     let quantityMultiplier = item.quantityMultiplier;
-    let barcodeId = item.barcodeId;
+    const barcodeId = item.barcodeId;
 
     if (barcodeId) {
       const barcode = await prisma.warehouseProductBarcode.findFirst({

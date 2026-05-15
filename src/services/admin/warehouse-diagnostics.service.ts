@@ -29,6 +29,12 @@ export interface StockDiscrepanciesQuery {
   includeZero?: boolean;
 }
 
+export interface WarehouseDashboardQuery {
+  lowStockThreshold?: number;
+  limit?: number;
+  failedSinceDays?: number;
+}
+
 function requireTenantId() {
   const tenantId = getTenantId();
   if (!tenantId) throw new Error('Brak kontekstu tenanta');
@@ -196,6 +202,156 @@ export async function getProductMovements(productId: string, query: ProductMovem
   };
 }
 
+export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {}) {
+  const tenantId = requireTenantId();
+  const lowStockThreshold = normalizeLowStockThreshold(query.lowStockThreshold);
+  const limit = normalizeDashboardLimit(query.limit);
+  const failedSinceDays = normalizeFailedSinceDays(query.failedSinceDays);
+  const failedSince = new Date(Date.now() - failedSinceDays * 24 * 60 * 60 * 1000);
+
+  const productBaseWhere: Prisma.WarehouseProductWhereInput = { tenantId, isActive: true };
+  const lowStockWhere: Prisma.WarehouseProductWhereInput = {
+    ...productBaseWhere,
+    currentStock: { lt: lowStockThreshold },
+  };
+  const negativeStockWhere: Prisma.WarehouseProductWhereInput = {
+    ...productBaseWhere,
+    currentStock: { lt: 0 },
+  };
+  const withoutBarcodeWhere: Prisma.WarehouseProductWhereInput = {
+    ...productBaseWhere,
+    barcodes: { none: { isActive: true } },
+  };
+  const withoutShopMappingWhere: Prisma.WarehouseProductWhereInput = {
+    ...productBaseWhere,
+    shopProductMappings: { none: { isActive: true } },
+  };
+  const withoutWholesaleOfferWhere: Prisma.WarehouseProductWhereInput = {
+    ...productBaseWhere,
+    wholesaleMappings: { none: { isActive: true } },
+  };
+  const failedStockSyncWhere: Prisma.StockSyncLogWhereInput = {
+    tenantId,
+    status: 'FAILED',
+    createdAt: { gte: failedSince },
+  };
+  const failedWholesaleSyncWhere: Prisma.WholesaleSyncLogWhereInput = {
+    tenantId,
+    status: 'FAILED',
+    startedAt: { gte: failedSince },
+  };
+
+  const [
+    totalProducts,
+    activeProducts,
+    inactiveProducts,
+    lowStockProductsCount,
+    negativeStockProductsCount,
+    productsWithoutBarcodeCount,
+    productsWithoutShopMappingCount,
+    productsWithoutWholesaleOfferCount,
+    failedStockSyncLogsCount,
+    failedWholesaleSyncLogsCount,
+    draftDocumentsCount,
+    lowStockProducts,
+    negativeStockProducts,
+    productsWithoutBarcode,
+    productsWithoutShopMapping,
+    productsWithoutWholesaleOffer,
+    failedStockSyncLogs,
+    failedWholesaleSyncLogs,
+  ] = await Promise.all([
+    prisma.warehouseProduct.count({ where: { tenantId } }),
+    prisma.warehouseProduct.count({ where: productBaseWhere }),
+    prisma.warehouseProduct.count({ where: { tenantId, isActive: false } }),
+    prisma.warehouseProduct.count({ where: lowStockWhere }),
+    prisma.warehouseProduct.count({ where: negativeStockWhere }),
+    prisma.warehouseProduct.count({ where: withoutBarcodeWhere }),
+    prisma.warehouseProduct.count({ where: withoutShopMappingWhere }),
+    prisma.warehouseProduct.count({ where: withoutWholesaleOfferWhere }),
+    prisma.stockSyncLog.count({ where: failedStockSyncWhere }),
+    prisma.wholesaleSyncLog.count({ where: failedWholesaleSyncWhere }),
+    prisma.warehouseDocument.count({ where: { tenantId, status: 'DRAFT' } }),
+    prisma.warehouseProduct.findMany({
+      where: lowStockWhere,
+      take: limit,
+      orderBy: [{ currentStock: 'asc' }, { name: 'asc' }],
+      include: { catalog: true },
+    }),
+    prisma.warehouseProduct.findMany({
+      where: negativeStockWhere,
+      take: limit,
+      orderBy: [{ currentStock: 'asc' }, { name: 'asc' }],
+      include: { catalog: true },
+    }),
+    prisma.warehouseProduct.findMany({
+      where: withoutBarcodeWhere,
+      take: limit,
+      orderBy: { name: 'asc' },
+      include: { catalog: true },
+    }),
+    prisma.warehouseProduct.findMany({
+      where: withoutShopMappingWhere,
+      take: limit,
+      orderBy: { name: 'asc' },
+      include: { catalog: true },
+    }),
+    prisma.warehouseProduct.findMany({
+      where: withoutWholesaleOfferWhere,
+      take: limit,
+      orderBy: { name: 'asc' },
+      include: { catalog: true },
+    }),
+    prisma.stockSyncLog.findMany({
+      where: failedStockSyncWhere,
+      take: limit,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        warehouseProduct: { select: { id: true, sku: true, name: true, currentStock: true } },
+        shop: { select: { id: true, name: true, platform: true } },
+      },
+    }),
+    prisma.wholesaleSyncLog.findMany({
+      where: failedWholesaleSyncWhere,
+      take: limit,
+      orderBy: { startedAt: 'desc' },
+      include: {
+        provider: { select: { id: true, name: true, platform: true, syncEnabled: true, isActive: true } },
+      },
+    }),
+  ]);
+
+  return {
+    summary: {
+      totalProducts,
+      activeProducts,
+      inactiveProducts,
+      lowStockProducts: lowStockProductsCount,
+      negativeStockProducts: negativeStockProductsCount,
+      productsWithoutBarcode: productsWithoutBarcodeCount,
+      productsWithoutShopMapping: productsWithoutShopMappingCount,
+      productsWithoutWholesaleOffer: productsWithoutWholesaleOfferCount,
+      failedStockSyncLogs: failedStockSyncLogsCount,
+      failedWholesaleSyncLogs: failedWholesaleSyncLogsCount,
+      draftDocuments: draftDocumentsCount,
+    },
+    thresholds: {
+      lowStockThreshold,
+      failedSinceDays,
+      limit,
+    },
+    sections: {
+      lowStockProducts,
+      negativeStockProducts,
+      productsWithoutBarcode,
+      productsWithoutShopMapping,
+      productsWithoutWholesaleOffer,
+      failedStockSyncLogs,
+      failedWholesaleSyncLogs,
+    },
+  };
+}
+
 export async function getStockDiscrepancies(query: StockDiscrepanciesQuery = {}) {
   const tenantId = requireTenantId();
   const products = await prisma.warehouseProduct.findMany({
@@ -234,6 +390,28 @@ export async function getStockDiscrepancies(query: StockDiscrepanciesQuery = {})
     .filter((entry) => query.includeZero === true || entry.difference !== 0);
 
   return { data, total: data.length };
+}
+
+function normalizeLowStockThreshold(value?: number) {
+  if (value === undefined) return 1;
+  if (!Number.isFinite(value)) throw new Error('lowStockThreshold musi być liczbą');
+  return value;
+}
+
+function normalizeDashboardLimit(value?: number) {
+  if (value === undefined) return 10;
+  if (!Number.isInteger(value) || value < 1 || value > 50) {
+    throw new Error('limit dashboardu musi być liczbą całkowitą od 1 do 50');
+  }
+  return value;
+}
+
+function normalizeFailedSinceDays(value?: number) {
+  if (value === undefined) return 7;
+  if (!Number.isInteger(value) || value < 1 || value > 90) {
+    throw new Error('failedSinceDays musi być liczbą całkowitą od 1 do 90');
+  }
+  return value;
 }
 
 function getDocumentDirection(type: string) {

@@ -1600,6 +1600,109 @@ Efekt końcowy:
 - EAN z feedów hurtowni zaczyna realnie pomagać;
 - nadal nie ma automatycznego przyjęcia towaru ani zmiany `currentStock`.
 
+### Sprint operacyjny 1: widoczność i kontrola magazynu
+
+Cel: dać panelowi admina jeden punkt startowy do pokazania operatorowi, co wymaga uwagi w magazynie.
+
+Status backend/API: wdrożone w `kp-api` 2026-05-15.
+
+Zakres backend:
+
+- `GET /admin/warehouse/dashboard` - zbiorczy dashboard problemów magazynu;
+- rozszerzenie `GET /admin/warehouse/products` o filtry operacyjne;
+- liczniki produktów bez EAN, bez mapowania sklepu, bez oferty hurtowni;
+- lista produktów z niskim albo ujemnym stanem;
+- lista ostatnich błędów stock sync do sklepów;
+- lista ostatnich błędów sync hurtowni;
+- bez migracji i bez zmiany modelu danych.
+
+Endpoint dashboardu:
+
+```text
+GET /admin/warehouse/dashboard?lowStockThreshold=1&limit=10&failedSinceDays=7
+```
+
+Parametry:
+
+- `lowStockThreshold` - próg niskiego stanu, domyślnie `1`;
+- `limit` - liczba pozycji w każdej sekcji, od `1` do `50`, domyślnie `10`;
+- `failedSinceDays` - ile dni wstecz liczyć błędy sync, od `1` do `90`, domyślnie `7`.
+
+Odpowiedź:
+
+```json
+{
+  "summary": {
+    "totalProducts": 120,
+    "activeProducts": 118,
+    "inactiveProducts": 2,
+    "lowStockProducts": 8,
+    "negativeStockProducts": 1,
+    "productsWithoutBarcode": 14,
+    "productsWithoutShopMapping": 9,
+    "productsWithoutWholesaleOffer": 30,
+    "failedStockSyncLogs": 2,
+    "failedWholesaleSyncLogs": 1,
+    "draftDocuments": 3
+  },
+  "thresholds": {
+    "lowStockThreshold": 1,
+    "failedSinceDays": 7,
+    "limit": 10
+  },
+  "sections": {
+    "lowStockProducts": [],
+    "negativeStockProducts": [],
+    "productsWithoutBarcode": [],
+    "productsWithoutShopMapping": [],
+    "productsWithoutWholesaleOffer": [],
+    "failedStockSyncLogs": [],
+    "failedWholesaleSyncLogs": []
+  }
+}
+```
+
+Rozszerzone filtry produktów:
+
+```text
+GET /admin/warehouse/products?stockBelow=1
+GET /admin/warehouse/products?hasBarcode=false
+GET /admin/warehouse/products?hasShopMapping=false
+GET /admin/warehouse/products?hasWholesaleOffer=false
+```
+
+Dodatkowo odpowiedź produktu zawiera `_count`:
+
+- `_count.barcodes`;
+- `_count.shopProductMappings`;
+- `_count.wholesaleMappings`.
+
+Wytyczne dla panelu admina:
+
+1. Dodać kafle/liczniki na dashboardzie magazynu
+   - niski stan;
+   - ujemny stan;
+   - brak EAN;
+   - brak mapowania sklepu;
+   - brak oferty hurtowni;
+   - błędy sync.
+
+2. Każdy kafel powinien prowadzić do listy produktów z odpowiednim filtrem
+   - niski stan: `stockBelow`;
+   - brak EAN: `hasBarcode=false`;
+   - brak mapowania sklepu: `hasShopMapping=false`;
+   - brak oferty hurtowni: `hasWholesaleOffer=false`.
+
+3. Błędy sync pokazywać jako rzeczy do sprawdzenia, nie jako blokadę pracy
+   - stock sync można ponawiać przez istniejące `POST /admin/warehouse/stock-sync-logs/:id/retry`;
+   - błędy hurtowni prowadzą do `Integracje -> Hurtownie -> Logi`.
+
+Efekt końcowy:
+
+- operator zaczyna dzień od widoku priorytetów;
+- produkty wymagające porządkowania są łatwe do znalezienia;
+- panel nie musi wykonywać wielu osobnych zapytań tylko po to, żeby policzyć problemy.
+
 ### Etap 8: synchronizacja cen do sklepów
 
 Cel: rozdzielić cenę zakupu, cenę sprzedaży i publikację ceny do sklepów.

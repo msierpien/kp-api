@@ -1,8 +1,8 @@
 # Plan rozbudowy modułu magazynowego: katalogi produktów i kontrola stanów
 
 > Data aktualizacji: 2026-05-15
-> Status: dokument architektoniczny po implementacji backendu Etapu 1: katalogi produktów magazynowych
-> Zakres: magazyn, katalogi, dokumenty, stany, EAN/skaner, mapowania sklepów, stock sync, Swagger i proces Git
+> Status: dokument architektoniczny po implementacji backendu Etapów 1-8 i sprintu operacyjnego dashboardu
+> Zakres: magazyn, katalogi, dokumenty, stany, EAN/skaner, mapowania sklepów, stock sync, hurtownie CSV, diagnostyka, Swagger i proces Git
 
 ---
 
@@ -10,7 +10,7 @@
 
 Moduł magazynowy ma być centralnym miejscem kontroli fizycznych produktów, stanów i dokumentów magazynowych dla wielu sklepów. Inspirujemy się podejściem BaseLinkera, w którym magazyn nie jest tylko listą stanów, ale ma katalog produktów, a produkty są przypisane do katalogu i dopiero z niego mapowane do sklepów, magazynów oraz integracji.
 
-Najważniejsza zmiana w kolejnym kroku to dodanie warstwy `WarehouseCatalog`:
+Backend ma już dodaną warstwę `WarehouseCatalog`:
 
 ```text
 Tenant
@@ -29,13 +29,12 @@ Taki podział daje porządek teraz i zostawia miejsce na przyszły moduł produk
 
 ### Robimy teraz
 
-- Katalog produktów magazynowych jako warstwę nadrzędną nad `WarehouseProduct`.
-- Przypisanie każdego produktu magazynowego do jednego katalogu.
-- Domyślny katalog dla każdego tenanta i migrację istniejących produktów.
-- Filtrowanie produktów po katalogu.
-- Rozszerzenie importu/mapowania produktów sklepu o wybór katalogu przy tworzeniu produktu magazynowego.
-- Pełne opisanie nowych endpointów w Swagger/OpenAPI.
-- Procedurę Git przed implementacją i po implementacji.
+- Domknięcie panelu admina dla wdrożonych endpointów magazynu.
+- Widok katalogów magazynowych i wybór katalogu w formularzach produktów.
+- Dashboard operacyjny magazynu oparty o `GET /admin/warehouse/dashboard`.
+- Widoki diagnostyczne: logi stock sync, ruchy produktu i rozbieżności stanów.
+- Panel integracji hurtowni: providery CSV, preview, synchronizacja, logi i mapowania.
+- Aktualizację `warehouse.md` jako źródła prawdy dla dalszych sprintów.
 
 ### Zostaje w magazynie, bez przebudowy
 
@@ -87,11 +86,31 @@ Etap 1 wdrożony po dodaniu katalogów:
 - rozszerzenie `createWarehouseProductFromMapping()` o opcjonalny `catalogId`;
 - tag `warehouse-catalogs` i schema w Swagger/OpenAPI.
 
-Do domknięcia poza backendiem `kp-api`:
+Kolejne etapy backend/API wdrożone po Etapie 1:
+
+- Etap 2: logi stock sync, retry synchronizacji, ruchy produktu i rozbieżności stanów;
+- Etap 3: integracja hurtowni przez CSV, providery, mapowania i logi syncu;
+- Etap 4: workflow importu produktów sklepu, import logi, automapowanie i bulk create;
+- Etap 5: EAN z PrestaShop, preview importu i readiness sklepu;
+- Etap 6: preview i mapper CSV dla hurtowni;
+- Etap 7: automapowanie produktów hurtowni po SKU i EAN;
+- Sprint operacyjny 1: `GET /admin/warehouse/dashboard` i filtry operacyjne produktów.
+- Etap 8: `PriceSyncLog`, kolejka `price-sync`, worker i ręczna synchronizacja `retailPrice` do PrestaShop.
+
+Do domknięcia poza backendiem `kp-api`, w panelu admina:
 
 - widok katalogów w panelu admina;
 - filtr katalogu na liście produktów w panelu;
-- wybór katalogu przy tworzeniu produktu z panelu i z mapowania sklepu.
+- wybór katalogu przy tworzeniu produktu z panelu i z mapowania sklepu;
+- dashboard magazynu z kaflami problemów;
+- logi stock sync z retry;
+- historia ruchów produktu i widok rozbieżności stanów;
+- `Integracje -> Hurtownie`: providery, preview CSV, sync, harmonogram, logi, mapowania i auto-mapowanie;
+- oferty hurtowni widoczne przy produktach magazynowych.
+
+Następny backend po domknięciu panelu:
+
+- Etap 9: dokładniejsza kontrola stanów, alerty, rezerwacje i raporty.
 
 ---
 
@@ -609,32 +628,33 @@ Cel: upewnić się, że następne zmiany startują z czystego i opisanego stanu.
 Status pre-flight z 2026-05-15:
 
 - aktualna gałąź: `feature/warehouse-negative-stock-guard`;
-- ostatni commit: `837fe90 feat: extend warehouse sync flows`;
+- ostatni commit: `48add92 feat: add warehouse operations dashboard`;
 - remote: `origin git@github.com:msierpien/kp-api.git`;
-- gałąź nie ma ustawionego upstreamu, więc `git status -sb` nie pokazuje porównania ahead/behind dla `@{u}`;
-- lokalnie zmieniony jest tylko `warehouse.md`;
-- `git fetch --prune` wykonany przed startem kolejnych prac.
+- gałąź ma ustawiony upstream `origin/feature/warehouse-negative-stock-guard`;
+- `git status -sb` pokazuje branch jako `ahead 1`;
+- lokalnie zmieniany w tym porządkowaniu jest `warehouse.md`;
+- backend katalogów, diagnostyki, hurtowni i dashboardu jest już obecny w repo.
 
 Decyzje dla następnego sprintu:
 
-- `warehouse.md` jest źródłem prawdy dla Etapu 1;
-- implementację katalogów prowadzić w osobnym PR/branchu, rekomendowana nazwa: `feature/warehouse-catalogs`;
-- do Etapu 1 nie dorzucać hurtowni, synchronizacji cen, rezerwacji ani PIM;
-- każdy PR z katalogami musi zawierać migrację Prisma, aktualizację Swagger/OpenAPI i checklistę testów z sekcji 12;
-- przed właściwą implementacją katalogów warto ustawić upstream dla branchu roboczego albo utworzyć nowy branch od aktualnej bazy.
+- `warehouse.md` pozostaje źródłem prawdy dla prac magazynowych;
+- najbliższy sprint jest frontendowy: panel katalogów, dashboard magazynu, diagnostyka i hurtownie;
+- Etap 8 (`price-sync`) jest wdrożony po decyzji, że dalsze prace prowadzimy tylko po stronie API;
+- do kolejnego PR nie dorzucać PIM, multi-warehouse, lokalizacji półkowych ani automatycznych PZ z hurtowni;
+- jeśli frontend jest w osobnym repo, przenieść do niego sekcje "Wytyczne dla panelu admina" jako kryteria akceptacji.
 
 Checklist Etapu 0:
 
-- Ustalić aktualną gałąź roboczą i porównać ją z remote przez procedurę z sekcji Git.
-- Zdecydować, czy `warehouse.md` jest źródłem prawdy dla najbliższego sprintu magazynowego.
-- Rozbić implementację katalogów na osobny branch/PR.
-- W issue albo opisie PR przepisać kryteria akceptacji z sekcji test plan.
+- Potwierdzić lokalizację repo panelu admina.
+- Utworzyć branch frontendowy dla prac panelowych.
+- Przepisać kryteria akceptacji panelu z Etapów 1-7 i sprintu operacyjnego do issue albo opisu PR.
+- Po wdrożeniu panelu wrócić do Etapu 9 dokładniejszej kontroli stanów.
 
 Efekt końcowy:
 
-- wiadomo, co wchodzi do etapu katalogów;
-- nie mieszamy katalogów z hurtownią, cenami ani PIM-em;
-- Swagger i migracja są wymagane od pierwszego PR.
+- wiadomo, że backend magazynu dla Etapów 1-7 jest gotowy do obsłużenia panelu;
+- prace frontendowe nie mieszają się z synchronizacją cen ani PIM-em;
+- Etap 9 ma jasny warunek startu: panel korzysta już z obecnych API.
 
 ### Etap 1: katalogi produktów magazynowych
 
@@ -1707,19 +1727,42 @@ Efekt końcowy:
 
 Cel: rozdzielić cenę zakupu, cenę sprzedaży i publikację ceny do sklepów.
 
+Status backend/API: wdrożone w `kp-api` 2026-05-15.
+
 Zakres backend:
 
-- model `PriceSyncLog`;
-- kolejka `price-sync`;
-- klient ceny dla PrestaShop;
+- model `PriceSyncLog` - wdrożone;
+- migracja `price_sync_logs` - wdrożone;
+- kolejka `price-sync` i worker BullMQ - wdrożone;
+- klient ceny dla PrestaShop Webservice - wdrożone;
+- endpoint ręcznej synchronizacji ceny produktu - wdrożone;
+- logi synchronizacji cen i retry z poziomu API - wdrożone;
 - później klient ceny dla WooCommerce;
-- endpoint ręcznej synchronizacji ceny produktu;
 - opcja `autoCalculateRetail` według marży albo reguły tenanta.
+
+Endpointy Etapu 8:
+
+```text
+POST /admin/warehouse/products/:id/sync-price
+GET  /admin/warehouse/price-sync-logs?page=1&limit=50&status=FAILED&shopId=&warehouseProductId=&dateFrom=&dateTo=
+POST /admin/warehouse/price-sync-logs/:id/retry
+```
+
+Przykładowe body synchronizacji ceny do jednego sklepu:
+
+```json
+{
+  "shopId": "shop_id"
+}
+```
+
+Bez `shopId` backend kolejkuje synchronizację do wszystkich aktywnych mapowań produktu.
 
 Decyzja na start:
 
 - synchronizujemy tylko `retailPrice`;
 - `purchasePrice` zostaje wewnętrzne;
+- worker zawsze czyta aktualną `retailPrice` z bazy w chwili wykonania joba;
 - price groups, promocje i cenniki per sklep odkładamy na później.
 
 Efekt końcowy:
@@ -1779,13 +1822,36 @@ Efekt końcowy:
 
 | Sprint | Priorytet | Zakres | Dlaczego teraz |
 |---|---|---|---|
-| 1 | P0 | `WarehouseCatalog`, migracja, API, Swagger | Fundament pod porządkowanie produktów |
-| 2 | P0 | Panel katalogów i filtr produktów po katalogu | Operator od razu korzysta z nowej warstwy |
-| 3 | P1 | Logi stock sync, historia ruchów, ponowienie syncu | Mniej ręcznej diagnostyki |
-| 4 | P1 | Hurtownia: provider, mapowania, ręczny sync | Automatyzacja danych wejściowych |
-| 5 | P2 | Price sync i `PriceSyncLog` | Kontrolowana publikacja cen |
-| 6 | P2 | Alerty stanów, rezerwacje, raporty | Dojrzałość operacyjna |
+| 1 | P0 | Panel katalogów i filtr produktów po katalogu | Backend katalogów jest gotowy, operator musi móc z niego korzystać |
+| 2 | P0 | Dashboard magazynu i filtry operacyjne produktów | Jeden punkt startowy do pracy z brakami i błędami |
+| 3 | P1 | Logi stock sync, historia ruchów, ponowienie syncu, rozbieżności | Mniej ręcznej diagnostyki i szybsze naprawianie stanów |
+| 4 | P1 | Panel hurtowni: provider, preview CSV, sync, logi, mapowania, auto-map | Backend integracji hurtowni jest gotowy, brakuje workflow operatora |
+| 5 | P1 | Import produktów sklepu: readiness, preview, automapowanie, bulk create | Pełny proces importu bez ręcznego klikania każdej pozycji |
+| 6 | P2 | Alerty stanów, rezerwacje, raporty | Dojrzałość operacyjna po ustabilizowaniu podstaw |
 | 7 | P3 | Produkt/PIM | Dopiero po stabilnym magazynie |
+
+### Backlog wykonawczy dla panelu admina
+
+P0:
+
+- `Magazyn -> Katalogi`: lista, dodawanie, edycja, usuwanie, blokada usuwania katalogu domyślnego i katalogu z produktami.
+- `Magazyn -> Produkty`: filtr katalogu, kolumna katalogu, liczniki EAN/mapowań/ofert, filtry `stockBelow`, `hasBarcode`, `hasShopMapping`, `hasWholesaleOffer`.
+- Formularz produktu: wybór aktywnego katalogu przy tworzeniu i edycji, z domyślnym katalogiem jako wartością startową.
+- Mapowania sklepu: modal wyboru katalogu przy tworzeniu produktu magazynowego z mapowania.
+- Dashboard magazynu: kafle problemów z `GET /admin/warehouse/dashboard` prowadzące do odpowiednio przefiltrowanych list.
+
+P1:
+
+- Logi stock sync: tabela, filtry, podgląd błędu i akcja `Ponów sync`.
+- Karta produktu: sekcja ruchów magazynowych z filtrami typu/statusu/daty.
+- Rozbieżności stanów: widok `currentStock` kontra stan liczony z dokumentów oraz akcja przeliczenia cache.
+- `Integracje -> Hurtownie`: lista providerów, szczegóły, sync ręczny, harmonogram, logi i tabela mapowań.
+- Kreator hurtowni CSV: preview, mapowanie kolumn, zapis providera, uruchomienie syncu i auto-mapowanie.
+- Import produktów sklepu: readiness, preview importu, automapowanie po SKU/EAN i bulk create produktów w wybranym katalogu.
+
+P2:
+
+- Alerty i raporty stanów po stabilizacji panelu operacyjnego.
 
 ---
 

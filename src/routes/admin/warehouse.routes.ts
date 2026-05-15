@@ -2,6 +2,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import * as warehouseService from '../../services/admin/warehouse.service';
 import * as barcodeService from '../../services/admin/warehouse-barcodes.service';
 import * as diagnosticsService from '../../services/admin/warehouse-diagnostics.service';
+import * as priceSyncService from '../../services/price/price-sync.service';
 import { getStock, getProductStock, recalculateStockCache } from '../../services/admin/warehouse-stock.service';
 
 export async function warehouseRoutes(fastify: FastifyInstance) {
@@ -223,6 +224,45 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd aktualizacji cen';
       const status = message.includes('nie znaleziony') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/products/:id/sync-price', {
+    schema: {
+      tags: ['price-sync'],
+      summary: 'Wyślij cenę sprzedaży produktu do aktywnych sklepów',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        properties: {
+          shopId: { type: 'string' },
+        },
+      },
+      response: {
+        202: {
+          type: 'object',
+          properties: {
+            enqueued: { type: 'integer' },
+            logs: { type: 'array', items: { type: 'object' } },
+          },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: Pick<priceSyncService.SyncProductPriceOptions, 'shopId'>;
+  }>, reply: FastifyReply) => {
+    try {
+      const result = await priceSyncService.syncProductPrice(request.params.id, request.body ?? {});
+      return reply.status(202).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd synchronizacji ceny';
+      const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }
   });
@@ -609,6 +649,57 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
       return reply.status(201).send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd ponawiania synchronizacji stanu';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  // ─── Price sync diagnostics ───────────────────────────────────────────────
+
+  fastify.get('/price-sync-logs', {
+    schema: {
+      tags: ['price-sync'],
+      summary: 'Logi synchronizacji cen sprzedaży do sklepów',
+      querystring: {
+        type: 'object',
+        properties: {
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+          shopId: { type: 'string' },
+          warehouseProductId: { type: 'string' },
+          status: { type: 'string', enum: ['PENDING', 'PROCESSING', 'SUCCESS', 'FAILED'] },
+          dateFrom: { type: 'string' },
+          dateTo: { type: 'string' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: priceSyncService.PriceSyncLogsQuery }>, reply: FastifyReply) => {
+    try {
+      const result = await priceSyncService.getPriceSyncLogs(request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania logów synchronizacji cen';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/price-sync-logs/:id/retry', {
+    schema: {
+      tags: ['price-sync'],
+      summary: 'Ponów synchronizację ceny na podstawie logu',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await priceSyncService.retryPriceSyncLog(request.params.id);
+      return reply.status(201).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd ponawiania synchronizacji ceny';
       const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }

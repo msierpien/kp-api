@@ -2,6 +2,7 @@ import { Queue, Job } from 'bullmq';
 import { getRenderQueue } from './render.queue';
 import { getEmailQueue } from './email.queue';
 import { getStockSyncQueue } from './stock-sync.queue';
+import { getPriceSyncQueue } from './price-sync.queue';
 
 // Map queue names to queue instances
 function getQueues(): Record<string, Queue> {
@@ -9,6 +10,7 @@ function getQueues(): Record<string, Queue> {
     render: getRenderQueue() as Queue,
     email: getEmailQueue() as Queue,
     stockSync: getStockSyncQueue() as Queue,
+    priceSync: getPriceSyncQueue() as Queue,
   };
 }
 

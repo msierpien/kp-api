@@ -38,6 +38,27 @@ export class PrestaShopStockClient implements ShopStockClient {
     });
   }
 
+  async updateProductPrice(externalProductId: string, price: number): Promise<void> {
+    if (!Number.isFinite(price) || price < 0) {
+      throw new Error(`Invalid product price for PrestaShop product ${externalProductId}`);
+    }
+
+    const productXml = await this.fetchWebServiceText(`products/${encodeURIComponent(externalProductId)}`, {
+      headers: { Accept: 'application/xml' },
+    });
+
+    const payload = replaceProductPriceXml(productXml, price);
+
+    await this.fetchWebServiceText(`products/${encodeURIComponent(externalProductId)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/xml',
+        Accept: 'application/xml',
+      },
+      body: payload,
+    });
+  }
+
   private async findStockAvailable(externalProductId: string) {
     const data = await this.fetchWebService<any>(
       `stock_availables?filter[id_product]=[${encodeURIComponent(externalProductId)}]&display=full`,
@@ -93,6 +114,38 @@ export class PrestaShopStockClient implements ShopStockClient {
     const text = await response.text();
     return text ? JSON.parse(text) : {} as T;
   }
+
+  private async fetchWebServiceText(endpoint: string, init: RequestInit = {}): Promise<string> {
+    const url = `${this.baseUrl}/api/${endpoint}`;
+    const authHeader = 'Basic ' + Buffer.from(`${this.apiKey}:`).toString('base64');
+
+    let response = await fetch(url, {
+      ...init,
+      headers: {
+        Authorization: authHeader,
+        ...(init.headers || {}),
+      },
+    });
+
+    if (!response.ok && response.status === 401) {
+      const separator = endpoint.includes('?') ? '&' : '?';
+      const urlWithKey = `${url}${separator}ws_key=${encodeURIComponent(this.apiKey)}`;
+      response = await fetch(urlWithKey, {
+        ...init,
+        headers: {
+          ...(init.headers || {}),
+        },
+      });
+    }
+
+    const text = await response.text();
+
+    if (!response.ok) {
+      throw new Error(`PrestaShop API error: ${response.status} ${text.slice(0, 200)}`);
+    }
+
+    return text;
+  }
 }
 
 function buildStockAvailableXml(input: {
@@ -127,4 +180,20 @@ function escapeXml(value: string) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+}
+
+function replaceProductPriceXml(xml: string, price: number) {
+  const normalizedPrice = price.toFixed(2);
+  const withoutReadonlyFields = xml
+    .replace(/\s*<manufacturer_name\b[^>]*>[\s\S]*?<\/manufacturer_name>/g, '')
+    .replace(/\s*<quantity\b[^>]*>[\s\S]*?<\/quantity>/g, '');
+
+  if (!/<price\b[^>]*>[\s\S]*?<\/price>/.test(withoutReadonlyFields)) {
+    throw new Error('PrestaShop product XML does not contain a price field');
+  }
+
+  return withoutReadonlyFields.replace(
+    /<price\b([^>]*)>[\s\S]*?<\/price>/,
+    `<price$1>${normalizedPrice}</price>`,
+  );
 }

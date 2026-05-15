@@ -39,6 +39,7 @@ model Tenant {
   warehouseBarcodes   WarehouseProductBarcode[]
   shopProductMappings ShopProductMapping[]
   stockSyncLogs       StockSyncLog[]
+  priceSyncLogs       PriceSyncLog[]
   shopProductImportLogs ShopProductImportLog[]
   wholesaleProviders  WholesaleProvider[]
   wholesaleMappings   WholesaleProductMapping[]
@@ -91,6 +92,7 @@ model Shop {
   personalizedProducts PersonalizedProduct[]
   productMappings      ShopProductMapping[]
   stockSyncLogs        StockSyncLog[]
+  priceSyncLogs        PriceSyncLog[]
   productImportLogs    ShopProductImportLog[]
 
   @@index([tenantId])
@@ -544,6 +546,7 @@ model WarehouseProduct {
   barcodes            WarehouseProductBarcode[]
   shopProductMappings ShopProductMapping[]
   stockSyncLogs       StockSyncLog[]
+  priceSyncLogs       PriceSyncLog[]
   wholesaleMappings   WholesaleProductMapping[]
 
   @@unique([tenantId, sku])
@@ -591,6 +594,7 @@ model ShopProductMapping {
   tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   shop             Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
   warehouseProduct WarehouseProduct? @relation(fields: [warehouseProductId], references: [id], onDelete: SetNull)
+  priceSyncLogs    PriceSyncLog[]
 
   @@unique([shopId, externalProductId])
   @@index([tenantId])
@@ -736,6 +740,36 @@ model StockSyncLog {
   @@index([status])
   @@index([createdAt])
   @@map("stock_sync_logs")
+}
+
+model PriceSyncLog {
+  id                   String    @id @default(cuid())
+  tenantId             String    @map("tenant_id")
+  warehouseProductId   String    @map("warehouse_product_id")
+  shopId               String    @map("shop_id")
+  shopProductMappingId String    @map("shop_product_mapping_id")
+  triggeredBy          String    @map("triggered_by")
+  priceBefore          Decimal?  @map("price_before") @db.Decimal(10, 2)
+  priceAfter           Decimal   @map("price_after") @db.Decimal(10, 2)
+  status               String    @default("PENDING")
+  errorMessage         String?   @map("error_message") @db.Text
+  attemptCount         Int       @default(0) @map("attempt_count")
+  syncedAt             DateTime? @map("synced_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  tenant             Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseProduct   WarehouseProduct   @relation(fields: [warehouseProductId], references: [id], onDelete: Cascade)
+  shop               Shop               @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  shopProductMapping ShopProductMapping @relation(fields: [shopProductMappingId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([warehouseProductId])
+  @@index([shopId])
+  @@index([shopProductMappingId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("price_sync_logs")
 }
 
 model WholesaleProvider {

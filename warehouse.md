@@ -831,26 +831,88 @@ Efekt końcowy:
 
 Cel: zasilić magazyn danymi z hurtowni bez ręcznego przepisywania stanów i cen zakupu.
 
+Status backend/API v1: wdrożone w `kp-api` dla feedów CSV.
+
 Zakres backend:
 
-- modele `WholesaleProvider`, `WholesaleProductMapping`, `WholesaleSyncLog`;
-- obsługa źródeł `XML_FEED`, `CSV`, później `REST_API`;
-- ręczny sync hurtowni z wynikiem;
-- kolejka `wholesale-sync`;
-- mapowanie produktu hurtowni do `WarehouseProduct`;
-- aktualizacja `purchasePrice` i `lastKnownStock`;
-- opcjonalne tworzenie dokumentu `PZ` albo korekty magazynowej przy zmianie stanu.
+- modele `WholesaleProvider`, `WholesaleProductMapping`, `WholesaleSyncLog` - wdrożone;
+- obsługa źródła `CSV_FEED` - wdrożone;
+- presety mapowania kolumn dla `GODAN` i `PARTYDECO` - wdrożone;
+- ręczny sync hurtowni z wynikiem - wdrożone;
+- mapowanie produktu hurtowni do `WarehouseProduct` - wdrożone;
+- zapis `lastKnownStock`, `lastKnownPrice`, EAN, nazwy, kategorii i snapshotu CSV - wdrożone;
+- kolejka `wholesale-sync`, automatyczne PZ i korekty magazynowe - odłożone na kolejny krok po walidacji feedów.
+
+Endpointy Etapu 3:
+
+```text
+GET    /admin/wholesale/providers
+POST   /admin/wholesale/providers
+GET    /admin/wholesale/providers/:id
+PUT    /admin/wholesale/providers/:id
+DELETE /admin/wholesale/providers/:id
+POST   /admin/wholesale/providers/:id/sync
+
+GET    /admin/wholesale/providers/:id/mappings
+PUT    /admin/wholesale/mappings/:id
+
+GET    /admin/wholesale/providers/:id/logs
+```
+
+Przykład providera Godan:
+
+```json
+{
+  "name": "Godan",
+  "feedUrl": "WKLEJ_URL_FEEDU_GODAN",
+  "preset": "GODAN",
+  "platform": "CSV_FEED",
+  "syncEnabled": true,
+  "isActive": true
+}
+```
+
+Przykład providera PartyDeco:
+
+```json
+{
+  "name": "PartyDeco",
+  "feedUrl": "WKLEJ_URL_FEEDU_PARTYDECO",
+  "preset": "PARTYDECO",
+  "platform": "CSV_FEED",
+  "syncEnabled": true,
+  "isActive": true
+}
+```
+
+Presety kolumn:
+
+| Provider | SKU | EAN | Nazwa | Stan | Cena zakupu | Kategoria |
+|---|---|---|---|---|---|---|
+| Godan | `Kod produktu` | `Kod EAN` | `Nazwa` | `Stan magazynowy` | `Cena netto jednostkowa` | brak |
+| PartyDeco | `code` | `ean` | `name` | `stock` | `price_net` | `category_path` |
+
+Wytyczne dla panelu admina:
+
+- dodać widok `Magazyn -> Hurtownie`;
+- umożliwić dodanie providera CSV z presetem `GODAN`, `PARTYDECO` albo `CUSTOM`;
+- nie zapisywać feed URL-i z tokenami w kodzie frontendu ani w repo, tylko w bazie przez API;
+- dodać przycisk `Synchronizuj teraz`;
+- po syncu pokazać log: pobrane, utworzone mapowania, zaktualizowane mapowania, pominięte, status;
+- dodać tabelę produktów hurtowni z filtrem `niezamapowane`;
+- dodać akcję mapowania produktu hurtowni do istniejącego `WarehouseProduct`.
 
 Decyzja na start:
 
 - w v1 hurtownia nie tworzy nowych produktów automatycznie;
 - najpierw importuje kandydatów do mapowania;
 - operator decyduje, który produkt hurtowni odpowiada produktowi magazynowemu.
+- v1 nie tworzy dokumentów `PZ` i nie zmienia `WarehouseProduct.currentStock`.
 
 Efekt końcowy:
 
-- stany i ceny zakupu mogą być aktualizowane z feedu;
-- ruch magazynowy dalej jest dokumentowany;
+- stany i ceny zakupu z feedu są widoczne na mapowaniach hurtowni;
+- ruch magazynowy nadal wymaga świadomej decyzji operatora;
 - błędy feedu są widoczne w `WholesaleSyncLog`.
 
 ### Etap 4: synchronizacja cen do sklepów

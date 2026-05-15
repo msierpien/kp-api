@@ -19,6 +19,7 @@ import { queueRoutes } from './queue.routes';
 import { fontsRoutes } from './fonts.routes';
 import { warehouseCatalogsRoutes } from './warehouse-catalogs.routes';
 import { warehouseRoutes } from './warehouse.routes';
+import { wholesaleRoutes } from './wholesale.routes';
 
 export async function adminRoutes(fastify: FastifyInstance) {
   // Apply auth middleware to all admin routes
@@ -44,4 +45,5 @@ export async function adminRoutes(fastify: FastifyInstance) {
   fastify.register(fontsRoutes, { prefix: '/fonts' });
   fastify.register(warehouseCatalogsRoutes, { prefix: '/warehouse/catalogs' });
   fastify.register(warehouseRoutes, { prefix: '/warehouse' });
+  fastify.register(wholesaleRoutes, { prefix: '/wholesale' });
 }

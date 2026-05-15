@@ -39,6 +39,9 @@ model Tenant {
   warehouseBarcodes   WarehouseProductBarcode[]
   shopProductMappings ShopProductMapping[]
   stockSyncLogs       StockSyncLog[]
+  wholesaleProviders  WholesaleProvider[]
+  wholesaleMappings   WholesaleProductMapping[]
+  wholesaleSyncLogs   WholesaleSyncLog[]
 
   @@index([status])
   @@index([slug])
@@ -512,6 +515,12 @@ enum WarehouseDocumentStatus {
   CANCELLED // Anulowany
 }
 
+enum WholesalePlatform {
+  CSV_FEED
+  XML_FEED
+  REST_API
+}
+
 model WarehouseProduct {
   id           String   @id @default(cuid())
   tenantId     String   @map("tenant_id")
@@ -533,6 +542,7 @@ model WarehouseProduct {
   barcodes            WarehouseProductBarcode[]
   shopProductMappings ShopProductMapping[]
   stockSyncLogs       StockSyncLog[]
+  wholesaleMappings   WholesaleProductMapping[]
 
   @@unique([tenantId, sku])
   @@index([tenantId])
@@ -697,4 +707,81 @@ model StockSyncLog {
   @@index([status])
   @@index([createdAt])
   @@map("stock_sync_logs")
+}
+
+model WholesaleProvider {
+  id          String            @id @default(cuid())
+  tenantId    String            @map("tenant_id")
+  name        String
+  platform    WholesalePlatform @default(CSV_FEED)
+  feedUrl     String            @map("feed_url") @db.Text
+  configJson  Json?             @map("config_json")
+  syncEnabled Boolean           @default(true) @map("sync_enabled")
+  isActive    Boolean           @default(true) @map("is_active")
+  lastSyncAt  DateTime?         @map("last_sync_at")
+  createdAt   DateTime          @default(now()) @map("created_at")
+  updatedAt   DateTime          @updatedAt @map("updated_at")
+
+  tenant   Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  mappings WholesaleProductMapping[]
+  syncLogs WholesaleSyncLog[]
+
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@index([tenantId, syncEnabled])
+  @@map("wholesale_providers")
+}
+
+model WholesaleProductMapping {
+  id                 String    @id @default(cuid())
+  tenantId           String    @map("tenant_id")
+  providerId         String    @map("provider_id")
+  externalSku        String    @map("external_sku")
+  externalEan        String?   @map("external_ean")
+  externalName       String?   @map("external_name")
+  externalCategory   String?   @map("external_category")
+  warehouseProductId String?   @map("warehouse_product_id")
+  lastKnownStock     Decimal?  @map("last_known_stock") @db.Decimal(10, 3)
+  lastKnownPrice     Decimal?  @map("last_known_price") @db.Decimal(10, 2)
+  payloadJson        Json?     @map("payload_json")
+  isActive           Boolean   @default(true) @map("is_active")
+  lastSyncAt         DateTime? @map("last_sync_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider         WholesaleProvider  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  warehouseProduct WarehouseProduct?  @relation(fields: [warehouseProductId], references: [id], onDelete: SetNull)
+
+  @@unique([providerId, externalSku])
+  @@index([tenantId])
+  @@index([providerId])
+  @@index([warehouseProductId])
+  @@index([tenantId, externalSku])
+  @@index([tenantId, isActive])
+  @@map("wholesale_product_mappings")
+}
+
+model WholesaleSyncLog {
+  id              String    @id @default(cuid())
+  tenantId        String    @map("tenant_id")
+  providerId      String    @map("provider_id")
+  status          String    @default("SUCCESS")
+  itemsFetched    Int       @default(0) @map("items_fetched")
+  mappingsCreated Int       @default(0) @map("mappings_created")
+  mappingsUpdated Int       @default(0) @map("mappings_updated")
+  skipped         Int       @default(0)
+  errorMessage    String?   @map("error_message") @db.Text
+  startedAt       DateTime  @default(now()) @map("started_at")
+  finishedAt      DateTime? @map("finished_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider WholesaleProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([providerId])
+  @@index([status])
+  @@index([startedAt])
+  @@map("wholesale_sync_logs")
 }

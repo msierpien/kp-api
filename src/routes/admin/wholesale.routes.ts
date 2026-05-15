@@ -191,6 +191,36 @@ export async function wholesaleRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.post('/providers/:id/auto-map', {
+    schema: {
+      tags: ['wholesale'],
+      summary: 'Automatycznie powiąż produkty hurtowni z magazynem po SKU i EAN',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        properties: {
+          activeOnly: { type: 'boolean', default: true },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: wholesaleService.AutoMapWholesaleProviderOptions;
+  }>, reply: FastifyReply) => {
+    try {
+      const result = await wholesaleService.autoMapWholesaleProvider(request.params.id, request.body ?? {});
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd automatycznego mapowania hurtowni';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   fastify.get('/providers/:id/mappings', {
     schema: {
       tags: ['wholesale'],

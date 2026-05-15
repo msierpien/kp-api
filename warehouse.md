@@ -1299,7 +1299,70 @@ Efekt końcowy:
 - nowy niestandardowy CSV można dodać bez deployu backendu;
 - operator widzi kolumny i przykładowe dane przed zapisaniem konfiguracji.
 
-### Etap 7: synchronizacja cen do sklepów
+### Etap 7: automapowanie produktów hurtowni
+
+Cel: ograniczyć ręczne podpinanie produktów hurtowni do magazynu po synchronizacji CSV.
+
+Status backend/API: wdrożone w `kp-api` 2026-05-15.
+
+Zakres backend:
+
+- `POST /admin/wholesale/providers/:id/auto-map` - wdrożone;
+- mapowanie po SKU (`externalSku` -> `WarehouseProduct.sku`) - wdrożone;
+- fallback po EAN (`externalEan` -> `WarehouseProductBarcode.ean`) - wdrożone;
+- wynik z licznikami `mappedBySku`, `mappedByEan`, `skippedNoProduct` - wdrożone;
+- operacja nie zmienia stanów magazynowych i nie tworzy dokumentów `PZ`.
+
+Endpoint Etapu 7:
+
+```text
+POST /admin/wholesale/providers/:id/auto-map
+```
+
+Przykładowe body:
+
+```json
+{
+  "activeOnly": true
+}
+```
+
+Przykładowa odpowiedź:
+
+```json
+{
+  "providerId": "wholesale_provider_godan_default",
+  "scanned": 100,
+  "mapped": 73,
+  "mappedBySku": 60,
+  "mappedByEan": 13,
+  "skippedNoProduct": 27
+}
+```
+
+Wytyczne dla panelu admina:
+
+1. Dodać akcję `Automapuj`
+   - dostępna na szczegółach providera albo nad tabelą mapowań;
+   - po akcji odświeżyć `GET /admin/wholesale/providers/:id/mappings`.
+
+2. Pokazać wynik operatorowi
+   - ile pozycji przeskanowano;
+   - ile podpięto po SKU;
+   - ile podpięto po EAN;
+   - ile nadal wymaga ręcznego mapowania.
+
+3. Nie traktować `skippedNoProduct` jako błąd
+   - to normalny wynik, gdy magazyn nie ma jeszcze odpowiadających produktów;
+   - operator może później utworzyć produkt magazynowy albo zostawić pozycję jako kandydat.
+
+Efekt końcowy:
+
+- po synchronizacji hurtowni operator może jednym kliknięciem podpiąć dużą część produktów;
+- EAN z feedów hurtowni zaczyna realnie pomagać;
+- nadal nie ma automatycznego przyjęcia towaru ani zmiany `currentStock`.
+
+### Etap 8: synchronizacja cen do sklepów
 
 Cel: rozdzielić cenę zakupu, cenę sprzedaży i publikację ceny do sklepów.
 
@@ -1324,7 +1387,7 @@ Efekt końcowy:
 - operator ma log sukcesów i błędów;
 - ceny nie mieszają się z logiką stanów.
 
-### Etap 8: dokładniejsza kontrola stanów
+### Etap 9: dokładniejsza kontrola stanów
 
 Cel: przygotować magazyn do bardziej zaawansowanych procesów bez przedwczesnego multi-warehouse.
 
@@ -1348,7 +1411,7 @@ Efekt końcowy:
 - magazyn zaczyna wspierać decyzje operacyjne, nie tylko przechowuje stan;
 - łatwiej zauważyć braki, rozbieżności i produkty wymagające zamówienia.
 
-### Etap 9: przyszły produkt/PIM
+### Etap 10: przyszły produkt/PIM
 
 Cel: rozbudować produkt dopiero wtedy, gdy magazyn będzie stabilny.
 

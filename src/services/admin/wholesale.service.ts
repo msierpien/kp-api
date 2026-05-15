@@ -85,6 +85,19 @@ export interface PreviewWholesaleProviderResult {
   delimiter: string;
 }
 
+export interface AutoMapWholesaleProviderOptions {
+  activeOnly?: boolean;
+}
+
+export interface AutoMapWholesaleProviderResult {
+  providerId: string;
+  scanned: number;
+  mapped: number;
+  mappedBySku: number;
+  mappedByEan: number;
+  skippedNoProduct: number;
+}
+
 export interface MapWholesaleProductInput {
   warehouseProductId: string | null;
 }
@@ -278,6 +291,69 @@ export async function mapWholesaleProduct(mappingId: string, input: MapWholesale
     data: { warehouseProductId: input.warehouseProductId },
     include: { provider: true, warehouseProduct: { include: { catalog: true } } },
   });
+}
+
+export async function autoMapWholesaleProvider(
+  providerId: string,
+  options: AutoMapWholesaleProviderOptions = {},
+): Promise<AutoMapWholesaleProviderResult> {
+  const tenantId = requireTenantId();
+  await assertProviderBelongsToTenant(providerId, tenantId);
+
+  const mappings = await prisma.wholesaleProductMapping.findMany({
+    where: {
+      tenantId,
+      providerId,
+      warehouseProductId: null,
+      ...(options.activeOnly ?? true ? { isActive: true } : {}),
+    },
+    orderBy: { externalSku: 'asc' },
+  });
+
+  const result: AutoMapWholesaleProviderResult = {
+    providerId,
+    scanned: mappings.length,
+    mapped: 0,
+    mappedBySku: 0,
+    mappedByEan: 0,
+    skippedNoProduct: 0,
+  };
+
+  for (const mapping of mappings) {
+    let product = await prisma.warehouseProduct.findUnique({
+      where: { tenantId_sku: { tenantId, sku: mapping.externalSku } },
+      select: { id: true },
+    });
+    let matchedBy: 'SKU' | 'EAN' | null = product ? 'SKU' : null;
+
+    if (!product && mapping.externalEan) {
+      const barcode = await prisma.warehouseProductBarcode.findFirst({
+        where: { tenantId, ean: mapping.externalEan, isActive: true },
+        select: { warehouseProductId: true },
+      });
+
+      if (barcode) {
+        product = { id: barcode.warehouseProductId };
+        matchedBy = 'EAN';
+      }
+    }
+
+    if (!product) {
+      result.skippedNoProduct++;
+      continue;
+    }
+
+    await prisma.wholesaleProductMapping.update({
+      where: { id: mapping.id },
+      data: { warehouseProductId: product.id },
+    });
+
+    result.mapped++;
+    if (matchedBy === 'SKU') result.mappedBySku++;
+    if (matchedBy === 'EAN') result.mappedByEan++;
+  }
+
+  return result;
 }
 
 export async function getWholesaleSyncLogs(providerId: string, query: WholesaleSyncLogsQuery = {}) {

@@ -122,6 +122,17 @@ export interface UpdateWholesaleSyncIntervalInput {
   intervalMinutes: number;
 }
 
+export interface BulkCreateWarehouseProductsFromWholesaleInput {
+  catalogId?: string;
+  importEan?: boolean;
+}
+
+export interface BulkCreateWarehouseProductsFromWholesaleResult {
+  created: number;
+  skipped: number;
+  skippedDuplicateSku: number;
+}
+
 const PRESET_CONFIGS: Record<Exclude<WholesalePreset, 'CUSTOM'>, WholesaleProviderConfig> = {
   GODAN: {
     preset: 'GODAN',
@@ -343,7 +354,10 @@ export async function getWholesaleMappings(providerId: string, query: WholesaleM
 
 export async function mapWholesaleProduct(mappingId: string, input: MapWholesaleProductInput) {
   const tenantId = requireTenantId();
-  const mapping = await prisma.wholesaleProductMapping.findFirst({ where: { id: mappingId, tenantId } });
+  const mapping = await prisma.wholesaleProductMapping.findFirst({
+    where: { id: mappingId, tenantId },
+    include: { provider: { select: { name: true } } },
+  });
   if (!mapping) throw new Error('Mapowanie produktu hurtowni nie znalezione');
 
   if (input.warehouseProductId) {
@@ -353,11 +367,32 @@ export async function mapWholesaleProduct(mappingId: string, input: MapWholesale
     if (!product) throw new Error('Produkt magazynowy nie znaleziony');
   }
 
-  return prisma.wholesaleProductMapping.update({
+  const updated = await prisma.wholesaleProductMapping.update({
     where: { id: mappingId },
     data: { warehouseProductId: input.warehouseProductId },
     include: { provider: true, warehouseProduct: { include: { catalog: true } } },
   });
+
+  if (input.warehouseProductId && mapping.externalEan) {
+    const existingBarcode = await prisma.warehouseProductBarcode.findFirst({
+      where: { tenantId, ean: mapping.externalEan },
+    });
+    if (!existingBarcode) {
+      await prisma.warehouseProductBarcode.create({
+        data: {
+          tenantId,
+          warehouseProductId: input.warehouseProductId,
+          ean: mapping.externalEan,
+          label: mapping.provider?.name ?? null,
+          quantityMultiplier: new Prisma.Decimal(1),
+          isPrimary: false,
+          isActive: true,
+        },
+      });
+    }
+  }
+
+  return updated;
 }
 
 export async function getWholesaleProductOffers(query: WholesaleProductOffersQuery = {}) {
@@ -397,8 +432,8 @@ export async function getWholesaleProductOffers(query: WholesaleProductOffersQue
     externalEan: string | null;
     externalName: string | null;
     externalCategory: string | null;
-    lastKnownStock: Prisma.Decimal | null;
-    lastKnownPrice: Prisma.Decimal | null;
+    lastKnownStock: number | null;
+    lastKnownPrice: number | null;
     lastSyncAt: Date | null;
     providerLastSyncAt: Date | null;
   }>> = Object.fromEntries(productIds.map((productId) => [productId, []]));
@@ -416,8 +451,8 @@ export async function getWholesaleProductOffers(query: WholesaleProductOffersQue
       externalEan: mapping.externalEan,
       externalName: mapping.externalName,
       externalCategory: mapping.externalCategory,
-      lastKnownStock: mapping.lastKnownStock,
-      lastKnownPrice: mapping.lastKnownPrice,
+      lastKnownStock: mapping.lastKnownStock != null ? mapping.lastKnownStock.toNumber() : null,
+      lastKnownPrice: mapping.lastKnownPrice != null ? mapping.lastKnownPrice.toNumber() : null,
       lastSyncAt: mapping.lastSyncAt,
       providerLastSyncAt: mapping.provider.lastSyncAt,
     });
@@ -1056,6 +1091,87 @@ function mapCsvRecord(record: Record<string, string>, fieldMapping: FieldMapping
     lastKnownStock: parseDecimal(readOptionalField(record, fieldMapping.stock), 3),
     lastKnownPrice: parseDecimal(readOptionalField(record, fieldMapping.price), 2),
   };
+}
+
+export async function bulkCreateWarehouseProductsFromWholesale(
+  providerId: string,
+  input: BulkCreateWarehouseProductsFromWholesaleInput = {},
+): Promise<BulkCreateWarehouseProductsFromWholesaleResult> {
+  const tenantId = requireTenantId();
+  await assertProviderBelongsToTenant(providerId, tenantId);
+
+  const { catalogId, importEan = true } = input;
+
+  const [unmapped, resolvedCatalog] = await Promise.all([
+    prisma.wholesaleProductMapping.findMany({
+      where: { tenantId, providerId, warehouseProductId: null, isActive: true },
+      orderBy: { externalSku: 'asc' },
+    }),
+    catalogId
+      ? prisma.warehouseCatalog.findFirst({ where: { id: catalogId, tenantId } })
+      : prisma.warehouseCatalog.findFirst({ where: { tenantId, isDefault: true, isActive: true } }),
+  ]);
+
+  if (!resolvedCatalog) throw new Error('Nie znaleziono katalogu magazynowego. Utwórz katalog lub wskaż catalogId.');
+  if (unmapped.length === 0) return { created: 0, skipped: 0, skippedDuplicateSku: 0 };
+
+  const existingSkus = new Set(
+    (
+      await prisma.warehouseProduct.findMany({
+        where: {
+          tenantId,
+          sku: { in: unmapped.map((m) => m.externalSku) },
+        },
+        select: { sku: true },
+      })
+    ).map((p) => p.sku),
+  );
+
+  const toCreate = unmapped.filter((m) => !existingSkus.has(m.externalSku));
+  const skippedDuplicateSku = unmapped.length - toCreate.length;
+
+  let created = 0;
+
+  for (const mapping of toCreate) {
+    const product = await prisma.warehouseProduct.create({
+      data: {
+        tenantId,
+        catalogId: resolvedCatalog.id,
+        sku: mapping.externalSku,
+        name: mapping.externalName || mapping.externalSku,
+        unit: 'szt',
+        purchasePrice: mapping.lastKnownPrice,
+        isActive: true,
+      },
+    });
+
+    await prisma.wholesaleProductMapping.update({
+      where: { id: mapping.id },
+      data: { warehouseProductId: product.id },
+    });
+
+    if (importEan && mapping.externalEan) {
+      const existingBarcode = await prisma.warehouseProductBarcode.findFirst({
+        where: { tenantId, ean: mapping.externalEan },
+      });
+      if (!existingBarcode) {
+        await prisma.warehouseProductBarcode.create({
+          data: {
+            tenantId,
+            warehouseProductId: product.id,
+            ean: mapping.externalEan,
+            quantityMultiplier: new Prisma.Decimal(1),
+            isPrimary: true,
+            isActive: true,
+          },
+        });
+      }
+    }
+
+    created++;
+  }
+
+  return { created, skipped: skippedDuplicateSku, skippedDuplicateSku };
 }
 
 function readField(record: Record<string, string>, fieldName: string) {

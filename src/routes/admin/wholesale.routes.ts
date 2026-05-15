@@ -355,6 +355,37 @@ export async function wholesaleRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.post('/providers/:id/bulk-create-products', {
+    schema: {
+      tags: ['wholesale'],
+      summary: 'Utwórz produkty magazynowe z niezamapowanych ofert hurtowni',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        properties: {
+          catalogId: { type: 'string' },
+          importEan: { type: 'boolean', default: true },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: wholesaleService.BulkCreateWarehouseProductsFromWholesaleInput;
+  }>, reply: FastifyReply) => {
+    try {
+      const result = await wholesaleService.bulkCreateWarehouseProductsFromWholesale(request.params.id, request.body ?? {});
+      return reply.status(201).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd tworzenia produktów z hurtowni';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   fastify.get('/providers/:id/logs', {
     schema: {
       tags: ['wholesale'],

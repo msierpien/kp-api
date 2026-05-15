@@ -53,7 +53,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       tags: ['shops'],
       summary: 'Lista integracji z platformami e-commerce',
       response: {
-        200: { type: 'array', items: { type: 'object' } },
+        200: { type: 'array', items: shopResponseSchema },
       },
     },
   }, async (_request: FastifyRequest, reply: FastifyReply) => {

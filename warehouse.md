@@ -659,6 +659,104 @@ Zakres panelu admina:
 - wybór katalogu przy ręcznym tworzeniu produktu;
 - wybór katalogu przy tworzeniu produktu z mapowania sklepu.
 
+Wytyczne dla frontendu panelu admina:
+
+1. Dodać widok `Magazyn -> Katalogi`
+   - tabela: `Nazwa`, `Kod`, `Domyślny`, `Aktywny`, `Liczba produktów`, `Utworzono`, akcje;
+   - akcje: dodaj, edytuj, usuń;
+   - katalog domyślny powinien mieć czytelny znacznik i zablokowaną akcję usunięcia;
+   - przy katalogu z produktami akcja usunięcia powinna być zablokowana albo pokazywać komunikat z API.
+
+2. Dodać formularz katalogu
+   - pola: `name`, `code`, `description`, `isDefault`, `isActive`;
+   - `code` powinien być krótki, techniczny, np. `zaproszenia`, `akcesoria`, `materialy`;
+   - ustawienie `isDefault=true` powinno informować, że poprzedni katalog domyślny zostanie zastąpiony;
+   - nie pozwalać na pusty `name` i pusty `code`.
+
+3. Dodać filtr katalogu na liście produktów magazynowych
+   - pobrać katalogi z `GET /admin/warehouse/catalogs?isActive=true&limit=200`;
+   - dodać select `Wszystkie katalogi` + lista katalogów;
+   - po wyborze katalogu wołać `GET /admin/warehouse/products?catalogId=...`;
+   - w tabeli produktów pokazać nazwę katalogu, jeśli API zwraca `product.catalog`.
+
+4. Dodać katalog do formularza produktu magazynowego
+   - przy tworzeniu produktu dodać select katalogu;
+   - domyślnie wybrać katalog z `isDefault=true`;
+   - jeśli użytkownik nic nie wybierze, backend i tak użyje katalogu domyślnego;
+   - przy edycji produktu pozwolić przenieść produkt do innego aktywnego katalogu.
+
+5. Dodać katalog przy tworzeniu produktu z mapowania sklepu
+   - w akcji `Utwórz produkt magazynowy` z `ShopProductMapping` pokazać modal z wyborem katalogu;
+   - domyślnie wybrać katalog domyślny;
+   - wywołać `POST /admin/shop-mappings/:id/create-product` z body `{ "catalogId": "..." }`;
+   - jeśli backend zwróci istniejący produkt, pokazać komunikat, że mapowanie zostało podpięte do istniejącego SKU.
+
+6. Obsłużyć stany błędów
+   - `400` przy duplikacie `code` katalogu: pokazać komunikat z API;
+   - `400` przy nieaktywnym katalogu: poprosić o wybór aktywnego katalogu;
+   - `404` przy brakującym katalogu: odświeżyć listę katalogów;
+   - `DELETE` katalogu domyślnego albo katalogu z produktami: pokazać komunikat i nie usuwać lokalnie rekordu z tabeli.
+
+Endpointy dla panelu:
+
+```text
+GET    /admin/warehouse/catalogs?page=1&limit=50&search=&isActive=true
+POST   /admin/warehouse/catalogs
+GET    /admin/warehouse/catalogs/:id
+PUT    /admin/warehouse/catalogs/:id
+DELETE /admin/warehouse/catalogs/:id
+GET    /admin/warehouse/catalogs/:id/products?page=1&limit=50
+
+GET    /admin/warehouse/products?catalogId=:catalogId
+POST   /admin/warehouse/products
+PUT    /admin/warehouse/products/:id
+
+POST   /admin/shop-mappings/:id/create-product
+```
+
+Przykładowe body katalogu:
+
+```json
+{
+  "code": "zaproszenia",
+  "name": "Zaproszenia",
+  "description": "Produkty i półprodukty związane z zaproszeniami",
+  "isDefault": false,
+  "isActive": true
+}
+```
+
+Przykładowe body produktu:
+
+```json
+{
+  "catalogId": "catalog_id",
+  "sku": "INV-KOMUNIA-001",
+  "name": "Zaproszenie komunijne - wzór 01",
+  "unit": "szt",
+  "purchasePrice": 4.5,
+  "retailPrice": 12.99
+}
+```
+
+Przykładowe body tworzenia produktu z mapowania:
+
+```json
+{
+  "catalogId": "catalog_id"
+}
+```
+
+Kryteria akceptacji panelu:
+
+- operator widzi listę katalogów i rozpoznaje katalog domyślny;
+- operator może utworzyć i edytować katalog;
+- operator nie może przypadkowo usunąć katalogu domyślnego;
+- lista produktów filtruje się po katalogu;
+- formularz produktu pokazuje i zapisuje `catalogId`;
+- produkt tworzony z mapowania sklepu trafia do wybranego katalogu;
+- po odświeżeniu strony wybrane katalogi i przypisania produktów pozostają zgodne z API.
+
 Efekt końcowy:
 
 - każdy produkt ma katalog;

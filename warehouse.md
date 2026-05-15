@@ -843,6 +843,20 @@ Zakres panelu admina:
 - akcja "przelicz stan" i "ponów sync" dla wybranego produktu;
 - czytelne ostrzeżenia przy ujemnych stanach i nieudanych syncach.
 
+Endpointy do złożenia karty produktu bez osobnego agregatu:
+
+```text
+GET /admin/warehouse/products/:id
+GET /admin/warehouse/products/:id/barcodes
+GET /admin/warehouse/products/:id/movements
+GET /admin/shop-mappings?warehouseProductId=:id
+GET /admin/wholesale/product-offers?productIds=:id
+GET /admin/warehouse/stock-sync-logs?warehouseProductId=:id
+GET /admin/warehouse/price-sync-logs?warehouseProductId=:id
+```
+
+`GET /admin/warehouse/products/:id` zwraca katalog i `_count` aktywnych EAN-ów, mapowań sklepowych oraz ofert hurtowni.
+
 Efekt końcowy:
 
 - operator widzi, dlaczego stan produktu jest taki, a nie inny;
@@ -1696,6 +1710,8 @@ Dodatkowo odpowiedź produktu zawiera `_count`:
 - `_count.barcodes`;
 - `_count.shopProductMappings`;
 - `_count.wholesaleMappings`.
+
+Dotyczy to zarówno `GET /admin/warehouse/products`, jak i `GET /admin/warehouse/products/:id`.
 
 Wytyczne dla panelu admina:
 

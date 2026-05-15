@@ -6,6 +6,7 @@ export interface ShopMappingsQuery {
   page?: number;
   limit?: number;
   shopId?: string;
+  warehouseProductId?: string;
   search?: string;
   isMapped?: boolean;
   isActive?: boolean;
@@ -43,14 +44,15 @@ function requireTenantId() {
 
 export async function getShopMappings(query: ShopMappingsQuery = {}) {
   const tenantId = requireTenantId();
-  const { page = 1, limit = 50, shopId, search, isMapped, isActive } = query;
+  const { page = 1, limit = 50, shopId, warehouseProductId, search, isMapped, isActive } = query;
   const skip = (page - 1) * limit;
 
   const where: Prisma.ShopProductMappingWhereInput = { tenantId };
 
   if (shopId) where.shopId = shopId;
+  if (warehouseProductId) where.warehouseProductId = warehouseProductId;
   if (isActive !== undefined) where.isActive = isActive;
-  if (isMapped !== undefined) {
+  if (isMapped !== undefined && !warehouseProductId) {
     where.warehouseProductId = isMapped ? { not: null } : null;
   }
   if (search) {

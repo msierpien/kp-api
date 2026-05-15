@@ -13,6 +13,7 @@ export async function shopMappingsRoutes(fastify: FastifyInstance) {
           page: { type: 'integer', minimum: 1, default: 1 },
           limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
           shopId: { type: 'string' },
+          warehouseProductId: { type: 'string' },
           search: { type: 'string' },
           isMapped: { type: 'boolean' },
           isActive: { type: 'boolean' },

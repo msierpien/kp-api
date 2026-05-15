@@ -115,7 +115,19 @@ export async function getProductById(id: string) {
   const where: any = { id };
   if (tenantId) where.tenantId = tenantId;
 
-  return prisma.warehouseProduct.findFirst({ where, include: { catalog: true } });
+  return prisma.warehouseProduct.findFirst({
+    where,
+    include: {
+      catalog: true,
+      _count: {
+        select: {
+          barcodes: { where: { isActive: true } },
+          shopProductMappings: { where: { isActive: true } },
+          wholesaleMappings: { where: { isActive: true } },
+        },
+      },
+    },
+  });
 }
 
 export async function createProduct(input: CreateProductInput) {

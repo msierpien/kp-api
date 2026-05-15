@@ -53,8 +53,10 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
       const result = await warehouseService.getProducts(request.query);
       return reply.send(result);
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się pobrać produktów';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
       fastify.log.error(error);
-      return reply.status(500).send({ error: 'Internal Server Error', message: 'Nie udało się pobrać produktów' });
+      return reply.status(status).send({ error: 'Error', message });
     }
   });
 

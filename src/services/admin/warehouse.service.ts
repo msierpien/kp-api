@@ -34,8 +34,15 @@ export interface ProductsQuery {
   isActive?: boolean;
 }
 
-export async function getProducts(query: ProductsQuery = {}) {
+function requireTenantId() {
   const tenantId = getTenantId();
+  const context = getTenantContext();
+  if (!tenantId && context?.role !== 'SUPER_ADMIN') throw new Error('Brak kontekstu tenanta');
+  return tenantId;
+}
+
+export async function getProducts(query: ProductsQuery = {}) {
+  const tenantId = requireTenantId();
   const { page = 1, limit = 50, search, catalogId, isActive } = query;
   const skip = (page - 1) * limit;
 

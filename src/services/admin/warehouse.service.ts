@@ -2,6 +2,7 @@ import prisma from '../../lib/prisma';
 import { Prisma } from '@prisma/client';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
 import { syncStockForProducts } from '../stock/stock-sync.service';
+import { syncProductPrice } from '../price/price-sync.service';
 import { resolveCatalogForProduct } from './warehouse-catalogs.service';
 
 // ─── Products ────────────────────────────────────────────────────────────────
@@ -162,6 +163,9 @@ export async function updateProduct(id: string, input: UpdateProductInput) {
 
   const product = await prisma.warehouseProduct.findFirst({ where });
   if (!product) throw new Error('Produkt nie znaleziony');
+  const shouldSyncPrice = input.retailPrice !== undefined
+    && input.retailPrice !== null
+    && !pricesEqual(product.retailPrice, input.retailPrice);
 
   const data: Prisma.WarehouseProductUpdateInput = { ...input };
   delete (data as any).catalogId;
@@ -171,11 +175,19 @@ export async function updateProduct(id: string, input: UpdateProductInput) {
     data.catalog = { connect: { id: catalog.id } };
   }
 
-  return prisma.warehouseProduct.update({
+  const updatedProduct = await prisma.warehouseProduct.update({
     where: { id },
     data,
     include: { catalog: true },
   });
+
+  if (shouldSyncPrice && tenantId) {
+    syncProductPrice(id, { triggeredBy: 'PRODUCT_PRICE_UPDATE' }).catch((error) => {
+      console.error('[Warehouse] Failed to enqueue automatic price sync:', error);
+    });
+  }
+
+  return updatedProduct;
 }
 
 export async function deleteProduct(id: string) {
@@ -609,6 +621,11 @@ export async function shouldAutoCreateWzForTenant(tenantId: string) {
 
 function normalizeSku(value: string) {
   return value.trim().toLowerCase();
+}
+
+function pricesEqual(currentPrice: Prisma.Decimal | null, nextPrice: number) {
+  if (currentPrice === null) return false;
+  return Math.abs(Number(currentPrice) - nextPrice) < 0.005;
 }
 
 async function calculateProductStock(tenantId: string, productId: string) {

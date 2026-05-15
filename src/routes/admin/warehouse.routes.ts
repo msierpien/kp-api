@@ -3,6 +3,7 @@ import * as warehouseService from '../../services/admin/warehouse.service';
 import * as barcodeService from '../../services/admin/warehouse-barcodes.service';
 import * as diagnosticsService from '../../services/admin/warehouse-diagnostics.service';
 import * as priceSyncService from '../../services/price/price-sync.service';
+import * as prestaReconciliationService from '../../services/prestashop/prestashop-reconciliation.service';
 import { getStock, getProductStock, recalculateStockCache } from '../../services/admin/warehouse-stock.service';
 
 export async function warehouseRoutes(fastify: FastifyInstance) {
@@ -585,6 +586,34 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
       return reply.send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd pobierania rozbieżności stanów';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.get('/prestashop-reconciliation', {
+    schema: {
+      tags: ['warehouse-diagnostics'],
+      summary: 'Porównaj ceny i stany magazynu z aktualnymi danymi w PrestaShop',
+      querystring: {
+        type: 'object',
+        properties: {
+          shopId: { type: 'string' },
+          warehouseProductId: { type: 'string' },
+          limit: { type: 'integer', minimum: 1, maximum: 1000, default: 200 },
+          includeInSync: { type: 'boolean', default: false },
+          priceTolerance: { type: 'number', minimum: 0, default: 0.01 },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Querystring: prestaReconciliationService.PrestaShopReconciliationQuery;
+  }>, reply: FastifyReply) => {
+    try {
+      const result = await prestaReconciliationService.getPrestaShopReconciliation(request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd reconciliation PrestaShop';
       const status = message.includes('Brak kontekstu') ? 400 : 500;
       return reply.status(status).send({ error: 'Error', message });
     }

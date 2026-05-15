@@ -4,6 +4,7 @@ import prisma from '../../lib/prisma';
 import { syncShopOrders, type SyncResult } from '../sync/sync-orders.service';
 import { cleanupStorage } from '../storage/cleanup-storage.service';
 import { syncWholesaleProviderForTenant } from '../admin/wholesale.service';
+import { reconcilePrestaShopForTenant } from '../prestashop/prestashop-reconciliation.service';
 // BullMQ Worker automatycznie przetwarza RenderJobs - nie potrzebujemy crona
 
 /**
@@ -231,6 +232,7 @@ export async function initializeScheduler() {
     
     // Scheduleuj storage cleanup - codziennie o 3:00
     scheduleStorageCleanup();
+    schedulePrestaShopReconciliation();
     
     console.log('[Scheduler] ℹ️  RenderJobs processing handled by BullMQ Worker');
   } catch (error) {
@@ -267,6 +269,67 @@ function scheduleStorageCleanup() {
   );
   
   console.log('[Scheduler] 📅 Scheduled storage cleanup: daily at 3:00 AM');
+}
+
+function schedulePrestaShopReconciliation() {
+  cron.schedule(
+    '15 2 * * *',
+    async () => {
+      console.log('[Scheduler] 🔎 Starting nightly PrestaShop reconciliation...');
+      try {
+        const shops = await prisma.shop.findMany({
+          where: {
+            status: 'ACTIVE',
+            platform: 'PRESTASHOP',
+            productMappings: {
+              some: {
+                isActive: true,
+                warehouseProductId: { not: null },
+              },
+            },
+          },
+          select: {
+            id: true,
+            tenantId: true,
+            name: true,
+          },
+        });
+
+        let scanned = 0;
+        let mismatches = 0;
+        let errors = 0;
+
+        for (const shop of shops) {
+          const result = await reconcilePrestaShopForTenant(shop.tenantId, {
+            shopId: shop.id,
+            limit: 1000,
+            includeInSync: false,
+          });
+
+          scanned += result.summary.scanned;
+          mismatches += result.summary.mismatches;
+          errors += result.summary.errors;
+
+          if (result.summary.returned > 0) {
+            console.warn(
+              `[Scheduler] PrestaShop reconciliation for ${shop.name}: ` +
+              `${result.summary.mismatches} mismatches, ${result.summary.errors} errors`
+            );
+          }
+        }
+
+        console.log(
+          `[Scheduler] ✅ Nightly PrestaShop reconciliation completed: ` +
+          `${scanned} scanned, ${mismatches} mismatches, ${errors} errors`
+        );
+      } catch (error) {
+        console.error('[Scheduler] ❌ Nightly PrestaShop reconciliation failed:', error);
+      }
+    },
+    { timezone: 'Europe/Warsaw' }
+  );
+
+  console.log('[Scheduler] 📅 Scheduled PrestaShop reconciliation: daily at 2:15 AM');
 }
 
 /**

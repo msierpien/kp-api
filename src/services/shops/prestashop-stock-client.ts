@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 import { Buffer } from 'node:buffer';
-import type { ShopStockClient } from './shop-stock-client.interface';
+import type { ShopProductInventorySnapshot, ShopStockClient } from './shop-stock-client.interface';
 
 export class PrestaShopStockClient implements ShopStockClient {
   private baseUrl: string;
@@ -59,6 +59,25 @@ export class PrestaShopStockClient implements ShopStockClient {
     });
   }
 
+  async getProductInventorySnapshot(externalProductId: string): Promise<ShopProductInventorySnapshot> {
+    const [product, stockAvailable] = await Promise.all([
+      this.fetchWebService<any>(`products/${encodeURIComponent(externalProductId)}`),
+      this.findStockAvailable(externalProductId),
+    ]);
+
+    const productData = product.product || (product.products && product.products[0]) || product;
+    const price = productData?.price === undefined || productData.price === ''
+      ? undefined
+      : Number(productData.price);
+
+    return {
+      externalProductId,
+      price: Number.isFinite(price) ? price : undefined,
+      stock: stockAvailable?.quantity,
+      stockAvailableId: stockAvailable?.id,
+    };
+  }
+
   private async findStockAvailable(externalProductId: string) {
     const data = await this.fetchWebService<any>(
       `stock_availables?filter[id_product]=[${encodeURIComponent(externalProductId)}]&display=full`,
@@ -78,6 +97,7 @@ export class PrestaShopStockClient implements ShopStockClient {
       idShopGroup: entry.id_shop_group === undefined ? undefined : String(entry.id_shop_group),
       dependsOnStock: entry.depends_on_stock === undefined ? undefined : String(entry.depends_on_stock),
       outOfStock: entry.out_of_stock === undefined ? undefined : String(entry.out_of_stock),
+      quantity: entry.quantity === undefined ? undefined : Number(entry.quantity),
     };
   }
 

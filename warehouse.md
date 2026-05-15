@@ -72,6 +72,8 @@ Na 2026-05-15 w repo są już wdrożone kluczowe elementy magazynu:
 - EAN-y i skaner z obsługą wielu kodów na produkt oraz przelicznika opakowań.
 - Auto-WZ z zamówień jako `DRAFT`, z opcjonalnym auto-confirm.
 - `StockSyncLog`, kolejka `stock-sync` i worker synchronizacji stanów do PrestaShop.
+- `PriceSyncLog`, kolejka `price-sync`, worker oraz automatyczna synchronizacja `retailPrice` po zmianie ceny.
+- Diagnostyka PrestaShop reconciliation: porównanie live ceny/stanu w Presta z naszym magazynem.
 - Endpoint rekalibracji cache `currentStock`.
 - Swagger pod `/docs` przez `src/plugins/swagger-docs.plugin.ts`.
 
@@ -95,7 +97,8 @@ Kolejne etapy backend/API wdrożone po Etapie 1:
 - Etap 6: preview i mapper CSV dla hurtowni;
 - Etap 7: automapowanie produktów hurtowni po SKU i EAN;
 - Sprint operacyjny 1: `GET /admin/warehouse/dashboard` i filtry operacyjne produktów.
-- Etap 8: `PriceSyncLog`, kolejka `price-sync`, worker i ręczna synchronizacja `retailPrice` do PrestaShop.
+- Etap 8: `PriceSyncLog`, kolejka `price-sync`, worker, ręczna i automatyczna synchronizacja `retailPrice` do PrestaShop.
+- Etap 8a: reconciliation PrestaShop, czyli wykrywanie rozbieżności ceny/stanu bez uznawania Presty za źródło prawdy.
 
 Do domknięcia poza backendiem `kp-api`, w panelu admina:
 
@@ -351,6 +354,33 @@ Reguła:
 2. `stock-sync` odpytuje bieżący `currentStock`, nie ufa wartości z job data.
 3. Dla każdego aktywnego `ShopProductMapping` wysyła stan do sklepu.
 4. `StockSyncLog` zapisuje wynik.
+
+### Synchronizacja PrestaShop: decyzje architektoniczne
+
+Źródłem prawdy dla stanów i cen jest nasz magazyn. PrestaShop jest odbiorcą danych publikowanych przez API, a ręczne zmiany wykonane w Preście traktujemy jako rozbieżność do wykrycia i wyjaśnienia, nie jako automatyczne nadpisanie magazynu.
+
+Na MVP nie potrzebujemy modułu PrestaShop do wysyłania cen i stanów. Backend używa PrestaShop Webservice:
+
+- stany wysyła przez zasób `stock_availables`, aktualizując `quantity`;
+- ceny wysyła przez zasób `products`, aktualizując cenę produktu;
+- mapowanie sklepu do magazynu idzie przez `ShopProductMapping.externalProductId`.
+
+Moduł PrestaShop `kpconnector` może powstać później jako notyfikator zdarzeń, jeśli potrzebna będzie synchronizacja bliżej czasu rzeczywistego. Wtedy moduł powinien podpinać się pod hooki typu `actionOrderStatusPostUpdate`, `actionValidateOrder`, `actionProductUpdate`, `actionProductAttributeUpdate` i `actionUpdateQuantity`, a następnie wysyłać podpisany `POST` do Fastify. Taki webhook ma uruchamiać import albo reconciliation, ale nadal nie zmienia zasady: magazyn pozostaje źródłem prawdy.
+
+Reconciliation działa kontrolnie:
+
+1. Pobiera aktywne mapowania produktów do PrestaShop.
+2. Dla każdego produktu pobiera live snapshot ceny i stanu z Presty.
+3. Porównuje `WarehouseProduct.retailPrice` i `currentStock` z danymi sklepu.
+4. Zwraca różnice jako diagnostykę z akcją `REMOTE_SHOULD_BE_UPDATED`, bez automatycznego nadpisywania Presty w tym samym kroku.
+
+Endpoint diagnostyczny:
+
+```text
+GET /admin/warehouse/prestashop-reconciliation?shopId=&warehouseProductId=&limit=200&includeInSync=false&priceTolerance=0.01
+```
+
+Scheduler uruchamia reconciliation codziennie o `02:15 Europe/Warsaw` i loguje liczbę przeskanowanych mapowań, rozbieżności i błędów. To jest alarm operacyjny, nie mechanizm naprawczy.
 
 ---
 
@@ -1743,7 +1773,7 @@ Efekt końcowy:
 
 Cel: rozdzielić cenę zakupu, cenę sprzedaży i publikację ceny do sklepów.
 
-Status backend/API: wdrożone w `kp-api` 2026-05-15.
+Status backend/API: wdrożone w `kp-api` 2026-05-15, rozszerzone o auto-sync ceny i reconciliation PrestaShop.
 
 Zakres backend:
 
@@ -1752,7 +1782,11 @@ Zakres backend:
 - kolejka `price-sync` i worker BullMQ - wdrożone;
 - klient ceny dla PrestaShop Webservice - wdrożone;
 - endpoint ręcznej synchronizacji ceny produktu - wdrożone;
+- automatyczne kolejkowanie `price-sync` po zmianie `retailPrice` - wdrożone;
 - logi synchronizacji cen i retry z poziomu API - wdrożone;
+- odczyt live snapshotu ceny i stanu z PrestaShop - wdrożone;
+- endpoint reconciliation ceny/stanu względem PrestaShop - wdrożone;
+- nocny reconciliation scheduler - wdrożone;
 - później klient ceny dla WooCommerce;
 - opcja `autoCalculateRetail` według marży albo reguły tenanta.
 
@@ -1762,6 +1796,7 @@ Endpointy Etapu 8:
 POST /admin/warehouse/products/:id/sync-price
 GET  /admin/warehouse/price-sync-logs?page=1&limit=50&status=FAILED&shopId=&warehouseProductId=&dateFrom=&dateTo=
 POST /admin/warehouse/price-sync-logs/:id/retry
+GET  /admin/warehouse/prestashop-reconciliation?shopId=&warehouseProductId=&limit=200&includeInSync=false&priceTolerance=0.01
 ```
 
 Przykładowe body synchronizacji ceny do jednego sklepu:
@@ -1779,12 +1814,16 @@ Decyzja na start:
 - synchronizujemy tylko `retailPrice`;
 - `purchasePrice` zostaje wewnętrzne;
 - worker zawsze czyta aktualną `retailPrice` z bazy w chwili wykonania joba;
+- zmiana `retailPrice` w produkcie magazynowym automatycznie tworzy logi i joby dla aktywnych mapowań;
+- PrestaShop nie jest źródłem prawdy, więc reconciliation wykrywa różnice, ale ich nie naprawia bez osobnego joba synchronizacji;
+- moduł PrestaShop nie jest potrzebny do publikowania cen i stanów; ewentualny `kpconnector` ma być tylko webhookowym notyfikatorem zdarzeń;
 - price groups, promocje i cenniki per sklep odkładamy na później.
 
 Efekt końcowy:
 
 - zmiana ceny magazynowej może trafić do sklepów kontrolowanym procesem;
 - operator ma log sukcesów i błędów;
+- operator ma widok rozbieżności między magazynem i PrestaShop;
 - ceny nie mieszają się z logiką stanów.
 
 ### Etap 9: dokładniejsza kontrola stanów

@@ -233,6 +233,32 @@ export async function shopMappingsRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.post('/bulk/create-products-by-filter', {
+    schema: {
+      tags: ['shop-mappings'],
+      summary: 'Hurtowo utwórz produkty magazynowe z mapowań pasujących do filtrów',
+      body: {
+        type: 'object',
+        properties: {
+          shopId: { type: 'string' },
+          search: { type: 'string' },
+          isMapped: { type: 'boolean' },
+          isActive: { type: 'boolean' },
+          catalogId: { type: ['string', 'null'] },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: shopProductImportService.BulkCreateWarehouseProductsFromFiltersInput }>, reply: FastifyReply) => {
+    try {
+      const result = await shopProductImportService.bulkCreateWarehouseProductsFromFilters(request.body ?? {});
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd hurtowego tworzenia produktów magazynowych po filtrach';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   fastify.put('/:id', {
     schema: {
       tags: ['shop-mappings'],

@@ -56,6 +56,13 @@ export interface BulkCreateWarehouseProductsInput extends CreateWarehouseProduct
   mappingIds: string[];
 }
 
+export interface BulkCreateWarehouseProductsFromFiltersInput extends CreateWarehouseProductFromMappingOptions {
+  shopId?: string;
+  search?: string;
+  isMapped?: boolean;
+  isActive?: boolean;
+}
+
 export interface BulkCreateWarehouseProductsResult {
   requested: number;
   created: number;
@@ -325,6 +332,41 @@ export async function bulkCreateWarehouseProductsFromMappings(
   }
 
   return result;
+}
+
+export async function bulkCreateWarehouseProductsFromFilters(
+  input: BulkCreateWarehouseProductsFromFiltersInput,
+): Promise<BulkCreateWarehouseProductsResult> {
+  const tenantId = requireTenantId();
+  if (input.shopId) {
+    const shop = await prisma.shop.findFirst({ where: { id: input.shopId, tenantId }, select: { id: true } });
+    if (!shop) throw new Error('Sklep nie znaleziony');
+  }
+
+  const where: Prisma.ShopProductMappingWhereInput = {
+    tenantId,
+    warehouseProductId: input.isMapped === true ? { not: null } : null,
+  };
+  if (input.shopId) where.shopId = input.shopId;
+  if (input.isActive !== undefined) where.isActive = input.isActive;
+  if (input.search) {
+    where.OR = [
+      { externalSku: { contains: input.search, mode: 'insensitive' } },
+      { externalName: { contains: input.search, mode: 'insensitive' } },
+      { externalProductId: { contains: input.search, mode: 'insensitive' } },
+    ];
+  }
+
+  const mappings = await prisma.shopProductMapping.findMany({
+    where,
+    orderBy: [{ isActive: 'desc' }, { externalSku: 'asc' }],
+    select: { id: true },
+  });
+
+  return bulkCreateWarehouseProductsFromMappings({
+    mappingIds: mappings.map((mapping) => mapping.id),
+    catalogId: input.catalogId,
+  });
 }
 
 export async function autoMapShopProducts(input: AutoMapShopProductsInput = {}): Promise<AutoMapShopProductsResult> {

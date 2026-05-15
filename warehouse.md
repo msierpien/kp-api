@@ -306,9 +306,11 @@ Reguła:
 ### Import produktów sklepu
 
 1. `POST /admin/shop-mappings/import/:shopId` pobiera katalog sklepu do `ShopProductMapping`.
-2. Operator filtruje niezamapowane produkty.
-3. Przy `POST /admin/shop-mappings/:id/create-product` wybiera katalog docelowy.
-4. Powstaje `WarehouseProduct` i mapowanie zostaje podpięte.
+2. Wynik importu zapisuje się w `ShopProductImportLog`.
+3. Operator filtruje niezamapowane produkty.
+4. Może użyć `POST /admin/shop-mappings/bulk/auto-map`, żeby powiązać pozycje po SKU.
+5. Przy `POST /admin/shop-mappings/:id/create-product` albo `POST /admin/shop-mappings/bulk/create-products` wybiera katalog docelowy.
+6. Powstaje `WarehouseProduct` i mapowanie zostaje podpięte.
 
 ### Dokument magazynowy
 
@@ -1042,7 +1044,104 @@ Efekt końcowy:
 - ruch magazynowy nadal wymaga świadomej decyzji operatora;
 - błędy feedu są widoczne w `WholesaleSyncLog`.
 
-### Etap 4: synchronizacja cen do sklepów
+### Etap 4: workflow importu produktów ze sklepu
+
+Cel: dać panelowi admina pełny proces obsługi importu produktów z PrestaShop bez ręcznego klikania każdego mapowania osobno.
+
+Status backend/API: wdrożone w `kp-api` 2026-05-15.
+
+Zakres backend:
+
+- model `ShopProductImportLog` - wdrożone;
+- logowanie wyniku `POST /admin/shop-mappings/import/:shopId` - wdrożone;
+- historia importów produktów sklepu - wdrożone;
+- automatyczne mapowanie po SKU - wdrożone;
+- hurtowe tworzenie produktów magazynowych z mapowań - wdrożone;
+- wybór `catalogId` przy hurtowym tworzeniu produktów - wdrożone.
+
+Endpointy Etapu 4:
+
+```text
+POST /admin/shop-mappings/import/:shopId
+GET  /admin/shop-mappings/import-logs?page=1&limit=50&shopId=&status=
+
+POST /admin/shop-mappings/bulk/auto-map
+POST /admin/shop-mappings/bulk/create-products
+```
+
+Przykładowy import z PrestaShop:
+
+```json
+{
+  "limit": 500,
+  "activeOnly": true
+}
+```
+
+Przykładowe automatyczne mapowanie po SKU:
+
+```json
+{
+  "shopId": "shop_id",
+  "activeOnly": true
+}
+```
+
+Przykładowe hurtowe tworzenie produktów magazynowych:
+
+```json
+{
+  "mappingIds": ["mapping_id_1", "mapping_id_2"],
+  "catalogId": "catalog_id"
+}
+```
+
+Odpowiedź bulk create rozróżnia:
+
+- `created` - powstał nowy `WarehouseProduct`;
+- `linkedExisting` - istniał już produkt magazynowy o tym SKU i mapowanie zostało podpięte;
+- `skippedAlreadyMapped` - mapowanie było już podpięte;
+- `failed` i `errors` - pozycje, których nie udało się obsłużyć.
+
+Wytyczne dla panelu admina:
+
+1. Dodać widok albo zakładkę `Import produktów sklepu`
+   - wybór sklepu;
+   - limit importu;
+   - przełącznik `tylko aktywne`;
+   - przycisk `Importuj z PrestaShop`.
+
+2. Po imporcie pokazać wynik i historię
+   - `fetched`, `created`, `updated`, `skipped`, `skippedNoSku`;
+   - tabelę z `GET /admin/shop-mappings/import-logs`;
+   - błędy z `errorMessage`, jeśli status to `FAILED`.
+
+3. Dodać akcję `Automapuj po SKU`
+   - wywołać `POST /admin/shop-mappings/bulk/auto-map`;
+   - po zakończeniu odświeżyć listę mapowań;
+   - pokazać liczby `scanned`, `mapped`, `skippedNoProduct`.
+
+4. Dodać hurtowe tworzenie produktów magazynowych
+   - operator zaznacza niezamapowane pozycje;
+   - wybiera katalog docelowy albo zostawia domyślny;
+   - panel woła `POST /admin/shop-mappings/bulk/create-products`;
+   - po odpowiedzi pokazuje, ile produktów utworzono, ile podpięto do istniejącego SKU, a ile pominięto.
+
+Decyzja na start:
+
+- import PrestaShop nadal nie tworzy produktów magazynowych automatycznie;
+- automapowanie działa po SKU, bo `ShopProductMapping` nie przechowuje jeszcze EAN z PrestaShop;
+- EAN z PrestaShop można dodać później przez rozszerzenie `PrestaShopClient.fetchProducts` i pole `externalEan`;
+- panel powinien wymagać świadomej decyzji operatora przed hurtowym utworzeniem produktów.
+
+Efekt końcowy:
+
+- operator importuje katalog sklepu;
+- widzi historię importów;
+- może jednym kliknięciem podpiąć produkty po SKU;
+- może hurtowo utworzyć brakujące produkty magazynowe w wybranym katalogu.
+
+### Etap 5: synchronizacja cen do sklepów
 
 Cel: rozdzielić cenę zakupu, cenę sprzedaży i publikację ceny do sklepów.
 
@@ -1067,7 +1166,7 @@ Efekt końcowy:
 - operator ma log sukcesów i błędów;
 - ceny nie mieszają się z logiką stanów.
 
-### Etap 5: dokładniejsza kontrola stanów
+### Etap 6: dokładniejsza kontrola stanów
 
 Cel: przygotować magazyn do bardziej zaawansowanych procesów bez przedwczesnego multi-warehouse.
 
@@ -1091,7 +1190,7 @@ Efekt końcowy:
 - magazyn zaczyna wspierać decyzje operacyjne, nie tylko przechowuje stan;
 - łatwiej zauważyć braki, rozbieżności i produkty wymagające zamówienia.
 
-### Etap 6: przyszły produkt/PIM
+### Etap 7: przyszły produkt/PIM
 
 Cel: rozbudować produkt dopiero wtedy, gdy magazyn będzie stabilny.
 

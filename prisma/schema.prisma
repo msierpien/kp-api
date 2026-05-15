@@ -39,6 +39,7 @@ model Tenant {
   warehouseBarcodes   WarehouseProductBarcode[]
   shopProductMappings ShopProductMapping[]
   stockSyncLogs       StockSyncLog[]
+  shopProductImportLogs ShopProductImportLog[]
   wholesaleProviders  WholesaleProvider[]
   wholesaleMappings   WholesaleProductMapping[]
   wholesaleSyncLogs   WholesaleSyncLog[]
@@ -90,6 +91,7 @@ model Shop {
   personalizedProducts PersonalizedProduct[]
   productMappings      ShopProductMapping[]
   stockSyncLogs        StockSyncLog[]
+  productImportLogs    ShopProductImportLog[]
 
   @@index([tenantId])
   @@index([status])
@@ -596,6 +598,31 @@ model ShopProductMapping {
   @@index([tenantId, externalSku])
   @@index([tenantId, isActive])
   @@map("shop_product_mappings")
+}
+
+model ShopProductImportLog {
+  id              String    @id @default(cuid())
+  tenantId        String    @map("tenant_id")
+  shopId          String    @map("shop_id")
+  status          String    @default("SUCCESS")
+  itemsFetched    Int       @default(0) @map("items_fetched")
+  mappingsCreated Int       @default(0) @map("mappings_created")
+  mappingsUpdated Int       @default(0) @map("mappings_updated")
+  skipped         Int       @default(0)
+  skippedNoSku    Int       @default(0) @map("skipped_no_sku")
+  errorMessage    String?   @map("error_message") @db.Text
+  startedAt       DateTime  @default(now()) @map("started_at")
+  finishedAt      DateTime? @map("finished_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([shopId])
+  @@index([status])
+  @@index([startedAt])
+  @@map("shop_product_import_logs")
 }
 
 model WarehouseProductBarcode {

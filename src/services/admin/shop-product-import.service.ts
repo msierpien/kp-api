@@ -1,7 +1,7 @@
 import prisma from '../../lib/prisma';
 import { decrypt } from '../../lib/encryption';
 import { getTenantId } from '../../lib/tenant-context';
-import type { Shop } from '@prisma/client';
+import type { Prisma, Shop } from '@prisma/client';
 import { PrestaShopClient, type PrestaShopProductDetails } from '../prestashop/prestashop-client';
 import { resolveCatalogForProduct } from './warehouse-catalogs.service';
 
@@ -19,8 +19,39 @@ export interface ImportProductsOptions {
   activeOnly?: boolean;
 }
 
+export interface ImportLogsQuery {
+  page?: number;
+  limit?: number;
+  shopId?: string;
+  status?: string;
+}
+
 export interface CreateWarehouseProductFromMappingOptions {
   catalogId?: string | null;
+}
+
+export interface BulkCreateWarehouseProductsInput extends CreateWarehouseProductFromMappingOptions {
+  mappingIds: string[];
+}
+
+export interface BulkCreateWarehouseProductsResult {
+  requested: number;
+  created: number;
+  linkedExisting: number;
+  skippedAlreadyMapped: number;
+  failed: number;
+  errors: Array<{ mappingId: string; message: string }>;
+}
+
+export interface AutoMapShopProductsInput {
+  shopId?: string;
+  activeOnly?: boolean;
+}
+
+export interface AutoMapShopProductsResult {
+  scanned: number;
+  mapped: number;
+  skippedNoProduct: number;
 }
 
 function requireTenantId() {
@@ -36,70 +67,113 @@ export async function importProductsFromShop(
   const tenantId = requireTenantId();
   const shop = await prisma.shop.findFirst({ where: { id: shopId, tenantId } });
   if (!shop) throw new Error('Sklep nie znaleziony');
-  if (shop.status !== 'ACTIVE') throw new Error('Sklep jest nieaktywny');
+  const startedAt = new Date();
 
-  const products = await fetchShopProducts(shop, options);
-  const result: ImportProductsResult = {
-    shopId,
-    fetched: products.length,
-    created: 0,
-    updated: 0,
-    skipped: 0,
-    skippedNoSku: 0,
-  };
+  try {
+    if (shop.status !== 'ACTIVE') throw new Error('Sklep jest nieaktywny');
 
-  for (const product of products) {
-    if (!product.sku) {
-      result.skipped++;
-      result.skippedNoSku++;
-      continue;
+    const products = await fetchShopProducts(shop, options);
+    const result: ImportProductsResult = {
+      shopId,
+      fetched: products.length,
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      skippedNoSku: 0,
+    };
+
+    for (const product of products) {
+      if (!product.sku) {
+        result.skipped++;
+        result.skippedNoSku++;
+        continue;
+      }
+
+      const existing = await prisma.shopProductMapping.findUnique({
+        where: {
+          shopId_externalProductId: {
+            shopId,
+            externalProductId: product.id,
+          },
+        },
+      });
+
+      await prisma.shopProductMapping.upsert({
+        where: {
+          shopId_externalProductId: {
+            shopId,
+            externalProductId: product.id,
+          },
+        },
+        create: {
+          tenantId,
+          shopId,
+          externalProductId: product.id,
+          externalSku: product.sku,
+          externalName: product.name,
+          externalPrice: product.price,
+          isActive: product.active,
+          lastSyncAt: new Date(),
+        },
+        update: {
+          externalSku: product.sku,
+          externalName: product.name,
+          externalPrice: product.price,
+          isActive: product.active,
+          lastSyncAt: new Date(),
+        },
+      });
+
+      if (existing) result.updated++;
+      else result.created++;
     }
 
-    const existing = await prisma.shopProductMapping.findUnique({
-      where: {
-        shopId_externalProductId: {
-          shopId,
-          externalProductId: product.id,
-        },
-      },
+    await prisma.shop.update({
+      where: { id: shopId },
+      data: { lastSyncAt: new Date() },
     });
 
-    await prisma.shopProductMapping.upsert({
-      where: {
-        shopId_externalProductId: {
-          shopId,
-          externalProductId: product.id,
-        },
-      },
-      create: {
-        tenantId,
-        shopId,
-        externalProductId: product.id,
-        externalSku: product.sku,
-        externalName: product.name,
-        externalPrice: product.price,
-        isActive: product.active,
-        lastSyncAt: new Date(),
-      },
-      update: {
-        externalSku: product.sku,
-        externalName: product.name,
-        externalPrice: product.price,
-        isActive: product.active,
-        lastSyncAt: new Date(),
-      },
+    await createImportLog(tenantId, shopId, startedAt, {
+      status: 'SUCCESS',
+      itemsFetched: result.fetched,
+      mappingsCreated: result.created,
+      mappingsUpdated: result.updated,
+      skipped: result.skipped,
+      skippedNoSku: result.skippedNoSku,
     });
 
-    if (existing) result.updated++;
-    else result.created++;
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Błąd importu produktów sklepu';
+    await createImportLog(tenantId, shopId, startedAt, {
+      status: 'FAILED',
+      errorMessage: message,
+    });
+    throw error;
   }
+}
 
-  await prisma.shop.update({
-    where: { id: shopId },
-    data: { lastSyncAt: new Date() },
-  });
+export async function getProductImportLogs(query: ImportLogsQuery = {}) {
+  const tenantId = requireTenantId();
+  const { page = 1, limit = 50, shopId, status } = query;
+  const skip = (page - 1) * limit;
 
-  return result;
+  const where: Prisma.ShopProductImportLogWhereInput = { tenantId };
+  if (shopId) where.shopId = shopId;
+  if (status) where.status = status;
+
+  const [data, total] = await Promise.all([
+    prisma.shopProductImportLog.findMany({
+      where,
+      skip,
+      take: limit,
+      orderBy: { startedAt: 'desc' },
+      include: { shop: true },
+    }),
+    prisma.shopProductImportLog.count({ where }),
+  ]);
+
+  return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
 }
 
 export async function createWarehouseProductFromMapping(
@@ -107,41 +181,87 @@ export async function createWarehouseProductFromMapping(
   options: CreateWarehouseProductFromMappingOptions = {},
 ) {
   const tenantId = requireTenantId();
-  return prisma.$transaction(async (tx) => {
-    const mapping = await tx.shopProductMapping.findFirst({
-      where: { id: mappingId, tenantId },
-      include: { shop: true, warehouseProduct: { include: { catalog: true } } },
-    });
+  const result = await prisma.$transaction((tx) => createWarehouseProductFromMappingInTx(tx, tenantId, mappingId, options));
+  return result.mapping;
+}
 
-    if (!mapping) throw new Error('Mapowanie nie znalezione');
-    if (mapping.warehouseProductId) return mapping;
+export async function bulkCreateWarehouseProductsFromMappings(
+  input: BulkCreateWarehouseProductsInput,
+): Promise<BulkCreateWarehouseProductsResult> {
+  const tenantId = requireTenantId();
+  const uniqueMappingIds = Array.from(new Set(input.mappingIds.filter(Boolean)));
+  const result: BulkCreateWarehouseProductsResult = {
+    requested: uniqueMappingIds.length,
+    created: 0,
+    linkedExisting: 0,
+    skippedAlreadyMapped: 0,
+    failed: 0,
+    errors: [],
+  };
 
-    const catalog = await resolveCatalogForProduct(tenantId, options.catalogId, tx);
+  for (const mappingId of uniqueMappingIds) {
+    try {
+      const item = await prisma.$transaction((tx) => createWarehouseProductFromMappingInTx(tx, tenantId, mappingId, input));
+      if (item.alreadyMapped) result.skippedAlreadyMapped++;
+      else if (item.productCreated) result.created++;
+      else result.linkedExisting++;
+    } catch (error) {
+      result.failed++;
+      result.errors.push({
+        mappingId,
+        message: error instanceof Error ? error.message : 'Nieznany błąd',
+      });
+    }
+  }
 
-    const warehouseProduct = await tx.warehouseProduct.upsert({
-      where: {
-        tenantId_sku: {
-          tenantId,
-          sku: mapping.externalSku,
-        },
-      },
-      create: {
-        tenantId,
-        catalogId: catalog.id,
-        sku: mapping.externalSku,
-        name: mapping.externalName || mapping.externalSku,
-        unit: 'szt',
-        retailPrice: mapping.externalPrice,
-      },
-      update: {},
-    });
+  return result;
+}
 
-    return tx.shopProductMapping.update({
-      where: { id: mapping.id },
-      data: { warehouseProductId: warehouseProduct.id },
-      include: { shop: true, warehouseProduct: { include: { catalog: true } } },
-    });
+export async function autoMapShopProducts(input: AutoMapShopProductsInput = {}): Promise<AutoMapShopProductsResult> {
+  const tenantId = requireTenantId();
+
+  if (input.shopId) {
+    const shop = await prisma.shop.findFirst({ where: { id: input.shopId, tenantId } });
+    if (!shop) throw new Error('Sklep nie znaleziony');
+  }
+
+  const where: Prisma.ShopProductMappingWhereInput = {
+    tenantId,
+    warehouseProductId: null,
+  };
+  if (input.shopId) where.shopId = input.shopId;
+  if (input.activeOnly ?? true) where.isActive = true;
+
+  const mappings = await prisma.shopProductMapping.findMany({
+    where,
+    orderBy: { externalSku: 'asc' },
   });
+
+  const result: AutoMapShopProductsResult = {
+    scanned: mappings.length,
+    mapped: 0,
+    skippedNoProduct: 0,
+  };
+
+  for (const mapping of mappings) {
+    const product = await prisma.warehouseProduct.findUnique({
+      where: { tenantId_sku: { tenantId, sku: mapping.externalSku } },
+      select: { id: true },
+    });
+
+    if (!product) {
+      result.skippedNoProduct++;
+      continue;
+    }
+
+    await prisma.shopProductMapping.update({
+      where: { id: mapping.id },
+      data: { warehouseProductId: product.id },
+    });
+    result.mapped++;
+  }
+
+  return result;
 }
 
 async function fetchShopProducts(shop: Shop, options: ImportProductsOptions) {
@@ -173,4 +293,85 @@ async function fetchShopProducts(shop: Shop, options: ImportProductsOptions) {
   }
 
   return products;
+}
+
+async function createWarehouseProductFromMappingInTx(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  mappingId: string,
+  options: CreateWarehouseProductFromMappingOptions = {},
+) {
+  const mapping = await tx.shopProductMapping.findFirst({
+    where: { id: mappingId, tenantId },
+    include: { shop: true, warehouseProduct: { include: { catalog: true } } },
+  });
+
+  if (!mapping) throw new Error('Mapowanie nie znalezione');
+  if (mapping.warehouseProductId) {
+    return { mapping, productCreated: false, alreadyMapped: true };
+  }
+
+  const catalog = await resolveCatalogForProduct(tenantId, options.catalogId, tx);
+  const existingProduct = await tx.warehouseProduct.findUnique({
+    where: {
+      tenantId_sku: {
+        tenantId,
+        sku: mapping.externalSku,
+      },
+    },
+  });
+
+  const warehouseProduct = existingProduct ?? await tx.warehouseProduct.create({
+    data: {
+      tenantId,
+      catalogId: catalog.id,
+      sku: mapping.externalSku,
+      name: mapping.externalName || mapping.externalSku,
+      unit: 'szt',
+      retailPrice: mapping.externalPrice,
+    },
+  });
+
+  const updatedMapping = await tx.shopProductMapping.update({
+    where: { id: mapping.id },
+    data: { warehouseProductId: warehouseProduct.id },
+    include: { shop: true, warehouseProduct: { include: { catalog: true } } },
+  });
+
+  return {
+    mapping: updatedMapping,
+    productCreated: !existingProduct,
+    alreadyMapped: false,
+  };
+}
+
+async function createImportLog(
+  tenantId: string,
+  shopId: string,
+  startedAt: Date,
+  data: {
+    status: string;
+    itemsFetched?: number;
+    mappingsCreated?: number;
+    mappingsUpdated?: number;
+    skipped?: number;
+    skippedNoSku?: number;
+    errorMessage?: string;
+  },
+) {
+  await prisma.shopProductImportLog.create({
+    data: {
+      tenantId,
+      shopId,
+      status: data.status,
+      itemsFetched: data.itemsFetched ?? 0,
+      mappingsCreated: data.mappingsCreated ?? 0,
+      mappingsUpdated: data.mappingsUpdated ?? 0,
+      skipped: data.skipped ?? 0,
+      skippedNoSku: data.skippedNoSku ?? 0,
+      errorMessage: data.errorMessage,
+      startedAt,
+      finishedAt: new Date(),
+    },
+  });
 }

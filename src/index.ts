@@ -35,6 +35,9 @@ type TenantContextData = Pick<JwtPayload, 'tenantId' | 'userId' | 'role'> & {
 };
 
 const server = Fastify({
+  routerOptions: {
+    ignoreTrailingSlash: true,
+  },
   logger: {
     level: 'info',
     transport: config.app.isDevelopment

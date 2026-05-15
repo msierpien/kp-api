@@ -123,6 +123,83 @@ export async function shopMappingsRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.get('/import-logs', {
+    schema: {
+      tags: ['shop-mappings'],
+      summary: 'Historia importów produktów ze sklepów',
+      querystring: {
+        type: 'object',
+        properties: {
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+          shopId: { type: 'string' },
+          status: { type: 'string', enum: ['SUCCESS', 'FAILED', 'PARTIAL'] },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: shopProductImportService.ImportLogsQuery }>, reply: FastifyReply) => {
+    try {
+      const result = await shopProductImportService.getProductImportLogs(request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania historii importów';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/bulk/auto-map', {
+    schema: {
+      tags: ['shop-mappings'],
+      summary: 'Automatycznie powiąż produkty sklepu z magazynem po SKU',
+      body: {
+        type: 'object',
+        properties: {
+          shopId: { type: 'string' },
+          activeOnly: { type: 'boolean', default: true },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: shopProductImportService.AutoMapShopProductsInput }>, reply: FastifyReply) => {
+    try {
+      const result = await shopProductImportService.autoMapShopProducts(request.body ?? {});
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd automatycznego mapowania';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/bulk/create-products', {
+    schema: {
+      tags: ['shop-mappings'],
+      summary: 'Hurtowo utwórz produkty magazynowe z mapowań sklepu',
+      body: {
+        type: 'object',
+        required: ['mappingIds'],
+        properties: {
+          mappingIds: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 500,
+            items: { type: 'string' },
+          },
+          catalogId: { type: ['string', 'null'] },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: shopProductImportService.BulkCreateWarehouseProductsInput }>, reply: FastifyReply) => {
+    try {
+      const result = await shopProductImportService.bulkCreateWarehouseProductsFromMappings(request.body);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd hurtowego tworzenia produktów magazynowych';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   fastify.put('/:id', {
     schema: {
       tags: ['shop-mappings'],

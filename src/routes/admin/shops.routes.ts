@@ -15,6 +15,24 @@ import {
   updateShopSyncInterval,
 } from '../../services/scheduler/scheduler.service';
 
+const shopResponseSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    name: { type: 'string' },
+    platform: { type: 'string' },
+    baseUrl: { type: 'string' },
+    status: { type: 'string' },
+    lastSyncAt: { type: ['string', 'null'] },
+    apiKey: { type: 'string' },
+    apiSecret: { type: ['string', 'null'] },
+    authType: { type: 'string' },
+    config: { type: 'object', additionalProperties: true },
+    tenantId: { type: 'string' },
+  },
+  additionalProperties: true,
+};
+
 export async function shopsRoutes(fastify: FastifyInstance) {
   // GET /admin/shops
   fastify.get('/', {
@@ -22,7 +40,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       tags: ['shops'],
       summary: 'Lista integracji z platformami e-commerce',
       response: {
-        200: { type: 'array', items: { type: 'object' } },
+        200: { type: 'array', items: shopResponseSchema },
       },
     },
   }, async (_request: FastifyRequest, reply: FastifyReply) => {
@@ -58,7 +76,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
           },
         },
         response: {
-          201: { type: 'object' },
+          201: shopResponseSchema,
         },
       },
     },
@@ -102,7 +120,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
           },
         },
         response: {
-          200: { type: 'object' },
+          200: shopResponseSchema,
           404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
       },

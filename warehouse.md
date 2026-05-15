@@ -1127,7 +1127,7 @@ Główne widoki:
 
 1. `Integracje -> Hurtownie`: lista providerów
    - endpoint: `GET /admin/wholesale/providers`;
-   - tabela: nazwa, preset/platforma, aktywny, sync enabled, interwał syncu, ostatni sync, liczba mapowań, liczba logów;
+   - tabela: nazwa, preset/platforma, aktywny, sync enabled, interwał syncu, ostatni sync, status `latestSyncLog`, liczba mapowań, liczba logów;
    - akcje: szczegóły, edycja, usuń, synchronizuj, automapuj, ustaw harmonogram.
 
 2. Kreator dodania hurtowni CSV
@@ -1247,11 +1247,38 @@ POST /admin/wholesale/providers/:id/sync
 
 ```json
 {
-  "limit": 100
+  "limit": 100,
+  "batchSize": 500
 }
 ```
 
-Po syncu backend tworzy albo aktualizuje `WholesaleProductMapping`. Nie tworzy produktów magazynowych, nie tworzy dokumentu `PZ` i nie zmienia `currentStock`.
+Ten endpoint nie wykonuje importu synchronicznie. Zwraca `202` i najnowszy `WholesaleSyncLog` ze statusem `PENDING` albo istniejący aktywny log `PENDING`/`PROCESSING`, jeśli synchronizacja tej hurtowni już trwa.
+
+Po zleceniu syncu panel:
+
+1. Pokazuje toast `Synchronizacja zlecona`.
+2. Odświeża `GET /admin/wholesale/providers/:id/logs?limit=1`.
+3. Polluje logi co `2-5s` tylko gdy najnowszy log ma status `PENDING` albo `PROCESSING`.
+4. Zatrzymuje polling po `SUCCESS` albo `FAILED`.
+5. Po zakończeniu odświeża providerów, mapowania i oferty hurtowni przy produktach.
+
+Pola progresu logu:
+
+- `status`: `PENDING`, `PROCESSING`, `SUCCESS`, `FAILED`;
+- `totalItems`;
+- `processedItems`;
+- `batchSize`;
+- `itemsFetched`;
+- `mappingsCreated`;
+- `mappingsUpdated`;
+- `skipped`;
+- `errorMessage`;
+- `startedAt`;
+- `finishedAt`.
+
+Progres w UI liczyć jako `processedItems / totalItems`. Jeśli `totalItems = 0`, pokazać stan tekstowy bez dzielenia przez zero, np. `Oczekiwanie na przeliczenie liczby rekordów`.
+
+Po zakończonym syncu backend tworzy albo aktualizuje `WholesaleProductMapping`. Nie tworzy produktów magazynowych, nie tworzy dokumentu `PZ` i nie zmienia `currentStock`.
 
 Harmonogram:
 
@@ -1271,6 +1298,8 @@ Zasady:
 - maksimum: `1440` minut;
 - zmiana interwału przelicza zadanie schedulera dla aktywnego providera z `syncEnabled=true`;
 - `syncEnabled=false` albo `isActive=false` zatrzymuje zadanie.
+- przy aktywnym logu `PENDING` albo `PROCESSING` przycisk `Synchronizuj` powinien być zablokowany albo zmieniony na `Synchronizacja trwa`;
+- frontend nie cache'uje mutacji sync; cache list i mapowań może mieć `staleTime`, ale musi być invalidowany po zakończeniu joba.
 
 Dane hurtowni przy produktach magazynowych:
 

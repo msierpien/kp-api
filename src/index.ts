@@ -21,10 +21,12 @@ import { startRenderWorker, stopRenderWorker } from './services/queue/render.wor
 import { startEmailWorker, stopEmailWorker } from './services/queue/email.worker';
 import { startStockSyncWorker, stopStockSyncWorker } from './services/queue/stock-sync.worker';
 import { startPriceSyncWorker, stopPriceSyncWorker } from './services/queue/price-sync.worker';
+import { startWholesaleSyncWorker, stopWholesaleSyncWorker } from './services/queue/wholesale-sync.worker';
 import { closeQueue, getQueueStats } from './services/queue/render.queue';
 import { closeEmailQueue } from './services/queue/email.queue';
 import { closeStockSyncQueue } from './services/queue/stock-sync.queue';
 import { closePriceSyncQueue } from './services/queue/price-sync.queue';
+import { closeWholesaleSyncQueue } from './services/queue/wholesale-sync.queue';
 // Puppeteer removed - no browser to close anymore
 import bullBoardPlugin from './plugins/bull-board';
 import swaggerDocsPlugin from './plugins/swagger-docs.plugin';
@@ -249,8 +251,10 @@ const gracefulShutdown = async () => {
     await stopEmailWorker();
     await stopStockSyncWorker();
     await stopPriceSyncWorker();
+    await stopWholesaleSyncWorker();
     await closeStockSyncQueue();
     await closePriceSyncQueue();
+    await closeWholesaleSyncQueue();
     await closeQueue();
     await closeEmailQueue();
     server.log.info('🛑 Workers and queues stopped');
@@ -331,6 +335,13 @@ const start = async () => {
       server.log.info('Price sync worker started (BullMQ)');
     } catch (error) {
       server.log.error({ err: error }, 'Failed to start price sync worker');
+    }
+
+    try {
+      startWholesaleSyncWorker();
+      server.log.info('Wholesale sync worker started (BullMQ)');
+    } catch (error) {
+      server.log.error({ err: error }, 'Failed to start wholesale sync worker');
     }
 
     await server.listen({ port, host });

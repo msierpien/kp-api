@@ -3,6 +3,11 @@ import { parse } from 'csv-parse/sync';
 import { Prisma, WholesalePlatform } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
+import {
+  addWholesaleSyncJob,
+  type WholesaleSyncJobData,
+  type WholesaleSyncTriggeredBy,
+} from '../queue/wholesale-sync.queue';
 
 type WholesalePreset = 'GODAN' | 'PARTYDECO' | 'CUSTOM';
 
@@ -76,6 +81,7 @@ export interface UpdateWholesaleProviderInput {
 
 export interface SyncWholesaleProviderOptions {
   limit?: number;
+  batchSize?: number;
 }
 
 export interface PreviewWholesaleProviderInput {
@@ -142,10 +148,21 @@ const PRESET_CONFIGS: Record<Exclude<WholesalePreset, 'CUSTOM'>, WholesaleProvid
   },
 };
 
+const ACTIVE_WHOLESALE_SYNC_STATUSES = ['PENDING', 'PROCESSING'];
+const DEFAULT_WHOLESALE_SYNC_BATCH_SIZE = 500;
+
 function requireTenantId() {
   const tenantId = getTenantId();
   if (!tenantId) throw new Error('Brak kontekstu tenanta');
   return tenantId;
+}
+
+function withLatestWholesaleSyncLog<T extends { syncLogs?: unknown[] }>(provider: T) {
+  const { syncLogs, ...rest } = provider;
+  return {
+    ...rest,
+    latestSyncLog: syncLogs?.[0] ?? null,
+  };
 }
 
 export async function getWholesaleProviders(query: WholesaleProvidersQuery = {}) {
@@ -163,12 +180,24 @@ export async function getWholesaleProviders(query: WholesaleProvidersQuery = {})
       skip,
       take: limit,
       orderBy: { createdAt: 'desc' },
-      include: { _count: { select: { mappings: true, syncLogs: true } } },
+      include: {
+        _count: { select: { mappings: true, syncLogs: true } },
+        syncLogs: {
+          take: 1,
+          orderBy: { startedAt: 'desc' },
+        },
+      },
     }),
     prisma.wholesaleProvider.count({ where }),
   ]);
 
-  return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+  return {
+    data: data.map(withLatestWholesaleSyncLog),
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit),
+  };
 }
 
 export async function getWholesaleProviderById(id: string) {
@@ -176,8 +205,14 @@ export async function getWholesaleProviderById(id: string) {
 
   return prisma.wholesaleProvider.findFirst({
     where: { id, tenantId },
-    include: { _count: { select: { mappings: true, syncLogs: true } } },
-  });
+    include: {
+      _count: { select: { mappings: true, syncLogs: true } },
+      syncLogs: {
+        take: 1,
+        orderBy: { startedAt: 'desc' },
+      },
+    },
+  }).then((provider) => provider ? withLatestWholesaleSyncLog(provider) : null);
 }
 
 export async function createWholesaleProvider(input: CreateWholesaleProviderInput) {
@@ -481,7 +516,65 @@ export async function getWholesaleSyncLogs(providerId: string, query: WholesaleS
 
 export async function syncWholesaleProvider(providerId: string, options: SyncWholesaleProviderOptions = {}) {
   const tenantId = requireTenantId();
-  return syncWholesaleProviderForTenant(providerId, tenantId, options);
+  return enqueueWholesaleProviderSync(providerId, tenantId, options, 'MANUAL');
+}
+
+export async function enqueueWholesaleProviderSync(
+  providerId: string,
+  tenantId: string,
+  options: SyncWholesaleProviderOptions = {},
+  triggeredBy: WholesaleSyncTriggeredBy = 'MANUAL',
+) {
+  const provider = await prisma.wholesaleProvider.findFirst({ where: { id: providerId, tenantId } });
+  if (!provider) throw new Error('Provider hurtowni nie znaleziony');
+  if (!provider.isActive) throw new Error('Provider hurtowni jest nieaktywny');
+  if (provider.platform !== 'CSV_FEED') throw new Error(`Sync nie obsługuje jeszcze platformy ${provider.platform}`);
+
+  const activeLog = await prisma.wholesaleSyncLog.findFirst({
+    where: {
+      tenantId,
+      providerId,
+      status: { in: ACTIVE_WHOLESALE_SYNC_STATUSES },
+    },
+    orderBy: { startedAt: 'desc' },
+  });
+
+  if (activeLog) return activeLog;
+
+  const batchSize = normalizeSyncBatchSize(options.batchSize);
+  const limit = normalizeSyncLimit(options.limit);
+  const log = await prisma.wholesaleSyncLog.create({
+    data: {
+      tenantId,
+      providerId,
+      status: 'PENDING',
+      batchSize,
+      startedAt: new Date(),
+    },
+  });
+
+  try {
+    await addWholesaleSyncJob({
+      logId: log.id,
+      tenantId,
+      providerId,
+      triggeredBy,
+      limit,
+      batchSize,
+    });
+  } catch (error) {
+    await prisma.wholesaleSyncLog.update({
+      where: { id: log.id },
+      data: {
+        status: 'FAILED',
+        errorMessage: error instanceof Error ? error.message : 'Nie udało się dodać joba synchronizacji hurtowni',
+        finishedAt: new Date(),
+      },
+    });
+    throw error;
+  }
+
+  return log;
 }
 
 export async function syncWholesaleProviderForTenant(
@@ -489,90 +582,104 @@ export async function syncWholesaleProviderForTenant(
   tenantId: string,
   options: SyncWholesaleProviderOptions = {},
 ) {
-  const startedAt = new Date();
-  const provider = await prisma.wholesaleProvider.findFirst({ where: { id: providerId, tenantId } });
+  return enqueueWholesaleProviderSync(providerId, tenantId, options, 'SCHEDULER');
+}
+
+export async function runWholesaleSyncJob(data: WholesaleSyncJobData) {
+  const { logId, tenantId, providerId } = data;
+  const batchSize = normalizeSyncBatchSize(data.batchSize);
+  const limit = normalizeSyncLimit(data.limit);
+
+  const [provider, log] = await Promise.all([
+    prisma.wholesaleProvider.findFirst({ where: { id: providerId, tenantId } }),
+    prisma.wholesaleSyncLog.findFirst({ where: { id: logId, tenantId, providerId } }),
+  ]);
+
   if (!provider) throw new Error('Provider hurtowni nie znaleziony');
+  if (!log) throw new Error('Log synchronizacji hurtowni nie znaleziony');
   if (!provider.isActive) throw new Error('Provider hurtowni jest nieaktywny');
   if (provider.platform !== 'CSV_FEED') throw new Error(`Sync nie obsługuje jeszcze platformy ${provider.platform}`);
 
-  const log = await prisma.wholesaleSyncLog.create({
-    data: { tenantId, providerId, status: 'PROCESSING', startedAt },
+  await prisma.wholesaleSyncLog.update({
+    where: { id: logId },
+    data: {
+      status: 'PROCESSING',
+      batchSize,
+      startedAt: new Date(),
+      errorMessage: null,
+    },
   });
 
   try {
     const config = parseProviderConfig(provider.configJson);
     const csvText = await fetchFeed(provider.feedUrl);
     const records = parseCsv(csvText, config.delimiter ?? ';');
-    const limitedRecords = options.limit ? records.slice(0, options.limit) : records;
+    const limitedRecords = limit ? records.slice(0, limit) : records;
+
+    await prisma.wholesaleSyncLog.update({
+      where: { id: logId },
+      data: {
+        totalItems: limitedRecords.length,
+        itemsFetched: limitedRecords.length,
+      },
+    });
 
     let created = 0;
     let updated = 0;
     let skipped = 0;
+    let processed = 0;
 
-    for (const record of limitedRecords) {
-      const mapped = mapCsvRecord(record, config.fieldMapping);
-      if (!mapped.externalSku) {
-        skipped++;
-        continue;
-      }
-
-      const existing = await prisma.wholesaleProductMapping.findUnique({
-        where: { providerId_externalSku: { providerId, externalSku: mapped.externalSku } },
+    for (let offset = 0; offset < limitedRecords.length; offset += batchSize) {
+      const batch = limitedRecords.slice(offset, offset + batchSize);
+      const result = await processWholesaleSyncBatch({
+        tenantId,
+        providerId,
+        records: batch,
+        fieldMapping: config.fieldMapping,
       });
 
-      await prisma.wholesaleProductMapping.upsert({
-        where: { providerId_externalSku: { providerId, externalSku: mapped.externalSku } },
-        create: {
-          tenantId,
-          providerId,
-          externalSku: mapped.externalSku,
-          externalEan: mapped.externalEan,
-          externalName: mapped.externalName,
-          externalCategory: mapped.externalCategory,
-          lastKnownStock: mapped.lastKnownStock,
-          lastKnownPrice: mapped.lastKnownPrice,
-          payloadJson: record as Prisma.InputJsonValue,
-          isActive: true,
-          lastSyncAt: new Date(),
-        },
-        update: {
-          externalEan: mapped.externalEan,
-          externalName: mapped.externalName,
-          externalCategory: mapped.externalCategory,
-          lastKnownStock: mapped.lastKnownStock,
-          lastKnownPrice: mapped.lastKnownPrice,
-          payloadJson: record as Prisma.InputJsonValue,
-          isActive: true,
-          lastSyncAt: new Date(),
+      created += result.created;
+      updated += result.updated;
+      skipped += result.skipped;
+      processed += batch.length;
+
+      await prisma.wholesaleSyncLog.update({
+        where: { id: logId },
+        data: {
+          processedItems: processed,
+          mappingsCreated: created,
+          mappingsUpdated: updated,
+          skipped,
         },
       });
-
-      if (existing) updated++;
-      else created++;
     }
 
+    const finishedAt = new Date();
     const finishedLog = await prisma.wholesaleSyncLog.update({
-      where: { id: log.id },
+      where: { id: logId },
       data: {
         status: 'SUCCESS',
+        totalItems: limitedRecords.length,
+        processedItems: limitedRecords.length,
         itemsFetched: limitedRecords.length,
         mappingsCreated: created,
         mappingsUpdated: updated,
         skipped,
-        finishedAt: new Date(),
+        errorMessage: null,
+        finishedAt,
       },
     });
 
     await prisma.wholesaleProvider.update({
       where: { id: providerId },
-      data: { lastSyncAt: new Date() },
+      data: { lastSyncAt: finishedAt },
     });
 
     return finishedLog;
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Nieznany błąd sync hurtowni';
     await prisma.wholesaleSyncLog.update({
-      where: { id: log.id },
+      where: { id: logId },
       data: {
         status: 'FAILED',
         errorMessage: message,
@@ -581,6 +688,88 @@ export async function syncWholesaleProviderForTenant(
     });
     throw error;
   }
+}
+
+async function processWholesaleSyncBatch(input: {
+  tenantId: string;
+  providerId: string;
+  records: Record<string, string>[];
+  fieldMapping: FieldMapping;
+}) {
+  const mappedBySku = new Map<string, ReturnType<typeof mapCsvRecord> & { payloadJson: Prisma.InputJsonValue }>();
+  let skipped = 0;
+
+  for (const record of input.records) {
+    const mapped = mapCsvRecord(record, input.fieldMapping);
+    if (!mapped.externalSku) {
+      skipped++;
+      continue;
+    }
+
+    if (mappedBySku.has(mapped.externalSku)) skipped++;
+    mappedBySku.set(mapped.externalSku, {
+      ...mapped,
+      payloadJson: record as Prisma.InputJsonValue,
+    });
+  }
+
+  const mappedRecords = Array.from(mappedBySku.values());
+  if (mappedRecords.length === 0) return { created: 0, updated: 0, skipped };
+
+  const existingMappings = await prisma.wholesaleProductMapping.findMany({
+    where: {
+      providerId: input.providerId,
+      externalSku: { in: mappedRecords.map((record) => record.externalSku) },
+    },
+    select: {
+      id: true,
+      externalSku: true,
+    },
+  });
+  const existingBySku = new Map(existingMappings.map((mapping) => [mapping.externalSku, mapping.id]));
+  const now = new Date();
+  const createData: Prisma.WholesaleProductMappingCreateManyInput[] = [];
+  const updateOperations: Prisma.PrismaPromise<unknown>[] = [];
+
+  for (const mapped of mappedRecords) {
+    const existingId = existingBySku.get(mapped.externalSku);
+    const data = {
+      externalEan: mapped.externalEan,
+      externalName: mapped.externalName,
+      externalCategory: mapped.externalCategory,
+      lastKnownStock: mapped.lastKnownStock,
+      lastKnownPrice: mapped.lastKnownPrice,
+      payloadJson: mapped.payloadJson,
+      isActive: true,
+      lastSyncAt: now,
+    };
+
+    if (existingId) {
+      updateOperations.push(prisma.wholesaleProductMapping.update({
+        where: { id: existingId },
+        data,
+      }));
+    } else {
+      createData.push({
+        tenantId: input.tenantId,
+        providerId: input.providerId,
+        externalSku: mapped.externalSku,
+        ...data,
+      });
+    }
+  }
+
+  const createOperation = createData.length > 0
+    ? [prisma.wholesaleProductMapping.createMany({ data: createData, skipDuplicates: true })]
+    : [];
+  const results = await prisma.$transaction([...createOperation, ...updateOperations]);
+  const created = createData.length > 0 ? (results[0] as Prisma.BatchPayload).count : 0;
+
+  return {
+    created,
+    updated: updateOperations.length,
+    skipped,
+  };
 }
 
 async function assertProviderBelongsToTenant(providerId: string, tenantId: string) {
@@ -679,6 +868,22 @@ function validateWholesaleSyncInterval(intervalMinutes: number) {
   }
 
   return intervalMinutes;
+}
+
+function normalizeSyncLimit(limit?: number) {
+  if (limit === undefined) return undefined;
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error('Limit synchronizacji hurtowni musi być dodatnią liczbą całkowitą');
+  }
+  return limit;
+}
+
+function normalizeSyncBatchSize(batchSize?: number) {
+  if (batchSize === undefined) return DEFAULT_WHOLESALE_SYNC_BATCH_SIZE;
+  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 5000) {
+    throw new Error('batchSize synchronizacji hurtowni musi być liczbą całkowitą od 1 do 5000');
+  }
+  return batchSize;
 }
 
 function parseProductIds(productIds?: string) {

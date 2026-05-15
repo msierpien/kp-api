@@ -231,7 +231,7 @@ export async function wholesaleRoutes(fastify: FastifyInstance) {
   fastify.post('/providers/:id/sync', {
     schema: {
       tags: ['wholesale'],
-      summary: 'Ręcznie zsynchronizuj feed CSV hurtowni',
+      summary: 'Zleć synchronizację feedu CSV hurtowni do kolejki',
       params: {
         type: 'object',
         required: ['id'],
@@ -241,6 +241,7 @@ export async function wholesaleRoutes(fastify: FastifyInstance) {
         type: 'object',
         properties: {
           limit: { type: 'integer', minimum: 1 },
+          batchSize: { type: 'integer', minimum: 1, maximum: 5000, default: 500 },
         },
       },
     },
@@ -250,7 +251,7 @@ export async function wholesaleRoutes(fastify: FastifyInstance) {
   }>, reply: FastifyReply) => {
     try {
       const result = await wholesaleService.syncWholesaleProvider(request.params.id, request.body ?? {});
-      return reply.send(result);
+      return reply.status(202).send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd synchronizacji hurtowni';
       const status = message.includes('nie znalezion') ? 404 : 400;

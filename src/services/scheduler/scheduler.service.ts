@@ -106,14 +106,14 @@ export function removeShopFromScheduler(shopId: string) {
 
 async function runWholesaleSync(providerId: string, providerName: string, tenantId: string) {
   const startTime = new Date();
-  console.log(`[Scheduler] 🔄 Starting automatic wholesale sync for: ${providerName} (${providerId})`);
+  console.log(`[Scheduler] 🔄 Enqueueing automatic wholesale sync for: ${providerName} (${providerId})`);
 
   try {
     const result = await syncWholesaleProviderForTenant(providerId, tenantId);
     const duration = Date.now() - startTime.getTime();
     console.log(
-      `[Scheduler] ✅ Wholesale sync completed for ${providerName}: ` +
-      `${result.mappingsCreated} created, ${result.mappingsUpdated} updated, ${result.skipped} skipped ` +
+      `[Scheduler] ✅ Wholesale sync enqueued for ${providerName}: ` +
+      `log ${result.id}, status ${result.status} ` +
       `(${duration}ms)`
     );
   } catch (error) {

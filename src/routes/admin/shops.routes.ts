@@ -46,6 +46,16 @@ const shopBodyProperties = {
   config: { type: 'object', additionalProperties: true },
 };
 
+const testConnectionResponseSchema = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    status: { type: 'number' },
+    latencyMs: { type: 'number' },
+    message: { type: 'string' },
+  },
+};
+
 export async function shopsRoutes(fastify: FastifyInstance) {
   // GET /admin/shops
   fastify.get('/', {
@@ -215,7 +225,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
         summary: 'Przetestuj połączenie z API sklepu',
         params: { type: 'object', properties: { id: { type: 'string' } } },
         response: {
-          200: { type: 'object' },
+          200: testConnectionResponseSchema,
         },
       },
     },

@@ -2,6 +2,7 @@
 import prisma from '../../lib/prisma';
 import { encrypt, decrypt } from '../../lib/encryption';
 import { getTenantContext } from '../../lib/tenant-context';
+import { config as appConfig } from '../../config';
 import type { CreateShopInput, UpdateShopInput } from '../../schemas/admin.schema';
 import type { ShopItem } from '../../types';
 import { removeShopFromScheduler } from '../scheduler/scheduler.service';
@@ -120,8 +121,8 @@ export async function testShopConnection(id: string) {
   // Odszyfruj klucze przed użyciem
   const apiKey = decrypt(shop.apiKey);
 
-  const config = (shop.configJson as any) || {};
-  const authType = config.authType || 'WEB_SERVICE';
+  const shopConfig = (shop.configJson as any) || {};
+  const authType = shopConfig.authType || 'WEB_SERVICE';
   const started = Date.now();
 
   // Normalize base URL (avoid double /api when user already provided it)
@@ -131,7 +132,7 @@ export async function testShopConnection(id: string) {
   }
 
   const allowInsecure =
-    config.app.env === 'development' ||
+    appConfig.app.env === 'development' ||
     baseUrl.includes('localhost') ||
     baseUrl.includes('127.0.0.1');
   const shouldDisableTls = allowInsecure && baseUrl.startsWith('https://');
@@ -174,7 +175,7 @@ export async function testShopConnection(id: string) {
     }
 
     // ADMIN_API
-    const adminApi = config.adminApi || {};
+    const adminApi = shopConfig.adminApi || {};
     const tokenRes = await fetch(`${baseUrl}/admin-api/access_token`, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },

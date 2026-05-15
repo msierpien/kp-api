@@ -17,6 +17,7 @@ import { usersRoutes } from './users.routes';
 import { storageRoutes } from './storage.routes';
 import { queueRoutes } from './queue.routes';
 import { fontsRoutes } from './fonts.routes';
+import { warehouseCatalogsRoutes } from './warehouse-catalogs.routes';
 import { warehouseRoutes } from './warehouse.routes';
 
 export async function adminRoutes(fastify: FastifyInstance) {
@@ -41,5 +42,6 @@ export async function adminRoutes(fastify: FastifyInstance) {
   fastify.register(storageRoutes, { prefix: '/storage' });
   fastify.register(queueRoutes, { prefix: '/queues' });
   fastify.register(fontsRoutes, { prefix: '/fonts' });
+  fastify.register(warehouseCatalogsRoutes, { prefix: '/warehouse/catalogs' });
   fastify.register(warehouseRoutes, { prefix: '/warehouse' });
 }

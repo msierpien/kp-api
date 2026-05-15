@@ -195,10 +195,22 @@ export async function shopMappingsRoutes(fastify: FastifyInstance) {
         required: ['id'],
         properties: { id: { type: 'string' } },
       },
+      body: {
+        type: 'object',
+        properties: {
+          catalogId: { type: ['string', 'null'] },
+        },
+      },
     },
-  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: shopProductImportService.CreateWarehouseProductFromMappingOptions;
+  }>, reply: FastifyReply) => {
     try {
-      const mapping = await shopProductImportService.createWarehouseProductFromMapping(request.params.id);
+      const mapping = await shopProductImportService.createWarehouseProductFromMapping(
+        request.params.id,
+        request.body ?? {},
+      );
       return reply.status(201).send(mapping);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd tworzenia produktu magazynowego';

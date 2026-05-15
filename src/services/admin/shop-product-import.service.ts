@@ -3,6 +3,7 @@ import { decrypt } from '../../lib/encryption';
 import { getTenantId } from '../../lib/tenant-context';
 import type { Shop } from '@prisma/client';
 import { PrestaShopClient, type PrestaShopProductDetails } from '../prestashop/prestashop-client';
+import { resolveCatalogForProduct } from './warehouse-catalogs.service';
 
 export interface ImportProductsResult {
   shopId: string;
@@ -16,6 +17,10 @@ export interface ImportProductsResult {
 export interface ImportProductsOptions {
   limit?: number;
   activeOnly?: boolean;
+}
+
+export interface CreateWarehouseProductFromMappingOptions {
+  catalogId?: string | null;
 }
 
 function requireTenantId() {
@@ -97,16 +102,21 @@ export async function importProductsFromShop(
   return result;
 }
 
-export async function createWarehouseProductFromMapping(mappingId: string) {
+export async function createWarehouseProductFromMapping(
+  mappingId: string,
+  options: CreateWarehouseProductFromMappingOptions = {},
+) {
   const tenantId = requireTenantId();
   return prisma.$transaction(async (tx) => {
     const mapping = await tx.shopProductMapping.findFirst({
       where: { id: mappingId, tenantId },
-      include: { shop: true, warehouseProduct: true },
+      include: { shop: true, warehouseProduct: { include: { catalog: true } } },
     });
 
     if (!mapping) throw new Error('Mapowanie nie znalezione');
     if (mapping.warehouseProductId) return mapping;
+
+    const catalog = await resolveCatalogForProduct(tenantId, options.catalogId, tx);
 
     const warehouseProduct = await tx.warehouseProduct.upsert({
       where: {
@@ -117,6 +127,7 @@ export async function createWarehouseProductFromMapping(mappingId: string) {
       },
       create: {
         tenantId,
+        catalogId: catalog.id,
         sku: mapping.externalSku,
         name: mapping.externalName || mapping.externalSku,
         unit: 'szt',
@@ -128,7 +139,7 @@ export async function createWarehouseProductFromMapping(mappingId: string) {
     return tx.shopProductMapping.update({
       where: { id: mapping.id },
       data: { warehouseProductId: warehouseProduct.id },
-      include: { shop: true, warehouseProduct: true },
+      include: { shop: true, warehouseProduct: { include: { catalog: true } } },
     });
   });
 }

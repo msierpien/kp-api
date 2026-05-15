@@ -2,10 +2,12 @@ import prisma from '../../lib/prisma';
 import { Prisma } from '@prisma/client';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
 import { syncStockForProducts } from '../stock/stock-sync.service';
+import { resolveCatalogForProduct } from './warehouse-catalogs.service';
 
 // ─── Products ────────────────────────────────────────────────────────────────
 
 export interface CreateProductInput {
+  catalogId?: string | null;
   sku: string;
   name: string;
   unit?: string;
@@ -15,6 +17,7 @@ export interface CreateProductInput {
 }
 
 export interface UpdateProductInput {
+  catalogId?: string | null;
   name?: string;
   unit?: string;
   description?: string;
@@ -27,16 +30,18 @@ export interface ProductsQuery {
   page?: number;
   limit?: number;
   search?: string;
+  catalogId?: string;
   isActive?: boolean;
 }
 
 export async function getProducts(query: ProductsQuery = {}) {
   const tenantId = getTenantId();
-  const { page = 1, limit = 50, search, isActive } = query;
+  const { page = 1, limit = 50, search, catalogId, isActive } = query;
   const skip = (page - 1) * limit;
 
   const where: any = {};
   if (tenantId) where.tenantId = tenantId;
+  if (catalogId) where.catalogId = catalogId;
   if (isActive !== undefined) where.isActive = isActive;
   if (search) {
     where.OR = [
@@ -46,7 +51,13 @@ export async function getProducts(query: ProductsQuery = {}) {
   }
 
   const [data, total] = await Promise.all([
-    prisma.warehouseProduct.findMany({ where, skip, take: limit, orderBy: { name: 'asc' } }),
+    prisma.warehouseProduct.findMany({
+      where,
+      skip,
+      take: limit,
+      orderBy: { name: 'asc' },
+      include: { catalog: true },
+    }),
     prisma.warehouseProduct.count({ where }),
   ]);
 
@@ -58,7 +69,7 @@ export async function getProductById(id: string) {
   const where: any = { id };
   if (tenantId) where.tenantId = tenantId;
 
-  return prisma.warehouseProduct.findFirst({ where });
+  return prisma.warehouseProduct.findFirst({ where, include: { catalog: true } });
 }
 
 export async function createProduct(input: CreateProductInput) {
@@ -70,9 +81,12 @@ export async function createProduct(input: CreateProductInput) {
   });
   if (existing) throw new Error(`Produkt z SKU "${input.sku}" już istnieje`);
 
+  const catalog = await resolveCatalogForProduct(tenantId, input.catalogId);
+
   return prisma.warehouseProduct.create({
     data: {
       tenantId,
+      catalogId: catalog.id,
       sku: input.sku,
       name: input.name,
       unit: input.unit ?? 'szt',
@@ -91,7 +105,19 @@ export async function updateProduct(id: string, input: UpdateProductInput) {
   const product = await prisma.warehouseProduct.findFirst({ where });
   if (!product) throw new Error('Produkt nie znaleziony');
 
-  return prisma.warehouseProduct.update({ where: { id }, data: input });
+  const data: Prisma.WarehouseProductUpdateInput = { ...input };
+  delete (data as any).catalogId;
+
+  if (input.catalogId !== undefined) {
+    const catalog = await resolveCatalogForProduct(product.tenantId, input.catalogId);
+    data.catalog = { connect: { id: catalog.id } };
+  }
+
+  return prisma.warehouseProduct.update({
+    where: { id },
+    data,
+    include: { catalog: true },
+  });
 }
 
 export async function deleteProduct(id: string) {

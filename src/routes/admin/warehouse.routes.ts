@@ -42,6 +42,7 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
           page: { type: 'integer', minimum: 1, default: 1 },
           limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
           search: { type: 'string' },
+          catalogId: { type: 'string' },
           isActive: { type: 'boolean' },
         },
       },
@@ -65,6 +66,7 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
         type: 'object',
         required: ['sku', 'name'],
         properties: {
+          catalogId: { type: ['string', 'null'] },
           sku: { type: 'string', minLength: 1 },
           name: { type: 'string', minLength: 1 },
           unit: { type: 'string', default: 'szt' },
@@ -147,6 +149,7 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
       body: {
         type: 'object',
         properties: {
+          catalogId: { type: ['string', 'null'] },
           name: { type: 'string', minLength: 1 },
           unit: { type: 'string' },
           description: { type: 'string' },

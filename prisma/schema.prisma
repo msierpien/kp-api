@@ -34,6 +34,7 @@ model Tenant {
   templates           PersonalizationTemplate[]
   emailSettings       EmailSettings[]
   warehouseProducts   WarehouseProduct[]
+  warehouseCatalogs   WarehouseCatalog[]
   warehouseDocuments  WarehouseDocument[]
   warehouseBarcodes   WarehouseProductBarcode[]
   shopProductMappings ShopProductMapping[]
@@ -514,6 +515,7 @@ enum WarehouseDocumentStatus {
 model WarehouseProduct {
   id           String   @id @default(cuid())
   tenantId     String   @map("tenant_id")
+  catalogId    String   @map("catalog_id")
   sku          String
   name         String
   unit         String   @default("szt")
@@ -526,6 +528,7 @@ model WarehouseProduct {
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   tenant              Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  catalog             WarehouseCatalog          @relation(fields: [catalogId], references: [id], onDelete: Restrict)
   items               WarehouseDocumentItem[]
   barcodes            WarehouseProductBarcode[]
   shopProductMappings ShopProductMapping[]
@@ -533,8 +536,29 @@ model WarehouseProduct {
 
   @@unique([tenantId, sku])
   @@index([tenantId])
+  @@index([catalogId])
   @@index([tenantId, isActive])
   @@map("warehouse_products")
+}
+
+model WarehouseCatalog {
+  id          String   @id @default(cuid())
+  tenantId    String   @map("tenant_id")
+  code        String
+  name        String
+  description String?
+  isDefault   Boolean  @default(false) @map("is_default")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  tenant   Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  products WarehouseProduct[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@map("warehouse_catalogs")
 }
 
 model ShopProductMapping {

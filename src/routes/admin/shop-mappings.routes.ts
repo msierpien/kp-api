@@ -41,6 +41,7 @@ export async function shopMappingsRoutes(fastify: FastifyInstance) {
           shopId: { type: 'string' },
           externalProductId: { type: 'string', minLength: 1 },
           externalSku: { type: 'string', minLength: 1 },
+          externalEan: { type: ['string', 'null'] },
           externalName: { type: 'string' },
           externalPrice: { type: ['number', 'null'], minimum: 0 },
           warehouseProductId: { type: ['string', 'null'] },
@@ -118,6 +119,37 @@ export async function shopMappingsRoutes(fastify: FastifyInstance) {
       return reply.send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd importu produktów sklepu';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/import/:shopId/preview', {
+    schema: {
+      tags: ['shop-mappings'],
+      summary: 'Podejrzyj import katalogu produktów sklepu bez zapisu do bazy',
+      params: {
+        type: 'object',
+        required: ['shopId'],
+        properties: { shopId: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        properties: {
+          limit: { type: 'integer', minimum: 1, maximum: 5000 },
+          activeOnly: { type: 'boolean', default: true },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { shopId: string };
+    Body: shopProductImportService.ImportProductsOptions;
+  }>, reply: FastifyReply) => {
+    try {
+      const result = await shopProductImportService.previewProductsImport(request.params.shopId, request.body ?? {});
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd podglądu importu produktów sklepu';
       const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }
@@ -213,6 +245,7 @@ export async function shopMappingsRoutes(fastify: FastifyInstance) {
         type: 'object',
         properties: {
           externalSku: { type: 'string', minLength: 1 },
+          externalEan: { type: ['string', 'null'] },
           externalName: { type: ['string', 'null'] },
           externalPrice: { type: ['number', 'null'], minimum: 0 },
           warehouseProductId: { type: ['string', 'null'] },

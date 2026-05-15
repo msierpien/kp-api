@@ -31,6 +31,7 @@ interface PrestaShopCustomer {
 interface PrestaShopProduct {
   id: number | string;
   reference?: string;
+  ean13?: string;
   name?: unknown;
   price?: string;
   active?: string | number | boolean;
@@ -41,6 +42,7 @@ const DEBUG_SHOP_SYNC = process.env.DEBUG_SHOP_SYNC === 'true';
 export interface PrestaShopProductDetails {
   id: string;
   sku: string;
+  ean?: string;
   name: string;
   price?: number;
   active: boolean;
@@ -136,7 +138,7 @@ export class PrestaShopClient {
     const limit = params.limit ?? 100;
     const offset = params.offset ?? 0;
     const queryParams = [
-      'display=[id,reference,name,price,active]',
+      'display=[id,reference,ean13,name,price,active]',
       `limit=${offset},${limit}`,
       'sort=[id_ASC]',
     ];
@@ -152,12 +154,14 @@ export class PrestaShopClient {
 
     return products.map((product: PrestaShopProduct) => {
       const sku = String(product.reference ?? '').trim();
+      const ean = String(product.ean13 ?? '').trim() || undefined;
       const name = normalizePrestaShopLocalizedValue(product.name) || sku || `Produkt ${product.id}`;
       const price = product.price === undefined || product.price === '' ? undefined : Number(product.price);
 
       return {
         id: String(product.id),
         sku,
+        ean,
         name,
         price: Number.isFinite(price) ? price : undefined,
         active: product.active === undefined ? true : String(product.active) !== '0',

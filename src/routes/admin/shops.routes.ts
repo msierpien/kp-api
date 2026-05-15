@@ -7,7 +7,14 @@ import {
   type UpdateShopInput,
   type ShopIdParamsInput,
 } from '../../schemas/admin.schema';
-import { createShop, deleteShop, listShops, testShopConnection, updateShop } from '../../services/admin/shops.service';
+import {
+  createShop,
+  deleteShop,
+  getShopImportReadiness,
+  listShops,
+  testShopConnection,
+  updateShop,
+} from '../../services/admin/shops.service';
 import {
   triggerManualSync,
   enableShopSync,
@@ -211,6 +218,36 @@ export async function shopsRoutes(fastify: FastifyInstance) {
           error: 'Internal Server Error',
           message: error instanceof Error ? error.message : 'Nie udało się usunąć integracji',
         });
+      }
+    }
+  );
+
+  fastify.get<{ Params: ShopIdParamsInput }>(
+    '/:id/import-readiness',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Sprawdź gotowość integracji sklepu do importu produktów',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: { 200: { type: 'object', additionalProperties: true } },
+      },
+    },
+    async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
+      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: paramsParsed.error.errors[0].message,
+        });
+      }
+
+      try {
+        const result = await getShopImportReadiness(paramsParsed.data.id);
+        return reply.send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Nie udało się sprawdzić gotowości importu';
+        const status = message.includes('nie znalezion') ? 404 : 400;
+        return reply.status(status).send({ error: 'Error', message });
       }
     }
   );

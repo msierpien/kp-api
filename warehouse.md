@@ -1130,8 +1130,8 @@ Wytyczne dla panelu admina:
 Decyzja na start:
 
 - import PrestaShop nadal nie tworzy produktów magazynowych automatycznie;
-- automapowanie działa po SKU, bo `ShopProductMapping` nie przechowuje jeszcze EAN z PrestaShop;
-- EAN z PrestaShop można dodać później przez rozszerzenie `PrestaShopClient.fetchProducts` i pole `externalEan`;
+- Etap 4 automapował produkty po SKU;
+- EAN z PrestaShop i automapowanie po EAN zostały przeniesione do Etapu 5;
 - panel powinien wymagać świadomej decyzji operatora przed hurtowym utworzeniem produktów.
 
 Efekt końcowy:
@@ -1141,7 +1141,90 @@ Efekt końcowy:
 - może jednym kliknięciem podpiąć produkty po SKU;
 - może hurtowo utworzyć brakujące produkty magazynowe w wybranym katalogu.
 
-### Etap 5: synchronizacja cen do sklepów
+### Etap 5: import PrestaShop z EAN i readiness
+
+Cel: domknąć import produktów sklepu jako przewidywalny proces przed kliknięciem `Importuj`, z lepszym mapowaniem po EAN.
+
+Status backend/API: wdrożone w `kp-api` 2026-05-15.
+
+Zakres backend:
+
+- `ShopProductMapping.externalEan` - wdrożone;
+- migracja `external_ean` i indeks `[tenantId, externalEan]` - wdrożone;
+- `PrestaShopClient.fetchProducts` pobiera `ean13` - wdrożone;
+- import PrestaShop zapisuje `externalEan` - wdrożone;
+- preview importu bez zapisu do bazy - wdrożone;
+- automapowanie najpierw po SKU, potem po EAN z `WarehouseProductBarcode` - wdrożone;
+- readiness endpoint dla sklepu - wdrożone.
+
+Endpointy Etapu 5:
+
+```text
+GET  /admin/shops/:id/import-readiness
+POST /admin/shop-mappings/import/:shopId/preview
+POST /admin/shop-mappings/import/:shopId
+POST /admin/shop-mappings/bulk/auto-map
+```
+
+Przykładowy readiness:
+
+```text
+GET /admin/shops/shop_1/import-readiness
+```
+
+Odpowiedź pokazuje:
+
+- czy sklep jest wspierany (`PRESTASHOP`);
+- czy sklep jest aktywny;
+- czy ma API key;
+- czy tenant ma domyślny katalog;
+- ile jest mapowań, ile podpiętych i ile niepodpiętych;
+- ostatni log importu.
+
+Przykładowy preview:
+
+```json
+{
+  "limit": 100,
+  "activeOnly": true
+}
+```
+
+Preview zwraca:
+
+- `fetched`;
+- `willCreate`;
+- `willUpdate`;
+- `skippedNoSku`;
+- `withEan`;
+- `possibleAutoMapBySku`;
+- `possibleAutoMapByEan`;
+- `sample` pierwszych pozycji z akcją `CREATE`, `UPDATE` albo `SKIP_NO_SKU`.
+
+Wytyczne dla panelu admina:
+
+1. Przed importem pobrać `GET /admin/shops/:id/import-readiness`
+   - jeśli `ready=false`, pokazać checklistę braków;
+   - jeśli brakuje domyślnego katalogu, odesłać operatora do katalogów magazynu;
+   - jeśli brakuje API key albo sklep jest nieaktywny, odesłać do konfiguracji sklepu.
+
+2. Dodać przycisk `Podejrzyj import`
+   - woła `POST /admin/shop-mappings/import/:shopId/preview`;
+   - pokazuje liczby nowych/aktualizowanych pozycji;
+   - pokazuje informację, ile produktów ma EAN i ile można automapować.
+
+3. Po imporcie uruchomić albo zaproponować `Automapuj`
+   - backend mapuje po SKU;
+   - jeśli SKU nie znajdzie produktu, backend próbuje EAN przez `WarehouseProductBarcode`;
+   - odpowiedź rozróżnia `mappedBySku` i `mappedByEan`.
+
+Efekt końcowy:
+
+- operator wie przed importem, czy integracja jest gotowa;
+- import zachowuje EAN ze sklepu;
+- mapowania mogą podpiąć się automatycznie również wtedy, gdy SKU się różni, ale EAN pasuje.
+
+### Etap 6: synchronizacja cen do sklepów
 
 Cel: rozdzielić cenę zakupu, cenę sprzedaży i publikację ceny do sklepów.
 
@@ -1166,7 +1249,7 @@ Efekt końcowy:
 - operator ma log sukcesów i błędów;
 - ceny nie mieszają się z logiką stanów.
 
-### Etap 6: dokładniejsza kontrola stanów
+### Etap 7: dokładniejsza kontrola stanów
 
 Cel: przygotować magazyn do bardziej zaawansowanych procesów bez przedwczesnego multi-warehouse.
 
@@ -1190,7 +1273,7 @@ Efekt końcowy:
 - magazyn zaczyna wspierać decyzje operacyjne, nie tylko przechowuje stan;
 - łatwiej zauważyć braki, rozbieżności i produkty wymagające zamówienia.
 
-### Etap 7: przyszły produkt/PIM
+### Etap 8: przyszły produkt/PIM
 
 Cel: rozbudować produkt dopiero wtedy, gdy magazyn będzie stabilny.
 

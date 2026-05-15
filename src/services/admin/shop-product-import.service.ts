@@ -26,6 +26,28 @@ export interface ImportLogsQuery {
   status?: string;
 }
 
+export interface ImportProductsPreviewResult {
+  shopId: string;
+  fetched: number;
+  willCreate: number;
+  willUpdate: number;
+  skipped: number;
+  skippedNoSku: number;
+  withEan: number;
+  possibleAutoMapBySku: number;
+  possibleAutoMapByEan: number;
+  sample: Array<{
+    externalProductId: string;
+    externalSku: string;
+    externalEan?: string;
+    externalName: string;
+    externalPrice?: number;
+    active: boolean;
+    action: 'CREATE' | 'UPDATE' | 'SKIP_NO_SKU';
+    autoMapCandidate?: 'SKU' | 'EAN';
+  }>;
+}
+
 export interface CreateWarehouseProductFromMappingOptions {
   catalogId?: string | null;
 }
@@ -51,6 +73,8 @@ export interface AutoMapShopProductsInput {
 export interface AutoMapShopProductsResult {
   scanned: number;
   mapped: number;
+  mappedBySku: number;
+  mappedByEan: number;
   skippedNoProduct: number;
 }
 
@@ -110,6 +134,7 @@ export async function importProductsFromShop(
           shopId,
           externalProductId: product.id,
           externalSku: product.sku,
+          externalEan: product.ean,
           externalName: product.name,
           externalPrice: product.price,
           isActive: product.active,
@@ -117,6 +142,7 @@ export async function importProductsFromShop(
         },
         update: {
           externalSku: product.sku,
+          externalEan: product.ean,
           externalName: product.name,
           externalPrice: product.price,
           isActive: product.active,
@@ -151,6 +177,90 @@ export async function importProductsFromShop(
     });
     throw error;
   }
+}
+
+export async function previewProductsImport(
+  shopId: string,
+  options: ImportProductsOptions = {},
+): Promise<ImportProductsPreviewResult> {
+  const tenantId = requireTenantId();
+  const shop = await prisma.shop.findFirst({ where: { id: shopId, tenantId } });
+  if (!shop) throw new Error('Sklep nie znaleziony');
+  if (shop.status !== 'ACTIVE') throw new Error('Sklep jest nieaktywny');
+
+  const products = await fetchShopProducts(shop, options);
+  const result: ImportProductsPreviewResult = {
+    shopId,
+    fetched: products.length,
+    willCreate: 0,
+    willUpdate: 0,
+    skipped: 0,
+    skippedNoSku: 0,
+    withEan: 0,
+    possibleAutoMapBySku: 0,
+    possibleAutoMapByEan: 0,
+    sample: [],
+  };
+
+  for (const product of products) {
+    if (product.ean) result.withEan++;
+
+    if (!product.sku) {
+      result.skipped++;
+      result.skippedNoSku++;
+      if (result.sample.length < 20) {
+        result.sample.push({
+          externalProductId: product.id,
+          externalSku: '',
+          externalEan: product.ean,
+          externalName: product.name,
+          externalPrice: product.price,
+          active: product.active,
+          action: 'SKIP_NO_SKU',
+        });
+      }
+      continue;
+    }
+
+    const [existingMapping, skuProduct, eanBarcode] = await Promise.all([
+      prisma.shopProductMapping.findUnique({
+        where: { shopId_externalProductId: { shopId, externalProductId: product.id } },
+        select: { id: true },
+      }),
+      prisma.warehouseProduct.findUnique({
+        where: { tenantId_sku: { tenantId, sku: product.sku } },
+        select: { id: true },
+      }),
+      product.ean
+        ? prisma.warehouseProductBarcode.findFirst({
+            where: { tenantId, ean: product.ean, isActive: true },
+            select: { warehouseProductId: true },
+          })
+        : Promise.resolve(null),
+    ]);
+
+    if (existingMapping) result.willUpdate++;
+    else result.willCreate++;
+
+    const autoMapCandidate = skuProduct ? 'SKU' : eanBarcode ? 'EAN' : undefined;
+    if (autoMapCandidate === 'SKU') result.possibleAutoMapBySku++;
+    if (autoMapCandidate === 'EAN') result.possibleAutoMapByEan++;
+
+    if (result.sample.length < 20) {
+      result.sample.push({
+        externalProductId: product.id,
+        externalSku: product.sku,
+        externalEan: product.ean,
+        externalName: product.name,
+        externalPrice: product.price,
+        active: product.active,
+        action: existingMapping ? 'UPDATE' : 'CREATE',
+        autoMapCandidate,
+      });
+    }
+  }
+
+  return result;
 }
 
 export async function getProductImportLogs(query: ImportLogsQuery = {}) {
@@ -240,14 +350,29 @@ export async function autoMapShopProducts(input: AutoMapShopProductsInput = {}):
   const result: AutoMapShopProductsResult = {
     scanned: mappings.length,
     mapped: 0,
+    mappedBySku: 0,
+    mappedByEan: 0,
     skippedNoProduct: 0,
   };
 
   for (const mapping of mappings) {
-    const product = await prisma.warehouseProduct.findUnique({
+    let product = await prisma.warehouseProduct.findUnique({
       where: { tenantId_sku: { tenantId, sku: mapping.externalSku } },
       select: { id: true },
     });
+    let matchedBy: 'SKU' | 'EAN' | null = product ? 'SKU' : null;
+
+    if (!product && mapping.externalEan) {
+      const barcode = await prisma.warehouseProductBarcode.findFirst({
+        where: { tenantId, ean: mapping.externalEan, isActive: true },
+        select: { warehouseProductId: true },
+      });
+
+      if (barcode) {
+        product = { id: barcode.warehouseProductId };
+        matchedBy = 'EAN';
+      }
+    }
 
     if (!product) {
       result.skippedNoProduct++;
@@ -259,6 +384,8 @@ export async function autoMapShopProducts(input: AutoMapShopProductsInput = {}):
       data: { warehouseProductId: product.id },
     });
     result.mapped++;
+    if (matchedBy === 'SKU') result.mappedBySku++;
+    if (matchedBy === 'EAN') result.mappedByEan++;
   }
 
   return result;

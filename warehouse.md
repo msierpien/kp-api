@@ -1046,6 +1046,173 @@ Efekt końcowy:
 - ruch magazynowy nadal wymaga świadomej decyzji operatora;
 - błędy feedu są widoczne w `WholesaleSyncLog`.
 
+#### Brief dla frontendu: integracja hurtowni
+
+Aktualny backend hurtowni jest gotowy do podpięcia w panelu jako widok `Magazyn -> Hurtownie`. Frontend nie powinien trzymać feed URL-i z tokenami w kodzie ani w stałej konfiguracji. URL trafia do API dopiero w formularzu/operator workflow.
+
+Główne widoki:
+
+1. Lista hurtowni
+   - endpoint: `GET /admin/wholesale/providers`;
+   - tabela: nazwa, preset/platforma, aktywny, sync enabled, ostatni sync, liczba mapowań, liczba logów;
+   - akcje: szczegóły, edycja, usuń, synchronizuj, automapuj.
+
+2. Kreator dodania hurtowni CSV
+   - krok 1: `feedUrl`, separator, preset `GODAN`, `PARTYDECO` albo `CUSTOM`;
+   - krok 2: dla `CUSTOM` wywołać `POST /admin/wholesale/providers/preview`;
+   - krok 3: pokazać `columns` i `sampleRows`;
+   - krok 4: operator mapuje kolumny na pola systemowe;
+   - krok 5: zapisać przez `POST /admin/wholesale/providers`.
+
+3. Szczegóły hurtowni
+   - endpoint: `GET /admin/wholesale/providers/:id`;
+   - mapowania: `GET /admin/wholesale/providers/:id/mappings`;
+   - logi: `GET /admin/wholesale/providers/:id/logs`;
+   - akcje: `POST /admin/wholesale/providers/:id/sync`, `POST /admin/wholesale/providers/:id/auto-map`.
+
+Preview CSV:
+
+```text
+POST /admin/wholesale/providers/preview
+```
+
+```json
+{
+  "feedUrl": "URL_FEEDU_CSV",
+  "delimiter": ";",
+  "limit": 5
+}
+```
+
+Odpowiedź:
+
+```json
+{
+  "columns": ["code", "ean", "name", "stock", "price_net"],
+  "sampleRows": [
+    {
+      "code": "SKU1",
+      "ean": "590123",
+      "name": "Produkt testowy",
+      "stock": "12",
+      "price_net": "4,50"
+    }
+  ],
+  "totalPreviewRows": 1,
+  "delimiter": ";"
+}
+```
+
+Zapis providera:
+
+```text
+POST /admin/wholesale/providers
+```
+
+Preset Godan albo PartyDeco:
+
+```json
+{
+  "name": "Godan",
+  "feedUrl": "URL_FEEDU",
+  "preset": "GODAN",
+  "platform": "CSV_FEED",
+  "syncEnabled": true,
+  "isActive": true
+}
+```
+
+Custom CSV:
+
+```json
+{
+  "name": "Nowa hurtownia",
+  "feedUrl": "URL_FEEDU",
+  "preset": "CUSTOM",
+  "platform": "CSV_FEED",
+  "delimiter": ";",
+  "fieldMapping": {
+    "sku": "code",
+    "name": "name",
+    "ean": "ean",
+    "stock": "stock",
+    "price": "price_net",
+    "category": "category_path"
+  },
+  "syncEnabled": true,
+  "isActive": true
+}
+```
+
+Wymagane pola mapowania:
+
+- `sku`;
+- `name`.
+
+Opcjonalne, ale zalecane:
+
+- `ean` - potrzebne do automapowania po kodzie kreskowym;
+- `stock` - stan widoczny jako `lastKnownStock`;
+- `price` - cena zakupu widoczna jako `lastKnownPrice`;
+- `category` - kategoria z feedu.
+
+Synchronizacja:
+
+```text
+POST /admin/wholesale/providers/:id/sync
+```
+
+```json
+{
+  "limit": 100
+}
+```
+
+Po syncu backend tworzy albo aktualizuje `WholesaleProductMapping`. Nie tworzy produktów magazynowych, nie tworzy dokumentu `PZ` i nie zmienia `currentStock`.
+
+Automapowanie:
+
+```text
+POST /admin/wholesale/providers/:id/auto-map
+```
+
+```json
+{
+  "activeOnly": true
+}
+```
+
+Odpowiedź:
+
+```json
+{
+  "providerId": "provider_id",
+  "scanned": 100,
+  "mapped": 73,
+  "mappedBySku": 60,
+  "mappedByEan": 13,
+  "skippedNoProduct": 27
+}
+```
+
+Znaczenie liczników:
+
+- `scanned` - liczba niepodpiętych mapowań sprawdzonych przez backend;
+- `mapped` - suma pozycji podpiętych do `WarehouseProduct`;
+- `mappedBySku` - dopasowania po `externalSku = WarehouseProduct.sku`;
+- `mappedByEan` - dopasowania po `externalEan = WarehouseProductBarcode.ean`;
+- `skippedNoProduct` - brak pasującego produktu magazynowego, to nie jest błąd.
+
+Rekomendowany flow w panelu:
+
+1. Operator dodaje hurtownię albo wybiera istniejącą.
+2. Dla `CUSTOM` panel robi preview CSV i zapisuje `fieldMapping`.
+3. Operator uruchamia `Synchronizuj`.
+4. Panel pokazuje log syncu i listę mapowań.
+5. Operator klika `Automapuj`.
+6. Panel pokazuje wynik automapowania i odświeża listę mapowań.
+7. Pozostałe `skippedNoProduct` zostają do ręcznego podpięcia albo przyszłego tworzenia produktu z mapowania hurtowni.
+
 ### Etap 4: workflow importu produktów ze sklepu
 
 Cel: dać panelowi admina pełny proces obsługi importu produktów z PrestaShop bez ręcznego klikania każdego mapowania osobno.

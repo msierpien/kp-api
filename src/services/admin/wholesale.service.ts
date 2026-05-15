@@ -72,6 +72,19 @@ export interface SyncWholesaleProviderOptions {
   limit?: number;
 }
 
+export interface PreviewWholesaleProviderInput {
+  feedUrl: string;
+  delimiter?: string;
+  limit?: number;
+}
+
+export interface PreviewWholesaleProviderResult {
+  columns: string[];
+  sampleRows: Record<string, string>[];
+  totalPreviewRows: number;
+  delimiter: string;
+}
+
 export interface MapWholesaleProductInput {
   warehouseProductId: string | null;
 }
@@ -194,6 +207,26 @@ export async function deleteWholesaleProvider(id: string) {
   if (!provider) throw new Error('Provider hurtowni nie znaleziony');
 
   return prisma.wholesaleProvider.delete({ where: { id } });
+}
+
+export async function previewWholesaleProvider(input: PreviewWholesaleProviderInput): Promise<PreviewWholesaleProviderResult> {
+  requireTenantId();
+
+  const feedUrl = input.feedUrl?.trim();
+  if (!feedUrl) throw new Error('feedUrl jest wymagany');
+
+  const delimiter = normalizeDelimiter(input.delimiter);
+  const limit = clampPreviewLimit(input.limit);
+  const csvText = await fetchFeed(feedUrl);
+  const records = parseCsv(csvText, delimiter);
+  const sampleRows = records.slice(0, limit);
+
+  return {
+    columns: collectColumns(sampleRows.length > 0 ? sampleRows : records),
+    sampleRows,
+    totalPreviewRows: sampleRows.length,
+    delimiter,
+  };
 }
 
 export async function getWholesaleMappings(providerId: string, query: WholesaleMappingsQuery = {}) {
@@ -389,7 +422,7 @@ function buildProviderConfig(input: {
 }): WholesaleProviderConfig {
   const preset = input.preset ?? detectPreset(input.feedUrl, input.name);
   const presetConfig = preset !== 'CUSTOM' ? PRESET_CONFIGS[preset] : undefined;
-  const delimiter = input.delimiter ?? presetConfig?.delimiter ?? ';';
+  const delimiter = normalizeDelimiter(input.delimiter ?? presetConfig?.delimiter);
   const fieldMapping = input.fieldMapping ?? presetConfig?.fieldMapping;
 
   if (!fieldMapping?.sku || !fieldMapping?.name) {
@@ -407,7 +440,7 @@ function parseProviderConfig(configJson: unknown): WholesaleProviderConfig {
 
   return {
     preset: config.preset ?? 'CUSTOM',
-    delimiter: config.delimiter ?? ';',
+    delimiter: normalizeDelimiter(config.delimiter),
     fieldMapping: config.fieldMapping,
   };
 }
@@ -437,6 +470,29 @@ function parseCsv(csvText: string, delimiter: string): Record<string, string>[] 
     relax_column_count: true,
     trim: true,
   }) as Record<string, string>[];
+}
+
+function normalizeDelimiter(delimiter?: string) {
+  if (!delimiter) return ';';
+  if (delimiter === '\\t') return '\t';
+  if (delimiter.length !== 1) throw new Error('Separator CSV musi mieć dokładnie jeden znak');
+  return delimiter;
+}
+
+function clampPreviewLimit(limit?: number) {
+  if (limit === undefined) return 5;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+    throw new Error('Limit preview musi być liczbą całkowitą od 1 do 50');
+  }
+  return limit;
+}
+
+function collectColumns(records: Record<string, string>[]) {
+  const columns = new Set<string>();
+  for (const record of records) {
+    for (const key of Object.keys(record)) columns.add(key);
+  }
+  return Array.from(columns);
 }
 
 function mapCsvRecord(record: Record<string, string>, fieldMapping: FieldMapping) {

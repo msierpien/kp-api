@@ -971,7 +971,7 @@ Zasady dodawania kolejnych plików:
 - każdy provider może mieć własny separator kolumn, np. `;`, `,`, `\t`;
 - separator wartości wewnątrz kolumny, np. zdjęcia albo atrybuty rozdzielone przecinkiem, zostaje w `payloadJson` do późniejszego PIM-a.
 
-Rekomendowany kolejny krok backendu:
+Backend/API: wdrożone w `kp-api` 2026-05-15.
 
 ```text
 POST /admin/wholesale/providers/preview
@@ -1003,6 +1003,8 @@ Odpowiedź:
   ]
 }
 ```
+
+Endpoint nie zapisuje `feedUrl` w bazie. Służy wyłącznie do kreatora importu i bezpiecznego rozpoznania kolumn.
 
 Panel admina powinien użyć preview do kreatora importu:
 
@@ -1224,7 +1226,80 @@ Efekt końcowy:
 - import zachowuje EAN ze sklepu;
 - mapowania mogą podpiąć się automatycznie również wtedy, gdy SKU się różni, ale EAN pasuje.
 
-### Etap 6: synchronizacja cen do sklepów
+### Etap 6: elastyczny preview i mapper CSV hurtowni
+
+Cel: pozwolić operatorowi dodać nowy plik CSV bez zmian w kodzie backendu.
+
+Status backend/API: wdrożone w `kp-api` 2026-05-15.
+
+Zakres backend:
+
+- `POST /admin/wholesale/providers/preview` - wdrożone;
+- walidacja separatora CSV - wdrożone;
+- limit próbek od 1 do 50 - wdrożone;
+- obsługa separatora `\t` dla TSV - wdrożone;
+- `CUSTOM` `fieldMapping` w syncu providera - wdrożone wcześniej i utrzymane;
+- URL feedu nie jest zapisywany przez preview - wdrożone.
+
+Endpoint Etapu 6:
+
+```text
+POST /admin/wholesale/providers/preview
+```
+
+Przykładowe body:
+
+```json
+{
+  "feedUrl": "URL_FEEDU_CSV",
+  "delimiter": ";",
+  "limit": 5
+}
+```
+
+Przykładowa odpowiedź:
+
+```json
+{
+  "columns": ["code", "ean", "name", "stock", "price_net"],
+  "sampleRows": [
+    {
+      "code": "SKU1",
+      "ean": "590123",
+      "name": "Produkt testowy",
+      "stock": "12",
+      "price_net": "4,50"
+    }
+  ],
+  "totalPreviewRows": 1,
+  "delimiter": ";"
+}
+```
+
+Wytyczne dla panelu admina:
+
+1. Dodać kreator `Dodaj hurtownię z CSV`
+   - krok 1: URL feedu i separator;
+   - krok 2: preview kolumn;
+   - krok 3: mapowanie kolumn na `sku`, `name`, `ean`, `stock`, `price`, `category`;
+   - krok 4: zapis providera jako `CUSTOM` albo wybranego presetu.
+
+2. Nie zapisywać URL-i z tokenami w stanie aplikacji dłużej niż potrzeba
+   - URL trafia do backendu w preview;
+   - zapis URL-a do bazy następuje dopiero przy `POST /admin/wholesale/providers`.
+
+3. Po zapisie providera użyć istniejącego syncu
+   - `POST /admin/wholesale/providers/:id/sync`;
+   - potem `GET /admin/wholesale/providers/:id/logs`;
+   - potem `GET /admin/wholesale/providers/:id/mappings`.
+
+Efekt końcowy:
+
+- Godan i PartyDeco nadal działają przez presety;
+- nowy niestandardowy CSV można dodać bez deployu backendu;
+- operator widzi kolumny i przykładowe dane przed zapisaniem konfiguracji.
+
+### Etap 7: synchronizacja cen do sklepów
 
 Cel: rozdzielić cenę zakupu, cenę sprzedaży i publikację ceny do sklepów.
 
@@ -1249,7 +1324,7 @@ Efekt końcowy:
 - operator ma log sukcesów i błędów;
 - ceny nie mieszają się z logiką stanów.
 
-### Etap 7: dokładniejsza kontrola stanów
+### Etap 8: dokładniejsza kontrola stanów
 
 Cel: przygotować magazyn do bardziej zaawansowanych procesów bez przedwczesnego multi-warehouse.
 
@@ -1273,7 +1348,7 @@ Efekt końcowy:
 - magazyn zaczyna wspierać decyzje operacyjne, nie tylko przechowuje stan;
 - łatwiej zauważyć braki, rozbieżności i produkty wymagające zamówienia.
 
-### Etap 8: przyszły produkt/PIM
+### Etap 9: przyszły produkt/PIM
 
 Cel: rozbudować produkt dopiero wtedy, gdy magazyn będzie stabilny.
 

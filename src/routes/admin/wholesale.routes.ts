@@ -56,6 +56,31 @@ export async function wholesaleRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.post('/providers/preview', {
+    schema: {
+      tags: ['wholesale'],
+      summary: 'Podejrzyj kolumny i przykładowe wiersze feedu CSV hurtowni bez zapisu',
+      body: {
+        type: 'object',
+        required: ['feedUrl'],
+        properties: {
+          feedUrl: { type: 'string', minLength: 1 },
+          delimiter: { type: 'string', default: ';' },
+          limit: { type: 'integer', minimum: 1, maximum: 50, default: 5 },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: wholesaleService.PreviewWholesaleProviderInput }>, reply: FastifyReply) => {
+    try {
+      const result = await wholesaleService.previewWholesaleProvider(request.body);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd podglądu feedu hurtowni';
+      const status = message.includes('Brak kontekstu') ? 400 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   fastify.get('/providers/:id', {
     schema: {
       tags: ['wholesale'],

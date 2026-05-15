@@ -1,6 +1,7 @@
 import prisma from '../../lib/prisma';
 import { isSuperAdmin, getTenantContext } from '../../lib/tenant-context';
 import bcrypt from 'bcrypt';
+import { ensureDefaultCatalog } from './warehouse-catalogs.service';
 
 export interface UserListItem {
   id: string;
@@ -152,6 +153,12 @@ export async function createUser(input: CreateUserInput): Promise<UserListItem> 
     }
   }
 
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: targetTenantId },
+    select: { id: true },
+  });
+  if (!tenant) throw new Error('Tenant nie został znaleziony');
+
   // Check if email already exists
   const existing = await prisma.user.findUnique({
     where: { email: input.email },
@@ -164,32 +171,36 @@ export async function createUser(input: CreateUserInput): Promise<UserListItem> 
   // Hash password
   const passwordHash = await bcrypt.hash(input.password, 10);
 
-  const user = await prisma.user.create({
-    data: {
-      email: input.email,
-      passwordHash,
-      name: input.name,
-      role: input.role,
-      tenantId: targetTenantId,
-      isActive: input.isActive ?? true,
-    } as any, // tenantId added by middleware but we override it
-    select: {
-      id: true,
-      email: true,
-      name: true,
-      role: true,
-      isActive: true,
-      tenantId: true,
-      tenant: {
-        select: {
-          id: true,
-          name: true,
-          slug: true,
+  const user = await prisma.$transaction(async (tx) => {
+    await ensureDefaultCatalog(targetTenantId, tx);
+
+    return tx.user.create({
+      data: {
+        email: input.email,
+        passwordHash,
+        name: input.name,
+        role: input.role,
+        tenantId: targetTenantId,
+        isActive: input.isActive ?? true,
+      } as any, // tenantId added by middleware but we override it
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        isActive: true,
+        tenantId: true,
+        tenant: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+          },
         },
+        lastLoginAt: true,
+        createdAt: true,
       },
-      lastLoginAt: true,
-      createdAt: true,
-    },
+    });
   });
 
   return user as UserListItem;
@@ -240,6 +251,12 @@ export async function updateUser(id: string, input: UpdateUserInput): Promise<Us
     if (!isSuperAdmin()) {
       throw new Error('Tylko SUPER_ADMIN może zmieniać tenantId użytkownika');
     }
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: input.tenantId },
+      select: { id: true },
+    });
+    if (!tenant) throw new Error('Tenant nie został znaleziony');
+    await ensureDefaultCatalog(input.tenantId);
     updateData.tenantId = input.tenantId;
   }
 

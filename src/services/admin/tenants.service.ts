@@ -1,6 +1,7 @@
 import prisma from '../../lib/prisma';
 import { isSuperAdmin } from '../../lib/tenant-context';
 import type { Tenant, TenantStatus } from '@prisma/client';
+import { ensureDefaultCatalog } from './warehouse-catalogs.service';
 
 export interface TenantItem {
   id: string;
@@ -125,22 +126,28 @@ export async function createTenant(input: CreateTenantInput): Promise<TenantItem
     throw new Error(`Tenant o slug "${input.slug}" już istnieje`);
   }
 
-  const tenant = await prisma.tenant.create({
-    data: {
-      name: input.name,
-      slug: input.slug,
-      status: 'ACTIVE',
-      plan: input.plan || 'FREE',
-      limitsJson: input.limits || {},
-    },
-    include: {
-      _count: {
-        select: {
-          users: true,
-          shops: true,
+  const tenant = await prisma.$transaction(async (tx) => {
+    const createdTenant = await tx.tenant.create({
+      data: {
+        name: input.name,
+        slug: input.slug,
+        status: 'ACTIVE',
+        plan: input.plan || 'FREE',
+        limitsJson: input.limits || {},
+      },
+      include: {
+        _count: {
+          select: {
+            users: true,
+            shops: true,
+          },
         },
       },
-    },
+    });
+
+    await ensureDefaultCatalog(createdTenant.id, tx);
+
+    return createdTenant;
   });
 
   return mapTenant(tenant);

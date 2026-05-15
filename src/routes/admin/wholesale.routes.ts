@@ -272,6 +272,7 @@ export async function wholesaleRoutes(fastify: FastifyInstance) {
         type: 'object',
         properties: {
           activeOnly: { type: 'boolean', default: true },
+          mode: { type: 'string', enum: ['sku_ean', 'sku', 'ean', 'name'], default: 'sku_ean' },
         },
       },
     },

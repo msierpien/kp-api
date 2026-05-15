@@ -97,8 +97,11 @@ export interface PreviewWholesaleProviderResult {
   delimiter: string;
 }
 
+type AutoMapWholesaleMode = 'sku_ean' | 'sku' | 'ean' | 'name';
+
 export interface AutoMapWholesaleProviderOptions {
   activeOnly?: boolean;
+  mode?: AutoMapWholesaleMode;
 }
 
 export interface AutoMapWholesaleProviderResult {
@@ -107,6 +110,7 @@ export interface AutoMapWholesaleProviderResult {
   mapped: number;
   mappedBySku: number;
   mappedByEan: number;
+  mappedByName: number;
   skippedNoProduct: number;
 }
 
@@ -428,6 +432,7 @@ export async function autoMapWholesaleProvider(
 ): Promise<AutoMapWholesaleProviderResult> {
   const tenantId = requireTenantId();
   await assertProviderBelongsToTenant(providerId, tenantId);
+  const mode = normalizeAutoMapMode(options.mode);
 
   const mappings = await prisma.wholesaleProductMapping.findMany({
     where: {
@@ -445,41 +450,78 @@ export async function autoMapWholesaleProvider(
     mapped: 0,
     mappedBySku: 0,
     mappedByEan: 0,
+    mappedByName: 0,
     skippedNoProduct: 0,
   };
 
+  if (mappings.length === 0) return result;
+
+  const [products, barcodes] = await Promise.all([
+    prisma.warehouseProduct.findMany({
+      where: { tenantId, isActive: true },
+      select: { id: true, sku: true, name: true },
+    }),
+    mode === 'sku' || mode === 'name'
+      ? Promise.resolve([])
+      : prisma.warehouseProductBarcode.findMany({
+          where: {
+            tenantId,
+            isActive: true,
+            ean: { in: Array.from(new Set(mappings.map((mapping) => mapping.externalEan).filter(Boolean))) as string[] },
+          },
+          select: { ean: true, warehouseProductId: true },
+        }),
+  ]);
+
+  const productsBySku = new Map<string, { id: string }>();
+  const productsByName = new Map<string, { id: string } | null>();
+  const barcodesByEan = new Map<string, { id: string }>();
+
+  for (const product of products) {
+    const sku = normalizeMatchValue(product.sku);
+    if (sku && !productsBySku.has(sku)) productsBySku.set(sku, { id: product.id });
+
+    const name = normalizeMatchValue(product.name);
+    if (!name) continue;
+    productsByName.set(name, productsByName.has(name) ? null : { id: product.id });
+  }
+
+  for (const barcode of barcodes) {
+    const ean = normalizeMatchValue(barcode.ean);
+    if (ean && !barcodesByEan.has(ean)) barcodesByEan.set(ean, { id: barcode.warehouseProductId });
+  }
+
+  const updates: Array<{ id: string; warehouseProductId: string }> = [];
+
   for (const mapping of mappings) {
-    let product = await prisma.warehouseProduct.findUnique({
-      where: { tenantId_sku: { tenantId, sku: mapping.externalSku } },
-      select: { id: true },
+    const match = findAutoMapMatch(mapping, mode, {
+      productsBySku,
+      productsByName,
+      barcodesByEan,
     });
-    let matchedBy: 'SKU' | 'EAN' | null = product ? 'SKU' : null;
 
-    if (!product && mapping.externalEan) {
-      const barcode = await prisma.warehouseProductBarcode.findFirst({
-        where: { tenantId, ean: mapping.externalEan, isActive: true },
-        select: { warehouseProductId: true },
-      });
-
-      if (barcode) {
-        product = { id: barcode.warehouseProductId };
-        matchedBy = 'EAN';
-      }
-    }
-
-    if (!product) {
+    if (!match) {
       result.skippedNoProduct++;
       continue;
     }
 
-    await prisma.wholesaleProductMapping.update({
-      where: { id: mapping.id },
-      data: { warehouseProductId: product.id },
-    });
-
+    updates.push({ id: mapping.id, warehouseProductId: match.product.id });
     result.mapped++;
-    if (matchedBy === 'SKU') result.mappedBySku++;
-    if (matchedBy === 'EAN') result.mappedByEan++;
+    if (match.matchedBy === 'SKU') result.mappedBySku++;
+    if (match.matchedBy === 'EAN') result.mappedByEan++;
+    if (match.matchedBy === 'NAME') result.mappedByName++;
+  }
+
+  for (let offset = 0; offset < updates.length; offset += 100) {
+    const chunk = updates.slice(offset, offset + 100);
+    await prisma.$transaction(
+      chunk.map((update) =>
+        prisma.wholesaleProductMapping.update({
+          where: { id: update.id },
+          data: { warehouseProductId: update.warehouseProductId },
+        }),
+      ),
+    );
   }
 
   return result;
@@ -813,6 +855,44 @@ async function processWholesaleSyncBatch(input: {
     updated: updateOperations.length,
     skipped,
   };
+}
+
+function normalizeAutoMapMode(mode?: AutoMapWholesaleMode): AutoMapWholesaleMode {
+  return mode ?? 'sku_ean';
+}
+
+function normalizeMatchValue(value?: string | null) {
+  return (value ?? '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function findAutoMapMatch(
+  mapping: { externalSku: string; externalEan?: string | null; externalName?: string | null },
+  mode: AutoMapWholesaleMode,
+  indexes: {
+    productsBySku: Map<string, { id: string }>;
+    productsByName: Map<string, { id: string } | null>;
+    barcodesByEan: Map<string, { id: string }>;
+  },
+) {
+  if (mode === 'sku' || mode === 'sku_ean') {
+    const product = indexes.productsBySku.get(normalizeMatchValue(mapping.externalSku));
+    if (product) return { product, matchedBy: 'SKU' as const };
+  }
+
+  if (mode === 'ean' || mode === 'sku_ean') {
+    const product = indexes.barcodesByEan.get(normalizeMatchValue(mapping.externalEan));
+    if (product) return { product, matchedBy: 'EAN' as const };
+  }
+
+  if (mode === 'name') {
+    const product = indexes.productsByName.get(normalizeMatchValue(mapping.externalName));
+    if (product) return { product, matchedBy: 'NAME' as const };
+  }
+
+  return null;
 }
 
 async function assertProviderBelongsToTenant(providerId: string, tenantId: string) {

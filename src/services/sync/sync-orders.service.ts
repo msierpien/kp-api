@@ -3,6 +3,9 @@ import { PrestaShopClient } from '../prestashop/prestashop-client';
 import { decrypt } from '../../lib/encryption';
 import { emailService } from '../email/email.service';
 import { generateAccessToken } from '../../lib/token';
+import { createWzForOrder, shouldAutoCreateWzForTenant } from '../admin/warehouse.service';
+
+const DEBUG_SHOP_SYNC = process.env.DEBUG_SHOP_SYNC === 'true';
 
 export interface SyncResult {
   success: boolean;
@@ -33,6 +36,12 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
           where: { isActive: true },
           include: { template: true },
         },
+        productMappings: {
+          where: {
+            isActive: true,
+            warehouseProductId: { not: null },
+          },
+        },
       },
     });
 
@@ -42,12 +51,6 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
 
     if (shop.status !== 'ACTIVE') {
       throw new Error('Shop is not active');
-    }
-
-    if (shop.personalizedProducts.length === 0) {
-      result.errors.push('No personalized products configured');
-      await logSync(shopId, 'ORDERS', 'PARTIAL', result, startTime);
-      return result;
     }
 
     // 2. Initialize PrestaShop client
@@ -79,7 +82,7 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
     });
 
     result.ordersFetched = orders.length;
-    console.log(`[Sync] Fetched ${orders.length} orders from PrestaShop (limit: ${syncLimit})`);
+    if (DEBUG_SHOP_SYNC) console.log(`[Sync] Fetched ${orders.length} orders from PrestaShop (limit: ${syncLimit})`);
 
     // 4. Build product mapping by identifier type
     const productMap = {
@@ -92,11 +95,16 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
       const type = pp.identifierType as keyof typeof productMap;
       if (productMap[type]) {
         productMap[type].set(pp.identifierValue.toLowerCase(), pp);
-        console.log(`[Sync] Mapped ${type}: "${pp.identifierValue}" → Product: ${pp.name}`);
+        if (DEBUG_SHOP_SYNC) console.log(`[Sync] Mapped ${type}: "${pp.identifierValue}" -> Product: ${pp.name}`);
       }
     }
 
-    console.log(`[Sync] Product map built: SKU=${productMap.SKU.size}, INDEX=${productMap.INDEX.size}, EAN=${productMap.EAN.size}`);
+    if (DEBUG_SHOP_SYNC) console.log(`[Sync] Product map built: SKU=${productMap.SKU.size}, INDEX=${productMap.INDEX.size}, EAN=${productMap.EAN.size}`);
+
+    const warehouseSkuSet = new Set(
+      shop.productMappings.map((mapping) => mapping.externalSku.trim().toLowerCase()),
+    );
+    if (DEBUG_SHOP_SYNC) console.log(`[Sync] Warehouse product map built: SKU=${warehouseSkuSet.size}`);
 
     // 5. Process each order
     for (const orderData of orders) {
@@ -117,44 +125,53 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
         }
 
         // Fetch full order details
-        console.log(`Fetching details for order ${orderData.id}...`);
+        if (DEBUG_SHOP_SYNC) console.log(`Fetching details for order ${orderData.id}...`);
         const details = await client.fetchOrderDetails(orderData.id);
-        console.log(`Order ${orderData.id} details fetched successfully`);
+        if (DEBUG_SHOP_SYNC) console.log(`Order ${orderData.id} details fetched successfully`);
         
         // Debug: show all items in order
-        console.log(`[Sync] Order ${orderData.id} has ${details.items.length} items:`);
-        details.items.forEach((item, idx) => {
-          console.log(`  [${idx + 1}] ${item.product_name}`);
-          console.log(`      product_reference: "${item.product_reference}"`);
-          console.log(`      product_id: ${item.product_id}`);
-          console.log(`      quantity: ${item.quantity}`);
-        });
+        if (DEBUG_SHOP_SYNC) {
+          console.log(`[Sync] Order ${orderData.id} has ${details.items.length} items:`);
+          details.items.forEach((item, idx) => {
+            console.log(`  [${idx + 1}] ${item.product_name}`);
+            console.log(`      product_reference: "${item.product_reference}"`);
+            console.log(`      product_id: ${item.product_id}`);
+            console.log(`      quantity: ${item.quantity}`);
+          });
+        }
 
-        // Check if order contains personalized products
-        // Match product_reference against all identifier types (SKU/INDEX/EAN)
-        const personalizedItems = details.items.filter((item) => {
+        const getPersonalizedProduct = (item: { product_reference: string }) => {
           const ref = (item.product_reference || '').toLowerCase();
-          
-          const matched = productMap.SKU.has(ref) || 
-                         productMap.INDEX.has(ref) || 
-                         productMap.EAN.has(ref);
-          
-          if (matched) {
-            console.log(`[Sync] ✓ Matched item: ${item.product_name} (reference: ${ref})`);
+          return productMap.SKU.get(ref) ||
+            productMap.INDEX.get(ref) ||
+            productMap.EAN.get(ref) ||
+            null;
+        };
+
+        // Save order items that are either personalized or warehouse-mapped.
+        const relevantItems = details.items.filter((item) => {
+          const ref = (item.product_reference || '').toLowerCase();
+          const personalizedProduct = getPersonalizedProduct(item);
+          const isWarehouseMapped = warehouseSkuSet.has(ref);
+
+          if (personalizedProduct) {
+            if (DEBUG_SHOP_SYNC) console.log(`[Sync] Matched personalized item: ${item.product_name} (reference: ${ref})`);
+          } else if (isWarehouseMapped) {
+            if (DEBUG_SHOP_SYNC) console.log(`[Sync] Matched warehouse item: ${item.product_name} (reference: ${ref})`);
           } else {
-            console.log(`[Sync] ✗ No match: ${item.product_name} (reference: ${ref})`);
+            if (DEBUG_SHOP_SYNC) console.log(`[Sync] No match: ${item.product_name} (reference: ${ref})`);
           }
-          
-          return matched;
+
+          return Boolean(personalizedProduct) || isWarehouseMapped;
         });
 
-        if (personalizedItems.length === 0) {
-          console.log(`[Sync] Order ${orderData.id} has no personalized products, skipping`);
+        if (relevantItems.length === 0) {
+          if (DEBUG_SHOP_SYNC) console.log(`[Sync] Order ${orderData.id} has no personalized or warehouse-mapped products, skipping`);
           result.ordersSkipped++;
           continue;
         }
 
-        console.log(`Order ${orderData.id} has ${personalizedItems.length} personalized items`);
+        if (DEBUG_SHOP_SYNC) console.log(`Order ${orderData.id} has ${relevantItems.length} relevant items`);
 
         // Validate and normalize customer email (required field in Prisma)
         const customerEmail = details.customer.email?.trim().toLowerCase();
@@ -190,20 +207,9 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
           token: string;
         }> = [];
 
-        // Create order items and personalization cases
-        for (const item of personalizedItems) {
-          const ref = (item.product_reference || '').toLowerCase();
-          
-          const personalizedProduct: any =
-            productMap.SKU.get(ref) ||
-            productMap.INDEX.get(ref) ||
-            productMap.EAN.get(ref);
-          
-          if (!personalizedProduct) {
-            console.warn(`[Sync] Could not find personalized product mapping for item: ${item.product_name}`);
-            continue;
-          }
-
+        // Create order items for all relevant items; create personalization cases only where applicable.
+        for (const item of relevantItems) {
+          const personalizedProduct: any = getPersonalizedProduct(item);
           const orderItem = await prisma.orderItem.create({
             data: {
               orderId: order.id,
@@ -211,9 +217,13 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
               sku: item.product_reference,
               productNameSnapshot: item.product_name,
               quantity: item.quantity,
-              personalizedProductId: personalizedProduct.id,
+              personalizedProductId: personalizedProduct?.id ?? null,
             },
           });
+
+          if (!personalizedProduct) {
+            continue;
+          }
 
           // Create personalization case for this item
           // Generujemy token, hash i zaszyfrowany token
@@ -247,7 +257,8 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
           const { triggerAutomations, AutomationTrigger } = await import('../admin/automation.service');
           await triggerAutomations({
             trigger: AutomationTrigger.CASE_CREATED,
-            caseItem: newCase,
+            caseId: newCase.id,
+            caseData: newCase,
           });
 
           // Dodaj do listy do emaila - używamy oryginalnego tokena, nie hasha
@@ -256,6 +267,15 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
             quantity: item.quantity,
             token: customerToken, // Oryginalny token dla klienta (nie hash!)
           });
+        }
+
+        if (await shouldAutoCreateWzForTenant(shop.tenantId)) {
+          try {
+            await createWzForOrder(order.id);
+          } catch (warehouseError) {
+            const message = warehouseError instanceof Error ? warehouseError.message : 'Unknown warehouse error';
+            result.errors.push(`Order ${orderData.id}: WZ not created: ${message}`);
+          }
         }
 
         // Wyślij email z linkami do personalizacji (jeśli AUTO_SEND_EMAILS = true)
@@ -276,13 +296,13 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
               baseUrl,
             });
 
-            console.log(`[Sync] ✉️  Email sent to ${customerEmail} for order ${details.order.reference}`);
+            console.log(`[Sync] Email sent to ${customerEmail} for order ${details.order.reference}`);
           } catch (emailError) {
             console.error(`[Sync] Failed to send email for order ${details.order.reference}:`, emailError);
             // Nie przerywaj synchronizacji, jeśli email się nie powiódł
           }
         } else if (casesForEmail.length > 0 && !config.smtp.autoSend) {
-          console.log(`[Sync] ℹ️  AUTO_SEND_EMAILS=false - email NOT sent for order ${details.order.reference} (${casesForEmail.length} cases created, manual send required)`);
+          if (DEBUG_SHOP_SYNC) console.log(`[Sync] AUTO_SEND_EMAILS=false - email NOT sent for order ${details.order.reference} (${casesForEmail.length} cases created, manual send required)`);
         } else if (casesForEmail.length > 0) {
           console.warn(`[Sync] ⚠️  Email service not configured, skipping email for order ${details.order.reference}`);
         }
@@ -340,4 +360,3 @@ async function logSync(
     },
   });
 }
-

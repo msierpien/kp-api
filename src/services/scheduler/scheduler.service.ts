@@ -1,6 +1,7 @@
 import cron from 'node-cron';
+import type { ScheduledTask } from 'node-cron';
 import prisma from '../../lib/prisma';
-import { syncShopOrders } from '../sync/sync-orders.service';
+import { syncShopOrders, type SyncResult } from '../sync/sync-orders.service';
 import { cleanupStorage } from '../storage/cleanup-storage.service';
 // BullMQ Worker automatycznie przetwarza RenderJobs - nie potrzebujemy crona
 
@@ -8,7 +9,7 @@ import { cleanupStorage } from '../storage/cleanup-storage.service';
  * Mapa aktywnych zadań cron per sklep
  * Key: shopId, Value: ScheduledTask
  */
-const scheduledTasks = new Map<string, cron.ScheduledTask>();
+const scheduledTasks = new Map<string, ScheduledTask>();
 
 /**
  * Konwersja interwału (w minutach) na cron expression
@@ -69,10 +70,7 @@ function scheduleShopSync(shopId: string, shopName: string, intervalMinutes: num
     () => {
       runShopSync(shopId, shopName);
     },
-    {
-      scheduled: true,
-      timezone: 'Europe/Warsaw',
-    }
+    { timezone: 'Europe/Warsaw' }
   );
   
   scheduledTasks.set(shopId, task);
@@ -163,10 +161,7 @@ function scheduleStorageCleanup() {
         console.error('[Scheduler] ❌ Storage cleanup failed:', error);
       }
     },
-    {
-      scheduled: true,
-      timezone: 'Europe/Warsaw',
-    }
+    { timezone: 'Europe/Warsaw' }
   );
   
   console.log('[Scheduler] 📅 Scheduled storage cleanup: daily at 3:00 AM');
@@ -294,7 +289,10 @@ export function getSchedulerStatus() {
 /**
  * Wymusza natychmiastową synchronizację dla sklepu (poza harmonogramem)
  */
-export async function triggerManualSync(shopId: string) {
+export async function triggerManualSync(shopId: string, options: { wait?: boolean } = {}): Promise<SyncResult | {
+  message: string;
+  shopId: string;
+}> {
   const shop = await prisma.shop.findUnique({
     where: { id: shopId },
     select: {
@@ -309,6 +307,10 @@ export async function triggerManualSync(shopId: string) {
   
   if (shop.status !== 'ACTIVE') {
     throw new Error('Shop is not active');
+  }
+
+  if (options.wait) {
+    return syncShopOrders(shopId);
   }
   
   // Uruchom sync w tle (nie czekamy na zakończenie)

@@ -187,7 +187,7 @@ export async function emailRoutes(fastify: FastifyInstance) {
             
             queued.push(caseItem.id);
           } catch (error) {
-            fastify.log.error(`Failed to queue email for case ${caseItem.id}:`, error);
+            fastify.log.error({ err: error }, `Failed to queue email for case ${caseItem.id}`);
           }
         }
 

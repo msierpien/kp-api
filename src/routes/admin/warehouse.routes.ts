@@ -69,6 +69,8 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
           name: { type: 'string', minLength: 1 },
           unit: { type: 'string', default: 'szt' },
           description: { type: 'string' },
+          purchasePrice: { type: 'number', minimum: 0 },
+          retailPrice: { type: 'number', minimum: 0 },
         },
       },
     },
@@ -148,6 +150,8 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
           name: { type: 'string', minLength: 1 },
           unit: { type: 'string' },
           description: { type: 'string' },
+          purchasePrice: { type: ['number', 'null'], minimum: 0 },
+          retailPrice: { type: ['number', 'null'], minimum: 0 },
           isActive: { type: 'boolean' },
         },
       },
@@ -158,6 +162,32 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
       return reply.send(product);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd edycji produktu';
+      const status = message.includes('nie znaleziony') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.put('/products/:id/prices', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Zaktualizuj ceny produktu magazynowego',
+      body: {
+        type: 'object',
+        properties: {
+          purchasePrice: { type: ['number', 'null'], minimum: 0 },
+          retailPrice: { type: ['number', 'null'], minimum: 0 },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: Pick<warehouseService.UpdateProductInput, 'purchasePrice' | 'retailPrice'>;
+  }>, reply: FastifyReply) => {
+    try {
+      const product = await warehouseService.updateProduct(request.params.id, request.body);
+      return reply.send(product);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd aktualizacji cen';
       const status = message.includes('nie znaleziony') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }

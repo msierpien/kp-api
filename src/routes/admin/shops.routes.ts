@@ -251,17 +251,26 @@ export async function shopsRoutes(fastify: FastifyInstance) {
   );
 
   // POST /admin/shops/:id/sync - Manual sync trigger
-  fastify.post<{ Params: ShopIdParamsInput }>(
+  fastify.post<{ Params: ShopIdParamsInput; Querystring: { wait?: string | boolean } }>(
     '/:id/sync',
     {
       schema: {
         tags: ['shops'],
         summary: 'Ręcznie uruchom synchronizację zamówień',
         params: { type: 'object', properties: { id: { type: 'string' } } },
-        response: { 200: { type: 'object' } },
+        querystring: {
+          type: 'object',
+          properties: {
+            wait: { anyOf: [{ type: 'boolean' }, { type: 'string', enum: ['true', 'false'] }] },
+          },
+        },
+        response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
-    async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
+    async (
+      request: FastifyRequest<{ Params: ShopIdParamsInput; Querystring: { wait?: string | boolean } }>,
+      reply: FastifyReply
+    ) => {
       const paramsParsed = shopIdParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
         return reply.status(400).send({
@@ -271,8 +280,9 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       }
 
       try {
-        fastify.log.info({ shopId: paramsParsed.data.id }, 'Manual sync triggered');
-        const result = await triggerManualSync(paramsParsed.data.id);
+        const wait = request.query.wait === true || request.query.wait === 'true';
+        fastify.log.info({ shopId: paramsParsed.data.id, wait }, 'Manual sync triggered');
+        const result = await triggerManualSync(paramsParsed.data.id, { wait });
         return reply.send(result);
       } catch (error) {
         fastify.log.error(error);

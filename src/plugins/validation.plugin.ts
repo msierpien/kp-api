@@ -24,7 +24,7 @@ declare module 'fastify' {
  */
 export async function validationPlugin(fastify: FastifyInstance) {
   fastify.addHook('preHandler', async (request: FastifyRequest, reply: FastifyReply) => {
-    const { bodySchema, paramsSchema, querySchema } = request.routeConfig;
+    const { bodySchema, paramsSchema, querySchema } = request.routeOptions.config;
 
     try {
       // Walidacja body
@@ -67,7 +67,7 @@ export async function validationPlugin(fastify: FastifyInstance) {
         request.query = parsed.data;
       }
     } catch (error) {
-      fastify.log.error('Validation plugin error:', error);
+      fastify.log.error({ err: error }, 'Validation plugin error');
       return reply.status(500).send({
         error: 'Internal Server Error',
         message: 'Błąd walidacji',

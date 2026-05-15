@@ -1,12 +1,16 @@
 import { Queue, Job } from 'bullmq';
-import { renderQueue } from './render.queue';
-import { emailQueue } from './email.queue';
+import { getRenderQueue } from './render.queue';
+import { getEmailQueue } from './email.queue';
+import { getStockSyncQueue } from './stock-sync.queue';
 
 // Map queue names to queue instances
-const queues: Record<string, Queue> = {
-  'render': renderQueue,
-  'email': emailQueue,
-};
+function getQueues(): Record<string, Queue> {
+  return {
+    render: getRenderQueue() as Queue,
+    email: getEmailQueue() as Queue,
+    stockSync: getStockSyncQueue() as Queue,
+  };
+}
 
 export interface QueueStats {
   name: string;
@@ -45,7 +49,7 @@ export interface JobDetails {
  * Get all available queues with their stats
  */
 export async function getAllQueuesStats(): Promise<QueueStats[]> {
-  const queueNames = Object.keys(queues);
+  const queueNames = Object.keys(getQueues());
   const stats = await Promise.all(
     queueNames.map(name => getQueueStats(name))
   );
@@ -56,18 +60,18 @@ export async function getAllQueuesStats(): Promise<QueueStats[]> {
  * Get stats for a specific queue
  */
 export async function getQueueStats(queueName: string): Promise<QueueStats> {
-  const queue = queues[queueName];
+  const queue = getQueues()[queueName];
   if (!queue) {
     throw new Error(`Queue '${queueName}' not found`);
   }
 
-  const [waiting, active, completed, failed, delayed, paused] = await Promise.all([
+  const [waiting, active, completed, failed, delayed, isPaused] = await Promise.all([
     queue.getWaitingCount(),
     queue.getActiveCount(),
     queue.getCompletedCount(),
     queue.getFailedCount(),
     queue.getDelayedCount(),
-    queue.getPausedCount(),
+    queue.isPaused(),
   ]);
 
   // Get last processed job
@@ -82,7 +86,7 @@ export async function getQueueStats(queueName: string): Promise<QueueStats> {
       completed,
       failed,
       delayed,
-      paused,
+      paused: isPaused ? 1 : 0,
     },
     lastJob: lastJob ? {
       id: lastJob.id!,
@@ -101,7 +105,7 @@ export async function getQueueJobs(
   start: number = 0,
   end: number = 19
 ): Promise<Job[]> {
-  const queue = queues[queueName];
+  const queue = getQueues()[queueName];
   if (!queue) {
     throw new Error(`Queue '${queueName}' not found`);
   }
@@ -125,7 +129,7 @@ export async function getQueueJobs(
       jobs = await queue.getDelayed(start, end);
       break;
     case 'paused':
-      jobs = await queue.getPaused(start, end);
+      jobs = [];
       break;
   }
 
@@ -149,7 +153,7 @@ export async function getJobDetails(
   queueName: string,
   jobId: string
 ): Promise<JobDetails | null> {
-  const queue = queues[queueName];
+  const queue = getQueues()[queueName];
   if (!queue) {
     throw new Error(`Queue '${queueName}' not found`);
   }
@@ -164,7 +168,7 @@ export async function getJobDetails(
     name: job.name,
     data: job.data,
     opts: job.opts,
-    progress: await job.progress(),
+    progress: typeof job.progress === 'number' ? job.progress : 0,
     returnvalue: job.returnvalue,
     stacktrace: job.stacktrace || [],
     attemptsMade: job.attemptsMade,
@@ -183,7 +187,7 @@ export async function retryJob(
   queueName: string,
   jobId: string
 ): Promise<void> {
-  const queue = queues[queueName];
+  const queue = getQueues()[queueName];
   if (!queue) {
     throw new Error(`Queue '${queueName}' not found`);
   }
@@ -223,7 +227,7 @@ export async function deleteJob(
   queueName: string,
   jobId: string
 ): Promise<void> {
-  const queue = queues[queueName];
+  const queue = getQueues()[queueName];
   if (!queue) {
     throw new Error(`Queue '${queueName}' not found`);
   }
@@ -245,7 +249,7 @@ export async function cleanQueue(
   limit: number = 1000,
   type: 'completed' | 'failed' = 'completed'
 ): Promise<string[]> {
-  const queue = queues[queueName];
+  const queue = getQueues()[queueName];
   if (!queue) {
     throw new Error(`Queue '${queueName}' not found`);
   }
@@ -257,5 +261,5 @@ export async function cleanQueue(
  * Get available queue names
  */
 export function getQueueNames(): string[] {
-  return Object.keys(queues);
+  return Object.keys(getQueues());
 }

@@ -1,6 +1,7 @@
 import prisma from '../../lib/prisma';
 import { Prisma } from '@prisma/client';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
+import { syncStockForProducts } from '../stock/stock-sync.service';
 
 // ─── Products ────────────────────────────────────────────────────────────────
 
@@ -9,12 +10,16 @@ export interface CreateProductInput {
   name: string;
   unit?: string;
   description?: string;
+  purchasePrice?: number;
+  retailPrice?: number;
 }
 
 export interface UpdateProductInput {
   name?: string;
   unit?: string;
   description?: string;
+  purchasePrice?: number | null;
+  retailPrice?: number | null;
   isActive?: boolean;
 }
 
@@ -66,7 +71,15 @@ export async function createProduct(input: CreateProductInput) {
   if (existing) throw new Error(`Produkt z SKU "${input.sku}" już istnieje`);
 
   return prisma.warehouseProduct.create({
-    data: { tenantId, sku: input.sku, name: input.name, unit: input.unit ?? 'szt', description: input.description },
+    data: {
+      tenantId,
+      sku: input.sku,
+      name: input.name,
+      unit: input.unit ?? 'szt',
+      description: input.description,
+      purchasePrice: input.purchasePrice,
+      retailPrice: input.retailPrice,
+    },
   });
 }
 
@@ -131,6 +144,12 @@ export interface UpdateDocumentInput {
 
 export interface CancelDocumentInput {
   reason?: string;
+}
+
+export interface CreateWzForOrderResult {
+  document: Awaited<ReturnType<typeof getDocumentById>>;
+  created: boolean;
+  skippedReason?: string;
 }
 
 export interface DocumentsQuery {
@@ -233,6 +252,139 @@ export async function createDocument(input: CreateDocumentInput) {
   });
 }
 
+export async function createWzForOrder(orderId: string): Promise<CreateWzForOrderResult> {
+  const contextTenantId = getTenantId();
+  const order = await prisma.order.findFirst({
+    where: {
+      id: orderId,
+      ...(contextTenantId ? { shop: { tenantId: contextTenantId } } : {}),
+    },
+    include: {
+      shop: true,
+      items: true,
+    },
+  });
+
+  if (!order) throw new Error('Zamówienie nie znalezione');
+
+  const existingDocument = await prisma.warehouseDocument.findFirst({
+    where: {
+      tenantId: order.shop.tenantId,
+      orderId,
+      type: 'WZ',
+      status: { not: 'CANCELLED' },
+    },
+    include: { items: { include: { product: true, barcode: true } }, order: true },
+  });
+
+  if (existingDocument) {
+    return { document: existingDocument, created: false, skippedReason: 'WZ dla tego zamówienia już istnieje' };
+  }
+
+  if (order.items.length === 0) {
+    return { document: null, created: false, skippedReason: 'Zamówienie nie ma pozycji' };
+  }
+
+  const mappings = await prisma.shopProductMapping.findMany({
+    where: {
+      tenantId: order.shop.tenantId,
+      shopId: order.shopId,
+      isActive: true,
+      warehouseProductId: { not: null },
+    },
+    include: { warehouseProduct: true },
+  });
+
+  const mappingBySku = new Map(
+    mappings.map((mapping) => [normalizeSku(mapping.externalSku), mapping]),
+  );
+
+  const itemsByProduct = new Map<string, {
+    productId: string;
+    quantity: number;
+    productName: string;
+    currentStock: number;
+  }>();
+
+  for (const item of order.items) {
+    const mapping = mappingBySku.get(normalizeSku(item.sku));
+    if (!mapping?.warehouseProduct) continue;
+
+    const existing = itemsByProduct.get(mapping.warehouseProduct.id);
+    if (existing) {
+      existing.quantity += item.quantity;
+      continue;
+    }
+
+    itemsByProduct.set(mapping.warehouseProduct.id, {
+      productId: mapping.warehouseProduct.id,
+      quantity: item.quantity,
+      productName: mapping.warehouseProduct.name,
+      currentStock: Number(mapping.warehouseProduct.currentStock),
+    });
+  }
+
+  const items = Array.from(itemsByProduct.values());
+  if (items.length === 0) {
+    return { document: null, created: false, skippedReason: 'Brak pozycji zamówienia powiązanych z magazynem' };
+  }
+
+  const stockWarning = items.some((item) => item.currentStock - item.quantity < 0);
+  const settings = await getWarehouseSettings(order.shop.tenantId);
+
+  if (settings.autoConfirmWzOnOrder) {
+    await assertCanConfirmWithoutNegativeStock(
+      order.shop.tenantId,
+      'WZ',
+      items.map((item) => ({
+        productId: item.productId,
+        quantity: new Prisma.Decimal(item.quantity),
+        product: { name: item.productName, unit: 'szt' },
+      })),
+    );
+  }
+
+  const document = await prisma.$transaction(async (tx) => {
+    const number = await generateDocumentNumber(tx, order.shop.tenantId, 'WZ');
+
+    if (settings.autoConfirmWzOnOrder) {
+      await applyStockDeltas(
+        tx,
+        'WZ',
+        items.map((item) => ({
+          productId: item.productId,
+          quantity: new Prisma.Decimal(item.quantity),
+        })),
+      );
+    }
+
+    return tx.warehouseDocument.create({
+      data: {
+        tenantId: order.shop.tenantId,
+        number,
+        type: 'WZ',
+        status: settings.autoConfirmWzOnOrder ? 'CONFIRMED' : 'DRAFT',
+        date: new Date(),
+        description: `WZ automatyczne dla zamówienia ${order.orderReference}`,
+        orderId: order.id,
+        isAutoGenerated: true,
+        metadataJson: stockWarning ? { stockWarning: true } : undefined,
+        confirmedAt: settings.autoConfirmWzOnOrder ? new Date() : undefined,
+        items: {
+          create: items.map((item) => ({
+            productId: item.productId,
+            quantity: item.quantity,
+            notes: `Zamówienie ${order.orderReference}`,
+          })),
+        },
+      },
+      include: { items: { include: { product: true, barcode: true } }, order: true },
+    });
+  });
+
+  return { document, created: true };
+}
+
 export async function updateDocument(id: string, input: UpdateDocumentInput) {
   const tenantId = getTenantId();
   const where: any = { id };
@@ -289,7 +441,7 @@ export async function confirmDocument(id: string) {
 
   await assertCanConfirmWithoutNegativeStock(doc.tenantId, doc.type, doc.items);
 
-  return prisma.$transaction(async (tx) => {
+  const confirmedDocument = await prisma.$transaction(async (tx) => {
     await applyStockDeltas(tx, doc.type, doc.items);
 
     return tx.warehouseDocument.update({
@@ -302,6 +454,14 @@ export async function confirmDocument(id: string) {
       include: { items: { include: { product: true, barcode: true } } },
     });
   });
+
+  await syncStockForProducts(
+    doc.items.map((item) => item.productId),
+    'DOCUMENT_CONFIRM',
+    id,
+  );
+
+  return confirmedDocument;
 }
 
 async function assertCanConfirmWithoutNegativeStock(
@@ -353,7 +513,18 @@ async function getWarehouseSettings(tenantId: string) {
   const limits = tenant?.limitsJson as any;
   return {
     allowNegativeStock: limits?.warehouse?.allowNegativeStock !== false,
+    autoCreateWzOnOrder: limits?.warehouse?.autoCreateWzOnOrder !== false,
+    autoConfirmWzOnOrder: limits?.warehouse?.autoConfirmWzOnOrder === true,
   };
+}
+
+export async function shouldAutoCreateWzForTenant(tenantId: string) {
+  const settings = await getWarehouseSettings(tenantId);
+  return settings.autoCreateWzOnOrder;
+}
+
+function normalizeSku(value: string) {
+  return value.trim().toLowerCase();
 }
 
 async function calculateProductStock(tenantId: string, productId: string) {
@@ -391,7 +562,7 @@ export async function cancelDocument(id: string, input: CancelDocumentInput = {}
   if (!doc) throw new Error('Dokument nie znaleziony');
   if (doc.status === 'CANCELLED') throw new Error('Dokument jest już anulowany');
 
-  return prisma.$transaction(async (tx) => {
+  const cancelledDocument = await prisma.$transaction(async (tx) => {
     if (doc.status === 'CONFIRMED') {
       await applyStockDeltas(tx, doc.type, doc.items, true);
     }
@@ -407,6 +578,16 @@ export async function cancelDocument(id: string, input: CancelDocumentInput = {}
       include: { items: { include: { product: true, barcode: true } } },
     });
   });
+
+  if (doc.status === 'CONFIRMED') {
+    await syncStockForProducts(
+      doc.items.map((item) => item.productId),
+      'DOCUMENT_CANCEL',
+      id,
+    );
+  }
+
+  return cancelledDocument;
 }
 
 export async function deleteDocument(id: string) {

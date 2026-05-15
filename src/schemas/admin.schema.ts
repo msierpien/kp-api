@@ -7,6 +7,7 @@ export const paginationSchema = z.object({
 
 export const casesQuerySchema = paginationSchema.extend({
   status: z.enum(['NEW', 'WAITING_FOR_CUSTOMER', 'SUBMITTED', 'READY_FOR_PRINT', 'ARCHIVED', '']).optional(),
+  emailStatus: z.enum(['sent', 'not_sent', 'failed', '']).optional(),
   search: z.string().optional(),
   sortBy: z.enum(['createdAt', 'submittedAt', 'status', 'orderReference']).default('createdAt'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),

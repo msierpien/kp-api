@@ -8,6 +8,8 @@ const TENANT_MODELS = new Set([
   'EmailSettings',
 ]);
 
+const DEBUG_TENANT_CONTEXT = process.env.DEBUG_TENANT_CONTEXT === 'true';
+
 // Models that inherit tenantId through relations (read-only access)
 // Currently not used but kept for future reference
 // const INHERITED_TENANT_MODELS = new Set([
@@ -32,13 +34,13 @@ export function createTenantMiddleware(getTenantId: () => string | null) {
     const model = params.model;
     const action = params.action;
 
-    // Debug: Log EVERY query to verify middleware is running
-    console.log(`[Tenant Middleware] CALLED - Model: ${model || 'N/A'}, Action: ${action}`);
+    if (DEBUG_TENANT_CONTEXT) {
+      console.log(`[Tenant Middleware] CALLED - Model: ${model || 'N/A'}, Action: ${action}`);
+    }
 
     const tenantId = getTenantId();
 
-    // Debug logging
-    if (model && TENANT_MODELS.has(model)) {
+    if (DEBUG_TENANT_CONTEXT && model && TENANT_MODELS.has(model)) {
       console.log(`[Tenant Middleware] TENANT MODEL - Model: ${model}, Action: ${action}, TenantID: ${tenantId || 'NULL'}`);
     }
 

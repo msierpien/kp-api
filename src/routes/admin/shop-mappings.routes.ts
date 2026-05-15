@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import * as shopMappingsService from '../../services/admin/shop-mappings.service';
+import * as shopProductImportService from '../../services/admin/shop-product-import.service';
 
 export async function shopMappingsRoutes(fastify: FastifyInstance) {
   fastify.get('/', {
@@ -41,6 +42,7 @@ export async function shopMappingsRoutes(fastify: FastifyInstance) {
           externalProductId: { type: 'string', minLength: 1 },
           externalSku: { type: 'string', minLength: 1 },
           externalName: { type: 'string' },
+          externalPrice: { type: ['number', 'null'], minimum: 0 },
           warehouseProductId: { type: ['string', 'null'] },
           isActive: { type: 'boolean', default: true },
         },
@@ -90,6 +92,37 @@ export async function shopMappingsRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.post('/import/:shopId', {
+    schema: {
+      tags: ['shop-mappings'],
+      summary: 'Importuj katalog produktów sklepu do mapowań magazynowych',
+      params: {
+        type: 'object',
+        required: ['shopId'],
+        properties: { shopId: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        properties: {
+          limit: { type: 'integer', minimum: 1, maximum: 5000 },
+          activeOnly: { type: 'boolean', default: true },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { shopId: string };
+    Body: shopProductImportService.ImportProductsOptions;
+  }>, reply: FastifyReply) => {
+    try {
+      const result = await shopProductImportService.importProductsFromShop(request.params.shopId, request.body ?? {});
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd importu produktów sklepu';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   fastify.put('/:id', {
     schema: {
       tags: ['shop-mappings'],
@@ -104,6 +137,7 @@ export async function shopMappingsRoutes(fastify: FastifyInstance) {
         properties: {
           externalSku: { type: 'string', minLength: 1 },
           externalName: { type: ['string', 'null'] },
+          externalPrice: { type: ['number', 'null'], minimum: 0 },
           warehouseProductId: { type: ['string', 'null'] },
           isActive: { type: 'boolean' },
         },
@@ -147,6 +181,27 @@ export async function shopMappingsRoutes(fastify: FastifyInstance) {
       return reply.send(mapping);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd mapowania produktu';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/:id/create-product', {
+    schema: {
+      tags: ['shop-mappings'],
+      summary: 'Utwórz produkt magazynowy z mapowania produktu sklepu',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const mapping = await shopProductImportService.createWarehouseProductFromMapping(request.params.id);
+      return reply.status(201).send(mapping);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd tworzenia produktu magazynowego';
       const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }

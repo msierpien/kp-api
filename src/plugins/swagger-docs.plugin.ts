@@ -38,6 +38,8 @@ export default fp(async (fastify) => {
         { name: 'shops', description: 'Integracje z platformami e-commerce' },
         { name: 'templates', description: 'Szablony personalizacji' },
         { name: 'personalized-products', description: 'Mapowanie SKU → szablon' },
+        { name: 'warehouse', description: 'Magazyn: produkty, dokumenty, stany, EAN i skaner' },
+        { name: 'shop-mappings', description: 'Mapowanie produktów sklepów do produktów magazynowych' },
         { name: 'email', description: 'Email — wysyłka i ustawienia SMTP' },
         { name: 'render-jobs', description: 'Zadania renderowania PDF' },
         { name: 'automations', description: 'Automatyzacje workflow' },

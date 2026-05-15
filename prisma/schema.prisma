@@ -37,6 +37,7 @@ model Tenant {
   warehouseDocuments  WarehouseDocument[]
   warehouseBarcodes   WarehouseProductBarcode[]
   shopProductMappings ShopProductMapping[]
+  stockSyncLogs       StockSyncLog[]
 
   @@index([status])
   @@index([slug])
@@ -84,6 +85,7 @@ model Shop {
   syncLogs             SyncLog[]
   personalizedProducts PersonalizedProduct[]
   productMappings      ShopProductMapping[]
+  stockSyncLogs        StockSyncLog[]
 
   @@index([tenantId])
   @@index([status])
@@ -516,6 +518,8 @@ model WarehouseProduct {
   name         String
   unit         String   @default("szt")
   description  String?
+  purchasePrice Decimal? @map("purchase_price") @db.Decimal(10, 2)
+  retailPrice   Decimal? @map("retail_price") @db.Decimal(10, 2)
   currentStock Decimal  @default(0) @map("current_stock") @db.Decimal(10, 3)
   isActive     Boolean  @default(true) @map("is_active")
   createdAt    DateTime @default(now()) @map("created_at")
@@ -525,6 +529,7 @@ model WarehouseProduct {
   items               WarehouseDocumentItem[]
   barcodes            WarehouseProductBarcode[]
   shopProductMappings ShopProductMapping[]
+  stockSyncLogs       StockSyncLog[]
 
   @@unique([tenantId, sku])
   @@index([tenantId])
@@ -539,6 +544,7 @@ model ShopProductMapping {
   externalProductId  String    @map("external_product_id")
   externalSku        String    @map("external_sku")
   externalName       String?   @map("external_name")
+  externalPrice      Decimal?  @map("external_price") @db.Decimal(10, 2)
   warehouseProductId String?   @map("warehouse_product_id")
   isActive           Boolean   @default(true) @map("is_active")
   lastSyncAt         DateTime? @map("last_sync_at")
@@ -604,6 +610,7 @@ model WarehouseDocument {
   tenant Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   order  Order?                  @relation(fields: [orderId], references: [id])
   items  WarehouseDocumentItem[]
+  stockSyncLogs StockSyncLog[]
 
   @@unique([tenantId, number])
   @@index([tenantId])
@@ -633,4 +640,33 @@ model WarehouseDocumentItem {
   @@index([productId])
   @@index([barcodeId])
   @@map("warehouse_document_items")
+}
+
+model StockSyncLog {
+  id                 String    @id @default(cuid())
+  tenantId           String    @map("tenant_id")
+  warehouseProductId String    @map("warehouse_product_id")
+  shopId             String    @map("shop_id")
+  triggeredBy        String    @map("triggered_by")
+  documentId         String?   @map("document_id")
+  stockBefore        Decimal?  @map("stock_before") @db.Decimal(10, 3)
+  stockAfter         Decimal   @map("stock_after") @db.Decimal(10, 3)
+  status             String    @default("PENDING")
+  errorMessage       String?   @map("error_message") @db.Text
+  attemptCount       Int       @default(0) @map("attempt_count")
+  syncedAt           DateTime? @map("synced_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseProduct WarehouseProduct   @relation(fields: [warehouseProductId], references: [id], onDelete: Cascade)
+  shop             Shop               @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  document         WarehouseDocument? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([warehouseProductId])
+  @@index([shopId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("stock_sync_logs")
 }

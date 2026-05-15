@@ -16,6 +16,7 @@ export interface CreateShopMappingInput {
   externalProductId: string;
   externalSku: string;
   externalName?: string;
+  externalPrice?: number | null;
   warehouseProductId?: string | null;
   isActive?: boolean;
 }
@@ -23,6 +24,7 @@ export interface CreateShopMappingInput {
 export interface UpdateShopMappingInput {
   externalSku?: string;
   externalName?: string | null;
+  externalPrice?: number | null;
   warehouseProductId?: string | null;
   isActive?: boolean;
 }
@@ -93,6 +95,7 @@ export async function createShopMapping(input: CreateShopMappingInput) {
         externalProductId: input.externalProductId.trim(),
         externalSku: input.externalSku.trim(),
         externalName: input.externalName?.trim() || null,
+        externalPrice: input.externalPrice ?? null,
         warehouseProductId,
         isActive: input.isActive ?? true,
       },
@@ -121,6 +124,7 @@ export async function updateShopMapping(id: string, input: UpdateShopMappingInpu
     data: {
       externalSku: input.externalSku?.trim(),
       externalName: input.externalName === undefined ? undefined : input.externalName?.trim() || null,
+      externalPrice: input.externalPrice,
       warehouseProductId,
       isActive: input.isActive,
     },

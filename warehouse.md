@@ -767,13 +767,52 @@ Efekt końcowy:
 
 Cel: sprawić, żeby magazyn był wygodny w codziennej pracy i łatwy do diagnozowania.
 
+Status backend/API: wdrożone w `kp-api`.
+
 Zakres backend:
 
-- endpoint/listing `StockSyncLog` w panelu admina;
-- filtry logów po sklepie, produkcie, statusie i dacie;
-- endpoint ręcznego ponowienia nieudanego syncu stanu;
-- historia ruchów produktu: dokumenty i pozycje dokumentów dla konkretnego `warehouseProductId`;
-- endpoint szybkiego podglądu rozbieżności: `currentStock` vs stan liczony z dokumentów.
+- endpoint/listing `StockSyncLog` w panelu admina - wdrożone;
+- filtry logów po sklepie, produkcie, statusie i dacie - wdrożone;
+- endpoint ręcznego ponowienia syncu stanu - wdrożone;
+- historia ruchów produktu: dokumenty i pozycje dokumentów dla konkretnego `warehouseProductId` - wdrożone;
+- endpoint szybkiego podglądu rozbieżności: `currentStock` vs stan liczony z dokumentów - wdrożone.
+
+Endpointy Etapu 2:
+
+```text
+GET  /admin/warehouse/stock-sync-logs?page=1&limit=50&status=FAILED&shopId=&warehouseProductId=&dateFrom=&dateTo=
+POST /admin/warehouse/stock-sync-logs/:id/retry
+
+GET  /admin/warehouse/products/:id/movements?page=1&limit=50&status=CONFIRMED&type=PZ&dateFrom=&dateTo=
+GET  /admin/warehouse/stock/discrepancies?includeZero=false
+```
+
+Wytyczne dla panelu admina:
+
+1. Dodać widok `Magazyn -> Logi synchronizacji`
+   - tabela: data, sklep, produkt, status, trigger, stan wysłany, liczba prób, błąd;
+   - filtry: status, sklep, produkt, zakres dat;
+   - dla `FAILED` pokazać akcję `Ponów sync`;
+   - po retry odświeżyć listę i pokazać nowy log `PENDING`.
+
+2. Dodać sekcję `Ruchy magazynowe` na karcie produktu
+   - tabela: data dokumentu, numer dokumentu, typ, status, ilość, wpływ na stan, EAN, notatka;
+   - filtry: status dokumentu, typ dokumentu, zakres dat;
+   - `stockDelta` pokazywać z plusem/minusem tylko dla dokumentów `CONFIRMED`.
+
+3. Dodać widok albo widget `Rozbieżności stanów`
+   - endpoint zwraca produkty, dla których `currentStock` różni się od stanu liczonego z dokumentów;
+   - pokazać: SKU, nazwa, katalog, `currentStock`, `calculatedStock`, `difference`;
+   - jeśli lista jest pusta, pokazać pozytywny stan: brak rozbieżności;
+   - obok widoku można podpiąć istniejącą akcję `POST /admin/warehouse/recalculate-stock`.
+
+Kryteria akceptacji panelu Etapu 2:
+
+- operator widzi logi synchronizacji stanów i może filtrować błędy;
+- operator może ponowić synchronizację z poziomu logu;
+- operator na karcie produktu widzi historię ruchów magazynowych;
+- operator widzi, czy `currentStock` zgadza się z dokumentami;
+- błędy z API są pokazywane bez ukrywania szczegółów `errorMessage`.
 
 Zakres panelu admina:
 

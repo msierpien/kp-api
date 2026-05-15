@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import * as warehouseService from '../../services/admin/warehouse.service';
 import * as barcodeService from '../../services/admin/warehouse-barcodes.service';
+import * as diagnosticsService from '../../services/admin/warehouse-diagnostics.service';
 import { getStock, getProductStock, recalculateStockCache } from '../../services/admin/warehouse-stock.service';
 
 export async function warehouseRoutes(fastify: FastifyInstance) {
@@ -264,6 +265,41 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.get('/products/:id/movements', {
+    schema: {
+      tags: ['warehouse-diagnostics'],
+      summary: 'Historia ruchów magazynowych produktu',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      querystring: {
+        type: 'object',
+        properties: {
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+          status: { type: 'string', enum: ['DRAFT', 'CONFIRMED', 'CANCELLED'] },
+          type: { type: 'string', enum: ['PZ', 'PW', 'WZ', 'RW'] },
+          dateFrom: { type: 'string' },
+          dateTo: { type: 'string' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Querystring: diagnosticsService.ProductMovementsQuery;
+  }>, reply: FastifyReply) => {
+    try {
+      const result = await diagnosticsService.getProductMovements(request.params.id, request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania ruchów produktu';
+      const status = message.includes('nie znaleziony') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   // ─── Documents ────────────────────────────────────────────────────────────
 
   // GET /admin/warehouse/documents
@@ -462,6 +498,28 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.get('/stock/discrepancies', {
+    schema: {
+      tags: ['warehouse-diagnostics'],
+      summary: 'Rozbieżności currentStock względem dokumentów CONFIRMED',
+      querystring: {
+        type: 'object',
+        properties: {
+          includeZero: { type: 'boolean', default: false },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: diagnosticsService.StockDiscrepanciesQuery }>, reply: FastifyReply) => {
+    try {
+      const result = await diagnosticsService.getStockDiscrepancies(request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania rozbieżności stanów';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   fastify.post('/recalculate-stock', {
     schema: { tags: ['warehouse'], summary: 'Przelicz cache currentStock z dokumentów CONFIRMED' },
   }, async (_request: FastifyRequest, reply: FastifyReply) => {
@@ -471,6 +529,57 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd przeliczania stanów';
       const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  // ─── Stock sync diagnostics ───────────────────────────────────────────────
+
+  fastify.get('/stock-sync-logs', {
+    schema: {
+      tags: ['warehouse-diagnostics'],
+      summary: 'Logi synchronizacji stanów magazynowych do sklepów',
+      querystring: {
+        type: 'object',
+        properties: {
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+          shopId: { type: 'string' },
+          warehouseProductId: { type: 'string' },
+          status: { type: 'string', enum: ['PENDING', 'PROCESSING', 'SUCCESS', 'FAILED'] },
+          dateFrom: { type: 'string' },
+          dateTo: { type: 'string' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: diagnosticsService.StockSyncLogsQuery }>, reply: FastifyReply) => {
+    try {
+      const result = await diagnosticsService.getStockSyncLogs(request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania logów synchronizacji stanów';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/stock-sync-logs/:id/retry', {
+    schema: {
+      tags: ['warehouse-diagnostics'],
+      summary: 'Ponów synchronizację stanu na podstawie logu',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await diagnosticsService.retryStockSyncLog(request.params.id);
+      return reply.status(201).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd ponawiania synchronizacji stanu';
+      const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }
   });

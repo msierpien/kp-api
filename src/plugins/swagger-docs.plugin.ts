@@ -40,6 +40,7 @@ export default fp(async (fastify) => {
         { name: 'personalized-products', description: 'Mapowanie SKU → szablon' },
         { name: 'warehouse', description: 'Magazyn: produkty, dokumenty, stany, EAN i skaner' },
         { name: 'warehouse-catalogs', description: 'Katalogi produktów magazynowych' },
+        { name: 'warehouse-diagnostics', description: 'Diagnostyka magazynu: logi synchronizacji, ruchy i rozbieżności stanów' },
         { name: 'shop-mappings', description: 'Mapowanie produktów sklepów do produktów magazynowych' },
         { name: 'email', description: 'Email — wysyłka i ustawienia SMTP' },
         { name: 'render-jobs', description: 'Zadania renderowania PDF' },

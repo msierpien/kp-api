@@ -610,7 +610,48 @@ export async function runWholesaleSyncJob(data: WholesaleSyncJobData) {
     },
   });
 
+  if (activeLog) return activeLog;
+
+  const batchSize = normalizeSyncBatchSize(options.batchSize);
+  const log = await prisma.wholesaleSyncLog.create({
+    data: {
+      tenantId,
+      providerId,
+      status: 'PENDING',
+      startedAt: new Date(),
+      batchSize,
+    },
+  });
+
+  await addWholesaleSyncJob({
+    logId: log.id,
+    providerId,
+    tenantId,
+    limit: normalizeSyncLimit(options.limit),
+    batchSize,
+  });
+
+  return log;
+}
+
+export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
+  const { logId, providerId, tenantId, limit, batchSize } = data;
+  const provider = await prisma.wholesaleProvider.findFirst({ where: { id: providerId, tenantId } });
+  if (!provider) throw new Error('Provider hurtowni nie znaleziony');
+  if (!provider.isActive) throw new Error('Provider hurtowni jest nieaktywny');
+  if (provider.platform !== 'CSV_FEED') throw new Error(`Sync nie obsługuje jeszcze platformy ${provider.platform}`);
+
   try {
+    await prisma.wholesaleSyncLog.update({
+      where: { id: logId },
+      data: {
+        status: 'PROCESSING',
+        errorMessage: null,
+        startedAt: new Date(),
+        batchSize,
+      },
+    });
+
     const config = parseProviderConfig(provider.configJson);
     const csvText = await fetchFeed(provider.feedUrl);
     const records = parseCsv(csvText, config.delimiter ?? ';');
@@ -662,6 +703,8 @@ export async function runWholesaleSyncJob(data: WholesaleSyncJobData) {
         totalItems: limitedRecords.length,
         processedItems: limitedRecords.length,
         itemsFetched: limitedRecords.length,
+        totalItems: limitedRecords.length,
+        processedItems: processed,
         mappingsCreated: created,
         mappingsUpdated: updated,
         skipped,
@@ -852,6 +895,22 @@ function clampPreviewLimit(limit?: number) {
     throw new Error('Limit preview musi być liczbą całkowitą od 1 do 50');
   }
   return limit;
+}
+
+function normalizeSyncLimit(limit?: number) {
+  if (limit === undefined) return undefined;
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error('Limit synchronizacji musi być liczbą całkowitą większą od 0');
+  }
+  return limit;
+}
+
+function normalizeSyncBatchSize(batchSize?: number) {
+  if (batchSize === undefined) return 500;
+  if (!Number.isInteger(batchSize) || batchSize < 50 || batchSize > 2000) {
+    throw new Error('Rozmiar paczki synchronizacji musi być liczbą całkowitą od 50 do 2000');
+  }
+  return batchSize;
 }
 
 function validateWholesaleSyncInterval(intervalMinutes: number) {

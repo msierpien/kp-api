@@ -838,6 +838,9 @@ model WholesaleSyncLog {
   mappingsCreated Int       @default(0) @map("mappings_created")
   mappingsUpdated Int       @default(0) @map("mappings_updated")
   skipped         Int       @default(0)
+  totalItems      Int       @default(0) @map("total_items")
+  processedItems  Int       @default(0) @map("processed_items")
+  batchSize       Int?      @map("batch_size")
   errorMessage    String?   @map("error_message") @db.Text
   startedAt       DateTime  @default(now()) @map("started_at")
   finishedAt      DateTime? @map("finished_at")

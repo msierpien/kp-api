@@ -1,5 +1,9 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import * as wholesaleService from '../../services/admin/wholesale.service';
+import {
+  refreshWholesaleProviderSchedule,
+  removeWholesaleProviderFromScheduler,
+} from '../../services/scheduler/scheduler.service';
 
 export async function wholesaleRoutes(fastify: FastifyInstance) {
   fastify.get('/providers', {
@@ -42,6 +46,7 @@ export async function wholesaleRoutes(fastify: FastifyInstance) {
           delimiter: { type: 'string', default: ';' },
           fieldMapping: { type: 'object', additionalProperties: true },
           syncEnabled: { type: 'boolean', default: true },
+          syncInterval: { type: 'integer', minimum: 30, maximum: 1440, default: 1440 },
           isActive: { type: 'boolean', default: true },
         },
       },
@@ -49,6 +54,7 @@ export async function wholesaleRoutes(fastify: FastifyInstance) {
   }, async (request: FastifyRequest<{ Body: wholesaleService.CreateWholesaleProviderInput }>, reply: FastifyReply) => {
     try {
       const provider = await wholesaleService.createWholesaleProvider(request.body);
+      await refreshWholesaleProviderSchedule(provider.id);
       return reply.status(201).send(provider);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd tworzenia hurtowni';
@@ -76,6 +82,32 @@ export async function wholesaleRoutes(fastify: FastifyInstance) {
       return reply.send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd podglądu feedu hurtowni';
+      const status = message.includes('Brak kontekstu') ? 400 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.get('/product-offers', {
+    schema: {
+      tags: ['wholesale'],
+      summary: 'Oferty hurtowni pogrupowane po produktach magazynowych',
+      querystring: {
+        type: 'object',
+        required: ['productIds'],
+        properties: {
+          productIds: {
+            type: 'string',
+            description: 'Lista ID produktów magazynowych oddzielona przecinkami',
+          },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: wholesaleService.WholesaleProductOffersQuery }>, reply: FastifyReply) => {
+    try {
+      const result = await wholesaleService.getWholesaleProductOffers(request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania ofert hurtowni dla produktów';
       const status = message.includes('Brak kontekstu') ? 400 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }
@@ -122,6 +154,7 @@ export async function wholesaleRoutes(fastify: FastifyInstance) {
           delimiter: { type: 'string' },
           fieldMapping: { type: 'object', additionalProperties: true },
           syncEnabled: { type: 'boolean' },
+          syncInterval: { type: 'integer', minimum: 30, maximum: 1440 },
           isActive: { type: 'boolean' },
         },
       },
@@ -132,9 +165,42 @@ export async function wholesaleRoutes(fastify: FastifyInstance) {
   }>, reply: FastifyReply) => {
     try {
       const provider = await wholesaleService.updateWholesaleProvider(request.params.id, request.body);
+      await refreshWholesaleProviderSchedule(request.params.id);
       return reply.send(provider);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd edycji hurtowni';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.put('/providers/:id/sync/interval', {
+    schema: {
+      tags: ['wholesale'],
+      summary: 'Ustaw harmonogram synchronizacji hurtowni',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        required: ['intervalMinutes'],
+        properties: {
+          intervalMinutes: { type: 'integer', minimum: 30, maximum: 1440 },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: wholesaleService.UpdateWholesaleSyncIntervalInput;
+  }>, reply: FastifyReply) => {
+    try {
+      const provider = await wholesaleService.updateWholesaleProviderSyncInterval(request.params.id, request.body);
+      await refreshWholesaleProviderSchedule(request.params.id);
+      return reply.send(provider);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd zmiany harmonogramu hurtowni';
       const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }
@@ -153,6 +219,7 @@ export async function wholesaleRoutes(fastify: FastifyInstance) {
   }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
     try {
       await wholesaleService.deleteWholesaleProvider(request.params.id);
+      removeWholesaleProviderFromScheduler(request.params.id);
       return reply.status(204).send();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd usuwania hurtowni';

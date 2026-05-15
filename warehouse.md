@@ -841,9 +841,11 @@ Zakres backend:
 - obsługa źródła `CSV_FEED` - wdrożone;
 - presety mapowania kolumn dla `GODAN` i `PARTYDECO` - wdrożone;
 - ręczny sync hurtowni z wynikiem - wdrożone;
+- harmonogram syncu hurtowni przez `syncInterval` od 30 do 1440 minut - wdrożone;
+- endpoint ofert hurtowni dla produktów magazynowych - wdrożone;
 - mapowanie produktu hurtowni do `WarehouseProduct` - wdrożone;
 - zapis `lastKnownStock`, `lastKnownPrice`, EAN, nazwy, kategorii i snapshotu CSV - wdrożone;
-- kolejka `wholesale-sync`, automatyczne PZ i korekty magazynowe - odłożone na kolejny krok po walidacji feedów.
+- automatyczne PZ i korekty `currentStock` - odłożone; hurtownia jest źródłem danych, nie ruchem magazynowym.
 
 Endpointy Etapu 3:
 
@@ -854,6 +856,8 @@ GET    /admin/wholesale/providers/:id
 PUT    /admin/wholesale/providers/:id
 DELETE /admin/wholesale/providers/:id
 POST   /admin/wholesale/providers/:id/sync
+PUT    /admin/wholesale/providers/:id/sync/interval
+GET    /admin/wholesale/product-offers?productIds=id1,id2
 
 GET    /admin/wholesale/providers/:id/mappings
 PUT    /admin/wholesale/mappings/:id
@@ -870,6 +874,7 @@ Przykład providera Godan:
   "preset": "GODAN",
   "platform": "CSV_FEED",
   "syncEnabled": true,
+  "syncInterval": 1440,
   "isActive": true
 }
 ```
@@ -883,6 +888,7 @@ Przykład providera PartyDeco:
   "preset": "PARTYDECO",
   "platform": "CSV_FEED",
   "syncEnabled": true,
+  "syncInterval": 1440,
   "isActive": true
 }
 ```
@@ -907,6 +913,7 @@ Oba providery mają:
 
 - `platform = CSV_FEED`;
 - `syncEnabled = true`;
+- `syncInterval = 1440`;
 - `isActive = true`;
 - zapisany `feedUrl` w bazie;
 - zapisany `configJson` z presetem, separatorem `;` i mapperem kolumn.
@@ -1048,27 +1055,37 @@ Efekt końcowy:
 
 #### Brief dla frontendu: integracja hurtowni
 
-Aktualny backend hurtowni jest gotowy do podpięcia w panelu jako widok `Magazyn -> Hurtownie`. Frontend nie powinien trzymać feed URL-i z tokenami w kodzie ani w stałej konfiguracji. URL trafia do API dopiero w formularzu/operator workflow.
+Aktualny kierunek: hurtownie są częścią obszaru `Integracje`, nie głównym widokiem magazynowym. Magazyn pokazuje efekt integracji, czyli powiązane oferty, ostatni znany stan, cenę zakupu i datę syncu przy produktach. Konfiguracja URL-a feedu, preview CSV, harmonogram, ręczny sync, logi i mapowania powinny mieszkać w `Integracje -> Hurtownie`.
+
+Frontend nie powinien trzymać feed URL-i z tokenami w kodzie ani w stałej konfiguracji. URL trafia do API dopiero w formularzu/operator workflow.
 
 Główne widoki:
 
-1. Lista hurtowni
+1. `Integracje -> Hurtownie`: lista providerów
    - endpoint: `GET /admin/wholesale/providers`;
-   - tabela: nazwa, preset/platforma, aktywny, sync enabled, ostatni sync, liczba mapowań, liczba logów;
-   - akcje: szczegóły, edycja, usuń, synchronizuj, automapuj.
+   - tabela: nazwa, preset/platforma, aktywny, sync enabled, interwał syncu, ostatni sync, liczba mapowań, liczba logów;
+   - akcje: szczegóły, edycja, usuń, synchronizuj, automapuj, ustaw harmonogram.
 
 2. Kreator dodania hurtowni CSV
    - krok 1: `feedUrl`, separator, preset `GODAN`, `PARTYDECO` albo `CUSTOM`;
    - krok 2: dla `CUSTOM` wywołać `POST /admin/wholesale/providers/preview`;
    - krok 3: pokazać `columns` i `sampleRows`;
    - krok 4: operator mapuje kolumny na pola systemowe;
-   - krok 5: zapisać przez `POST /admin/wholesale/providers`.
+   - krok 5: ustawić `syncEnabled` i `syncInterval`;
+   - krok 6: zapisać przez `POST /admin/wholesale/providers`.
 
 3. Szczegóły hurtowni
    - endpoint: `GET /admin/wholesale/providers/:id`;
    - mapowania: `GET /admin/wholesale/providers/:id/mappings`;
    - logi: `GET /admin/wholesale/providers/:id/logs`;
-   - akcje: `POST /admin/wholesale/providers/:id/sync`, `POST /admin/wholesale/providers/:id/auto-map`.
+   - akcje: `POST /admin/wholesale/providers/:id/sync`, `POST /admin/wholesale/providers/:id/auto-map`, `PUT /admin/wholesale/providers/:id/sync/interval`.
+
+4. `Magazyn -> Produkty`: dane hurtowni przy produkcie
+   - endpoint: `GET /admin/wholesale/product-offers?productIds=id1,id2`;
+   - panel powinien wysyłać ID produktów widocznych na aktualnej stronie;
+   - odpowiedź jest pogrupowana po `warehouseProductId`;
+   - domyślna prezentacja: najlepsza oferta według najniższej ceny zakupu, a gdy ceny brak - najnowszy sync;
+   - przy braku danych pokazać prosty stan `Brak danych z hurtowni`.
 
 Preview CSV:
 
@@ -1118,6 +1135,7 @@ Preset Godan albo PartyDeco:
   "preset": "GODAN",
   "platform": "CSV_FEED",
   "syncEnabled": true,
+  "syncInterval": 1440,
   "isActive": true
 }
 ```
@@ -1140,6 +1158,7 @@ Custom CSV:
     "category": "category_path"
   },
   "syncEnabled": true,
+  "syncInterval": 1440,
   "isActive": true
 }
 ```
@@ -1169,6 +1188,58 @@ POST /admin/wholesale/providers/:id/sync
 ```
 
 Po syncu backend tworzy albo aktualizuje `WholesaleProductMapping`. Nie tworzy produktów magazynowych, nie tworzy dokumentu `PZ` i nie zmienia `currentStock`.
+
+Harmonogram:
+
+```text
+PUT /admin/wholesale/providers/:id/sync/interval
+```
+
+```json
+{
+  "intervalMinutes": 240
+}
+```
+
+Zasady:
+
+- minimum: `30` minut;
+- maksimum: `1440` minut;
+- zmiana interwału przelicza zadanie schedulera dla aktywnego providera z `syncEnabled=true`;
+- `syncEnabled=false` albo `isActive=false` zatrzymuje zadanie.
+
+Dane hurtowni przy produktach magazynowych:
+
+```text
+GET /admin/wholesale/product-offers?productIds=prod_1,prod_2
+```
+
+Przykładowa odpowiedź:
+
+```json
+{
+  "data": {
+    "prod_1": [
+      {
+        "mappingId": "mapping_id",
+        "providerId": "provider_id",
+        "providerName": "Godan",
+        "providerActive": true,
+        "providerSyncEnabled": true,
+        "externalSku": "SKU-123",
+        "externalEan": "5901234567890",
+        "externalName": "Produkt z hurtowni",
+        "externalCategory": "Dekoracje",
+        "lastKnownStock": "12.000",
+        "lastKnownPrice": "4.50",
+        "lastSyncAt": "2026-05-15T12:00:00.000Z",
+        "providerLastSyncAt": "2026-05-15T12:00:00.000Z"
+      }
+    ],
+    "prod_2": []
+  }
+}
+```
 
 Automapowanie:
 

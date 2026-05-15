@@ -46,6 +46,10 @@ export interface WholesaleSyncLogsQuery {
   dateTo?: string;
 }
 
+export interface WholesaleProductOffersQuery {
+  productIds?: string;
+}
+
 export interface CreateWholesaleProviderInput {
   name: string;
   feedUrl: string;
@@ -54,6 +58,7 @@ export interface CreateWholesaleProviderInput {
   delimiter?: string;
   fieldMapping?: FieldMapping;
   syncEnabled?: boolean;
+  syncInterval?: number;
   isActive?: boolean;
 }
 
@@ -65,6 +70,7 @@ export interface UpdateWholesaleProviderInput {
   delimiter?: string;
   fieldMapping?: FieldMapping;
   syncEnabled?: boolean;
+  syncInterval?: number;
   isActive?: boolean;
 }
 
@@ -100,6 +106,10 @@ export interface AutoMapWholesaleProviderResult {
 
 export interface MapWholesaleProductInput {
   warehouseProductId: string | null;
+}
+
+export interface UpdateWholesaleSyncIntervalInput {
+  intervalMinutes: number;
 }
 
 const PRESET_CONFIGS: Record<Exclude<WholesalePreset, 'CUSTOM'>, WholesaleProviderConfig> = {
@@ -173,6 +183,7 @@ export async function getWholesaleProviderById(id: string) {
 export async function createWholesaleProvider(input: CreateWholesaleProviderInput) {
   const tenantId = requireTenantId();
   const config = buildProviderConfig(input);
+  const syncInterval = validateWholesaleSyncInterval(input.syncInterval ?? 1440);
 
   return prisma.wholesaleProvider.create({
     data: {
@@ -182,6 +193,7 @@ export async function createWholesaleProvider(input: CreateWholesaleProviderInpu
       feedUrl: input.feedUrl.trim(),
       configJson: config as unknown as Prisma.InputJsonValue,
       syncEnabled: input.syncEnabled ?? true,
+      syncInterval,
       isActive: input.isActive ?? true,
     },
   });
@@ -197,6 +209,7 @@ export async function updateWholesaleProvider(id: string, input: UpdateWholesale
   if (input.feedUrl !== undefined) data.feedUrl = input.feedUrl.trim();
   if (input.platform !== undefined) data.platform = input.platform;
   if (input.syncEnabled !== undefined) data.syncEnabled = input.syncEnabled;
+  if (input.syncInterval !== undefined) data.syncInterval = validateWholesaleSyncInterval(input.syncInterval);
   if (input.isActive !== undefined) data.isActive = input.isActive;
 
   if (input.preset !== undefined || input.delimiter !== undefined || input.fieldMapping !== undefined) {
@@ -212,6 +225,21 @@ export async function updateWholesaleProvider(id: string, input: UpdateWholesale
   }
 
   return prisma.wholesaleProvider.update({ where: { id }, data });
+}
+
+export async function updateWholesaleProviderSyncInterval(
+  id: string,
+  input: UpdateWholesaleSyncIntervalInput,
+) {
+  const tenantId = requireTenantId();
+  const provider = await prisma.wholesaleProvider.findFirst({ where: { id, tenantId } });
+  if (!provider) throw new Error('Provider hurtowni nie znaleziony');
+
+  const syncInterval = validateWholesaleSyncInterval(input.intervalMinutes);
+  return prisma.wholesaleProvider.update({
+    where: { id },
+    data: { syncInterval },
+  });
 }
 
 export async function deleteWholesaleProvider(id: string) {
@@ -291,6 +319,72 @@ export async function mapWholesaleProduct(mappingId: string, input: MapWholesale
     data: { warehouseProductId: input.warehouseProductId },
     include: { provider: true, warehouseProduct: { include: { catalog: true } } },
   });
+}
+
+export async function getWholesaleProductOffers(query: WholesaleProductOffersQuery = {}) {
+  const tenantId = requireTenantId();
+  const productIds = parseProductIds(query.productIds);
+
+  const mappings = await prisma.wholesaleProductMapping.findMany({
+    where: {
+      tenantId,
+      isActive: true,
+      warehouseProductId: { in: productIds },
+    },
+    include: {
+      provider: {
+        select: {
+          id: true,
+          name: true,
+          isActive: true,
+          syncEnabled: true,
+          lastSyncAt: true,
+        },
+      },
+    },
+    orderBy: [
+      { lastKnownPrice: 'asc' },
+      { lastSyncAt: 'desc' },
+    ],
+  });
+
+  const data: Record<string, Array<{
+    mappingId: string;
+    providerId: string;
+    providerName: string;
+    providerActive: boolean;
+    providerSyncEnabled: boolean;
+    externalSku: string;
+    externalEan: string | null;
+    externalName: string | null;
+    externalCategory: string | null;
+    lastKnownStock: Prisma.Decimal | null;
+    lastKnownPrice: Prisma.Decimal | null;
+    lastSyncAt: Date | null;
+    providerLastSyncAt: Date | null;
+  }>> = Object.fromEntries(productIds.map((productId) => [productId, []]));
+
+  for (const mapping of mappings) {
+    if (!mapping.warehouseProductId) continue;
+
+    data[mapping.warehouseProductId].push({
+      mappingId: mapping.id,
+      providerId: mapping.providerId,
+      providerName: mapping.provider.name,
+      providerActive: mapping.provider.isActive,
+      providerSyncEnabled: mapping.provider.syncEnabled,
+      externalSku: mapping.externalSku,
+      externalEan: mapping.externalEan,
+      externalName: mapping.externalName,
+      externalCategory: mapping.externalCategory,
+      lastKnownStock: mapping.lastKnownStock,
+      lastKnownPrice: mapping.lastKnownPrice,
+      lastSyncAt: mapping.lastSyncAt,
+      providerLastSyncAt: mapping.provider.lastSyncAt,
+    });
+  }
+
+  return { data };
 }
 
 export async function autoMapWholesaleProvider(
@@ -387,6 +481,14 @@ export async function getWholesaleSyncLogs(providerId: string, query: WholesaleS
 
 export async function syncWholesaleProvider(providerId: string, options: SyncWholesaleProviderOptions = {}) {
   const tenantId = requireTenantId();
+  return syncWholesaleProviderForTenant(providerId, tenantId, options);
+}
+
+export async function syncWholesaleProviderForTenant(
+  providerId: string,
+  tenantId: string,
+  options: SyncWholesaleProviderOptions = {},
+) {
   const startedAt = new Date();
   const provider = await prisma.wholesaleProvider.findFirst({ where: { id: providerId, tenantId } });
   if (!provider) throw new Error('Provider hurtowni nie znaleziony');
@@ -561,6 +663,36 @@ function clampPreviewLimit(limit?: number) {
     throw new Error('Limit preview musi być liczbą całkowitą od 1 do 50');
   }
   return limit;
+}
+
+function validateWholesaleSyncInterval(intervalMinutes: number) {
+  if (!Number.isInteger(intervalMinutes)) {
+    throw new Error('Interwał synchronizacji hurtowni musi być liczbą całkowitą');
+  }
+
+  if (intervalMinutes < 30) {
+    throw new Error('Interwał synchronizacji hurtowni musi wynosić minimum 30 minut');
+  }
+
+  if (intervalMinutes > 1440) {
+    throw new Error('Interwał synchronizacji hurtowni nie może przekraczać 1440 minut');
+  }
+
+  return intervalMinutes;
+}
+
+function parseProductIds(productIds?: string) {
+  const ids = Array.from(new Set((productIds ?? '').split(',').map((id) => id.trim()).filter(Boolean)));
+
+  if (ids.length === 0) {
+    throw new Error('productIds jest wymagane');
+  }
+
+  if (ids.length > 200) {
+    throw new Error('productIds może zawierać maksymalnie 200 produktów');
+  }
+
+  return ids;
 }
 
 function collectColumns(records: Record<string, string>[]) {

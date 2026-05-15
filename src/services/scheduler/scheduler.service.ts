@@ -3,6 +3,7 @@ import type { ScheduledTask } from 'node-cron';
 import prisma from '../../lib/prisma';
 import { syncShopOrders, type SyncResult } from '../sync/sync-orders.service';
 import { cleanupStorage } from '../storage/cleanup-storage.service';
+import { syncWholesaleProviderForTenant } from '../admin/wholesale.service';
 // BullMQ Worker automatycznie przetwarza RenderJobs - nie potrzebujemy crona
 
 /**
@@ -10,6 +11,12 @@ import { cleanupStorage } from '../storage/cleanup-storage.service';
  * Key: shopId, Value: ScheduledTask
  */
 const scheduledTasks = new Map<string, ScheduledTask>();
+
+/**
+ * Mapa aktywnych zadań cron per hurtownia
+ * Key: providerId, Value: ScheduledTask
+ */
+const scheduledWholesaleTasks = new Map<string, ScheduledTask>();
 
 /**
  * Konwersja interwału (w minutach) na cron expression
@@ -96,6 +103,81 @@ export function removeShopFromScheduler(shopId: string) {
   stopShopSync(shopId);
 }
 
+async function runWholesaleSync(providerId: string, providerName: string, tenantId: string) {
+  const startTime = new Date();
+  console.log(`[Scheduler] 🔄 Starting automatic wholesale sync for: ${providerName} (${providerId})`);
+
+  try {
+    const result = await syncWholesaleProviderForTenant(providerId, tenantId);
+    const duration = Date.now() - startTime.getTime();
+    console.log(
+      `[Scheduler] ✅ Wholesale sync completed for ${providerName}: ` +
+      `${result.mappingsCreated} created, ${result.mappingsUpdated} updated, ${result.skipped} skipped ` +
+      `(${duration}ms)`
+    );
+  } catch (error) {
+    const duration = Date.now() - startTime.getTime();
+    console.error(
+      `[Scheduler] ❌ Wholesale sync failed for ${providerName} after ${duration}ms:`,
+      error
+    );
+  }
+}
+
+function scheduleWholesaleSync(providerId: string, providerName: string, tenantId: string, intervalMinutes: number) {
+  stopWholesaleSync(providerId);
+
+  const cronExpression = intervalToCron(intervalMinutes);
+  const task = cron.schedule(
+    cronExpression,
+    () => {
+      runWholesaleSync(providerId, providerName, tenantId);
+    },
+    { timezone: 'Europe/Warsaw' }
+  );
+
+  scheduledWholesaleTasks.set(providerId, task);
+
+  console.log(
+    `[Scheduler] 📅 Scheduled wholesale sync for ${providerName}: every ${intervalMinutes} min (${cronExpression})`
+  );
+}
+
+function stopWholesaleSync(providerId: string) {
+  const task = scheduledWholesaleTasks.get(providerId);
+  if (task) {
+    task.stop();
+    scheduledWholesaleTasks.delete(providerId);
+    console.log(`[Scheduler] 🛑 Stopped wholesale sync for provider: ${providerId}`);
+  }
+}
+
+export function removeWholesaleProviderFromScheduler(providerId: string) {
+  stopWholesaleSync(providerId);
+}
+
+export async function refreshWholesaleProviderSchedule(providerId: string) {
+  const provider = await prisma.wholesaleProvider.findUnique({
+    where: { id: providerId },
+    select: {
+      id: true,
+      tenantId: true,
+      name: true,
+      platform: true,
+      syncEnabled: true,
+      syncInterval: true,
+      isActive: true,
+    },
+  });
+
+  if (!provider || !provider.isActive || !provider.syncEnabled || provider.platform !== 'CSV_FEED') {
+    stopWholesaleSync(providerId);
+    return;
+  }
+
+  scheduleWholesaleSync(provider.id, provider.name, provider.tenantId, provider.syncInterval);
+}
+
 // UWAGA: Przetwarzanie RenderJobs jest teraz obsługiwane przez BullMQ Worker
 // Nie potrzebujemy już crona do przetwarzania - worker automatycznie pobiera joby z kolejki Redis
 
@@ -106,26 +188,46 @@ export async function initializeScheduler() {
   console.log('[Scheduler] 🚀 Initializing order synchronization scheduler...');
   
   try {
-    // Pobierz wszystkie aktywne sklepy z włączonym auto-sync
-    const shops = await prisma.shop.findMany({
-      where: {
-        status: 'ACTIVE',
-        syncEnabled: true,
-        platform: { not: 'MANUAL' }, // MANUAL nie ma auto-sync
-      },
-      select: {
-        id: true,
-        name: true,
-        syncInterval: true,
-      },
-    });
-    
-    // Scheduleuj każdy sklep
+    const [shops, wholesaleProviders] = await Promise.all([
+      prisma.shop.findMany({
+        where: {
+          status: 'ACTIVE',
+          syncEnabled: true,
+          platform: { not: 'MANUAL' }, // MANUAL nie ma auto-sync
+        },
+        select: {
+          id: true,
+          name: true,
+          syncInterval: true,
+        },
+      }),
+      prisma.wholesaleProvider.findMany({
+        where: {
+          isActive: true,
+          syncEnabled: true,
+          platform: 'CSV_FEED',
+        },
+        select: {
+          id: true,
+          tenantId: true,
+          name: true,
+          syncInterval: true,
+        },
+      }),
+    ]);
+
     shops.forEach((shop) => {
       scheduleShopSync(shop.id, shop.name, shop.syncInterval);
     });
-    
-    console.log(`[Scheduler] ✅ Initialized ${shops.length} shop sync schedules`);
+
+    wholesaleProviders.forEach((provider) => {
+      scheduleWholesaleSync(provider.id, provider.name, provider.tenantId, provider.syncInterval);
+    });
+
+    console.log(
+      `[Scheduler] ✅ Initialized ${shops.length} shop sync schedules and ` +
+      `${wholesaleProviders.length} wholesale sync schedules`
+    );
     
     // Scheduleuj storage cleanup - codziennie o 3:00
     scheduleStorageCleanup();
@@ -177,6 +279,10 @@ export async function reloadScheduler() {
   // Zatrzymaj wszystkie istniejące zadania
   for (const [shopId] of scheduledTasks) {
     stopShopSync(shopId);
+  }
+
+  for (const [providerId] of scheduledWholesaleTasks) {
+    stopWholesaleSync(providerId);
   }
   
   // Ponownie zainicjalizuj
@@ -272,6 +378,11 @@ export function getSchedulerStatus() {
     shopId: string;
     isScheduled: boolean;
   }> = [];
+
+  const wholesaleStatus: Array<{
+    providerId: string;
+    isScheduled: boolean;
+  }> = [];
   
   for (const [shopId, task] of scheduledTasks) {
     status.push({
@@ -279,10 +390,18 @@ export function getSchedulerStatus() {
       isScheduled: task !== undefined,
     });
   }
+
+  for (const [providerId, task] of scheduledWholesaleTasks) {
+    wholesaleStatus.push({
+      providerId,
+      isScheduled: task !== undefined,
+    });
+  }
   
   return {
-    totalScheduled: scheduledTasks.size,
+    totalScheduled: scheduledTasks.size + scheduledWholesaleTasks.size,
     shops: status,
+    wholesaleProviders: wholesaleStatus,
   };
 }
 

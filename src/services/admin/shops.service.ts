@@ -1,6 +1,7 @@
 /// <reference lib="dom" />
 import prisma from '../../lib/prisma';
 import { encrypt, decrypt } from '../../lib/encryption';
+import { getTenantContext } from '../../lib/tenant-context';
 import type { CreateShopInput, UpdateShopInput } from '../../schemas/admin.schema';
 import type { ShopItem } from '../../types';
 import { removeShopFromScheduler } from '../scheduler/scheduler.service';
@@ -39,6 +40,22 @@ export async function listShops(): Promise<ShopItem[]> {
 }
 
 export async function createShop(input: CreateShopInput): Promise<ShopItem> {
+  const context = getTenantContext();
+  const targetTenantId = context?.role === 'SUPER_ADMIN' ? input.tenantId : context?.tenantId;
+
+  if (!targetTenantId) {
+    throw new Error('Brak tenanta dla integracji');
+  }
+
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: targetTenantId },
+    select: { id: true, status: true },
+  });
+
+  if (!tenant || tenant.status !== 'ACTIVE') {
+    throw new Error('Wybrany tenant nie istnieje lub jest nieaktywny');
+  }
+
   const shop = await prisma.shop.create({
     data: {
       name: input.name,
@@ -48,7 +65,7 @@ export async function createShop(input: CreateShopInput): Promise<ShopItem> {
       apiSecret: input.apiSecret ? encrypt(input.apiSecret) : null, // Szyfruj jeśli istnieje
       status: input.status,
       configJson: input.config || {},
-      // tenantId will be added automatically by Prisma middleware
+      tenantId: targetTenantId,
     } as any,
   });
 

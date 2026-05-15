@@ -15,6 +15,37 @@ import {
   updateShopSyncInterval,
 } from '../../services/scheduler/scheduler.service';
 
+const shopResponseSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    tenantId: { type: 'string' },
+    name: { type: 'string' },
+    platform: { type: 'string' },
+    baseUrl: { type: 'string' },
+    status: { type: 'string' },
+    lastSyncAt: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    apiKey: { type: 'string' },
+    apiSecret: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    authType: { type: 'string' },
+    config: { type: 'object', additionalProperties: true },
+  },
+};
+
+const shopBodyProperties = {
+  name: { type: 'string' },
+  tenantId: { type: 'string' },
+  platform: {
+    type: 'string',
+    enum: ['PRESTASHOP', 'WOOCOMMERCE', 'SHOPIFY', 'MAGENTO', 'MANUAL', 'CUSTOM_API', 'OTHER'],
+  },
+  baseUrl: { type: 'string' },
+  apiKey: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+  apiSecret: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+  status: { type: 'string', enum: ['ACTIVE', 'INACTIVE'] },
+  config: { type: 'object', additionalProperties: true },
+};
+
 export async function shopsRoutes(fastify: FastifyInstance) {
   // GET /admin/shops
   fastify.get('/', {
@@ -48,17 +79,10 @@ export async function shopsRoutes(fastify: FastifyInstance) {
         body: {
           type: 'object',
           required: ['name', 'platform', 'baseUrl'],
-          properties: {
-            name: { type: 'string' },
-            platform: { type: 'string', enum: ['PRESTASHOP', 'WOOCOMMERCE', 'SHOPIFY', 'OTHER'] },
-            baseUrl: { type: 'string', format: 'uri' },
-            apiKey: { type: 'string' },
-            apiSecret: { type: 'string' },
-            webhookSecret: { type: 'string' },
-          },
+          properties: shopBodyProperties,
         },
         response: {
-          201: { type: 'object' },
+          201: shopResponseSchema,
         },
       },
     },
@@ -94,15 +118,10 @@ export async function shopsRoutes(fastify: FastifyInstance) {
         params: { type: 'object', properties: { id: { type: 'string' } } },
         body: {
           type: 'object',
-          properties: {
-            name: { type: 'string' },
-            baseUrl: { type: 'string', format: 'uri' },
-            apiKey: { type: 'string' },
-            apiSecret: { type: 'string' },
-          },
+          properties: shopBodyProperties,
         },
         response: {
-          200: { type: 'object' },
+          200: shopResponseSchema,
           404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
       },

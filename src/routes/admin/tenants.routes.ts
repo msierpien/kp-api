@@ -3,6 +3,27 @@ import { authMiddleware, requireRole } from '../../middleware/auth.middleware';
 import * as tenantsService from '../../services/admin/tenants.service';
 import type { CreateTenantInput, UpdateTenantInput } from '../../services/admin/tenants.service';
 
+const tenantResponseSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    name: { type: 'string' },
+    slug: { type: 'string' },
+    status: { type: 'string' },
+    plan: { type: 'string' },
+    limits: { type: 'object', additionalProperties: true },
+    _count: {
+      type: 'object',
+      properties: {
+        users: { type: 'number' },
+        shops: { type: 'number' },
+      },
+    },
+    createdAt: { type: 'string' },
+    updatedAt: { type: 'string' },
+  },
+};
+
 export async function tenantsRoutes(fastify: FastifyInstance) {
   // All routes require SUPER_ADMIN role
   const superAdminOnly = [authMiddleware(fastify), requireRole('SUPER_ADMIN')];
@@ -15,7 +36,7 @@ export async function tenantsRoutes(fastify: FastifyInstance) {
       schema: {
         tags: ['tenants'],
         summary: 'Lista tenantów (SUPER_ADMIN)',
-        response: { 200: { type: 'array', items: { type: 'object' } } },
+        response: { 200: { type: 'array', items: tenantResponseSchema } },
       },
     },
     async (_request: FastifyRequest, reply: FastifyReply) => {
@@ -38,7 +59,7 @@ export async function tenantsRoutes(fastify: FastifyInstance) {
         tags: ['tenants'],
         summary: 'Szczegóły tenanta',
         params: { type: 'object', properties: { id: { type: 'string' } } },
-        response: { 200: { type: 'object' }, 404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+        response: { 200: tenantResponseSchema, 404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
       },
     },
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {

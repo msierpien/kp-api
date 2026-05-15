@@ -25,6 +25,7 @@ export const shopBaseSchema = z.object({
   apiSecret: z.string().optional().nullable(),
   status: z.enum(['ACTIVE', 'INACTIVE']).default('ACTIVE'),
   config: z.any().optional().default({}), // Elastyczna konfiguracja JSON
+  tenantId: z.string().optional(), // SUPER_ADMIN może wskazać tenant docelowy
 });
 
 export const createShopSchema = shopBaseSchema;

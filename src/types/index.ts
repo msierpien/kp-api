@@ -109,6 +109,7 @@ export interface CreateShopDto {
   apiSecret?: string | null;
   status: string;
   config?: any; // Elastyczna konfiguracja
+  tenantId?: string;
 }
 
 export interface UpdateShopDto extends CreateShopDto {}

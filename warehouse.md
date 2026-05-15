@@ -892,6 +892,94 @@ Presety kolumn:
 | Godan | `Kod produktu` | `Kod EAN` | `Nazwa` | `Stan magazynowy` | `Cena netto jednostkowa` | brak |
 | PartyDeco | `code` | `ean` | `name` | `stock` | `price_net` | `category_path` |
 
+#### Plan elastycznych importerów i mapperów
+
+Docelowo integracja hurtowni nie powinna być listą warunków `if provider === GODAN`. Provider ma mieć konfigurację importu, a parser CSV ma działać tak samo dla wielu plików:
+
+```json
+{
+  "preset": "CUSTOM",
+  "delimiter": ";",
+  "fieldMapping": {
+    "sku": "code",
+    "ean": "ean",
+    "name": "name",
+    "stock": "stock",
+    "price": "price_net",
+    "description": "description",
+    "image": "photos",
+    "category": "category_path"
+  }
+}
+```
+
+Minimalne pola mapera:
+
+- `sku` - wymagane, stabilny identyfikator produktu w hurtowni;
+- `name` - wymagane, nazwa do listy kandydatów;
+- `ean` - opcjonalne, ale zalecane;
+- `stock` - opcjonalne, stan z hurtowni;
+- `price` - opcjonalne, cena zakupu netto;
+- `description`, `image`, `category` - opcjonalne pola informacyjne, na razie zapisywane w `payloadJson` albo wybranych polach mapowania.
+
+Zasady dodawania kolejnych plików:
+
+- jeśli hurtownia ma typowy układ kolumn, dodać preset w backendzie, np. `ABC_HURT`;
+- jeśli plik jest jednorazowy albo niestandardowy, użyć `CUSTOM` i zapisać `fieldMapping` w `WholesaleProvider.configJson`;
+- URL feedu z tokenem zapisujemy tylko w bazie przez API, nigdy w repo ani w kodzie frontendu;
+- każdy provider może mieć własny separator kolumn, np. `;`, `,`, `\t`;
+- separator wartości wewnątrz kolumny, np. zdjęcia albo atrybuty rozdzielone przecinkiem, zostaje w `payloadJson` do późniejszego PIM-a.
+
+Rekomendowany kolejny krok backendu:
+
+```text
+POST /admin/wholesale/providers/preview
+```
+
+Body:
+
+```json
+{
+  "feedUrl": "URL_FEEDU",
+  "delimiter": ";",
+  "limit": 5
+}
+```
+
+Odpowiedź:
+
+```json
+{
+  "columns": ["code", "ean", "name", "stock", "price_net"],
+  "sampleRows": [
+    {
+      "code": "10M-000",
+      "ean": "5901157459862",
+      "name": "Balony 23cm, Metallic Mix",
+      "stock": "34",
+      "price_net": "17.53"
+    }
+  ]
+}
+```
+
+Panel admina powinien użyć preview do kreatora importu:
+
+1. Operator wkleja URL feedu.
+2. Panel pobiera kolumny i kilka przykładowych wierszy.
+3. Operator wybiera separator i mapuje kolumny na pola systemowe.
+4. Panel zapisuje `WholesaleProvider` z `preset=CUSTOM` i `fieldMapping`.
+5. Operator odpala `Synchronizuj teraz`.
+
+Kryteria akceptacji elastycznego importera:
+
+- można dodać Godan przez preset bez ręcznego mapowania;
+- można dodać PartyDeco przez preset bez ręcznego mapowania;
+- można dodać nowy CSV przez `CUSTOM` bez zmian w kodzie backendu;
+- synchronizacja tworzy/aktualizuje `WholesaleProductMapping`;
+- błędne lub puste SKU jest pomijane i liczone w `skipped`;
+- pełny oryginalny wiersz CSV zostaje w `payloadJson`, żeby później wykorzystać dodatkowe pola w PIM.
+
 Wytyczne dla panelu admina:
 
 - dodać widok `Magazyn -> Hurtownie`;

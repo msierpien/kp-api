@@ -10,6 +10,7 @@ export interface ShopMappingsQuery {
   search?: string;
   isMapped?: boolean;
   isActive?: boolean;
+  personalizationEnabled?: boolean;
   diagnosis?: 'mapped' | 'ready' | 'missingSku' | 'missingEan' | 'nameOnly' | 'missingData';
 }
 
@@ -21,6 +22,8 @@ export interface CreateShopMappingInput {
   externalName?: string;
   externalPrice?: number | null;
   warehouseProductId?: string | null;
+  personalizationEnabled?: boolean;
+  personalizationTemplateId?: string | null;
   isActive?: boolean;
 }
 
@@ -30,6 +33,8 @@ export interface UpdateShopMappingInput {
   externalName?: string | null;
   externalPrice?: number | null;
   warehouseProductId?: string | null;
+  personalizationEnabled?: boolean;
+  personalizationTemplateId?: string | null;
   isActive?: boolean;
 }
 
@@ -45,7 +50,7 @@ function requireTenantId() {
 
 export async function getShopMappings(query: ShopMappingsQuery = {}) {
   const tenantId = requireTenantId();
-  const { page = 1, limit = 50, shopId, warehouseProductId, search, isMapped, isActive, diagnosis } = query;
+  const { page = 1, limit = 50, shopId, warehouseProductId, search, isMapped, isActive, personalizationEnabled, diagnosis } = query;
   const skip = (page - 1) * limit;
 
   const where: Prisma.ShopProductMappingWhereInput = { tenantId };
@@ -53,6 +58,7 @@ export async function getShopMappings(query: ShopMappingsQuery = {}) {
   if (shopId) where.shopId = shopId;
   if (warehouseProductId) where.warehouseProductId = warehouseProductId;
   if (isActive !== undefined) where.isActive = isActive;
+  if (personalizationEnabled !== undefined) where.personalizationEnabled = personalizationEnabled;
   if (isMapped !== undefined && !warehouseProductId) {
     where.warehouseProductId = isMapped ? { not: null } : null;
   }
@@ -60,6 +66,7 @@ export async function getShopMappings(query: ShopMappingsQuery = {}) {
   if (search) {
     where.OR = [
       { externalSku: { contains: search, mode: 'insensitive' } },
+      { externalEan: { contains: search, mode: 'insensitive' } },
       { externalName: { contains: search, mode: 'insensitive' } },
       { externalProductId: { contains: search, mode: 'insensitive' } },
     ];
@@ -71,7 +78,7 @@ export async function getShopMappings(query: ShopMappingsQuery = {}) {
       skip,
       take: limit,
       orderBy: [{ isActive: 'desc' }, { externalSku: 'asc' }],
-      include: { shop: true, warehouseProduct: true },
+      include: { shop: true, warehouseProduct: { include: { catalog: true } }, personalizationTemplate: true },
     }),
     prisma.shopProductMapping.count({ where }),
   ]);
@@ -137,6 +144,12 @@ export async function createShopMapping(input: CreateShopMappingInput) {
     const product = await assertWarehouseProductBelongsToTenant(warehouseProductId, tenantId);
     warehouseProductId = product.id;
   }
+  const personalizationData = await resolvePersonalizationData(
+    tenantId,
+    warehouseProductId,
+    input.personalizationEnabled,
+    input.personalizationTemplateId
+  );
 
   try {
     return await prisma.shopProductMapping.create({
@@ -149,9 +162,10 @@ export async function createShopMapping(input: CreateShopMappingInput) {
         externalName: input.externalName?.trim() || null,
         externalPrice: input.externalPrice ?? null,
         warehouseProductId,
+        ...personalizationData,
         isActive: input.isActive ?? true,
       },
-      include: { shop: true, warehouseProduct: true },
+      include: { shop: true, warehouseProduct: { include: { catalog: true } }, personalizationTemplate: true },
     });
   } catch (error) {
     if (isUniqueConstraintError(error)) {
@@ -163,13 +177,29 @@ export async function createShopMapping(input: CreateShopMappingInput) {
 
 export async function updateShopMapping(id: string, input: UpdateShopMappingInput) {
   const tenantId = requireTenantId();
-  await assertMappingBelongsToTenant(id, tenantId);
+  const currentMapping = await assertMappingBelongsToTenant(id, tenantId);
 
   let warehouseProductId = input.warehouseProductId;
   if (warehouseProductId) {
     const product = await assertWarehouseProductBelongsToTenant(warehouseProductId, tenantId);
     warehouseProductId = product.id;
   }
+  const effectiveWarehouseProductId = warehouseProductId !== undefined ? warehouseProductId : currentMapping.warehouseProductId;
+  const effectivePersonalizationEnabled =
+    input.personalizationEnabled ??
+    (warehouseProductId === null ? false : currentMapping.personalizationEnabled);
+  const effectivePersonalizationTemplateId =
+    input.personalizationTemplateId !== undefined
+      ? input.personalizationTemplateId
+      : warehouseProductId === null
+        ? null
+        : currentMapping.personalizationTemplateId;
+  const personalizationData = await resolvePersonalizationData(
+    tenantId,
+    effectiveWarehouseProductId,
+    effectivePersonalizationEnabled,
+    effectivePersonalizationTemplateId
+  );
 
   return prisma.shopProductMapping.update({
     where: { id },
@@ -179,9 +209,10 @@ export async function updateShopMapping(id: string, input: UpdateShopMappingInpu
       externalName: input.externalName === undefined ? undefined : input.externalName?.trim() || null,
       externalPrice: input.externalPrice,
       warehouseProductId,
+      ...personalizationData,
       isActive: input.isActive,
     },
-    include: { shop: true, warehouseProduct: true },
+    include: { shop: true, warehouseProduct: { include: { catalog: true } }, personalizationTemplate: true },
   });
 }
 
@@ -193,7 +224,7 @@ export async function mapShopProductToWarehouse(id: string, input: MapShopProduc
   return prisma.shopProductMapping.update({
     where: { id },
     data: { warehouseProductId: product.id },
-    include: { shop: true, warehouseProduct: true },
+    include: { shop: true, warehouseProduct: { include: { catalog: true } }, personalizationTemplate: true },
   });
 }
 
@@ -203,8 +234,12 @@ export async function unmapShopProduct(id: string) {
 
   return prisma.shopProductMapping.update({
     where: { id },
-    data: { warehouseProductId: null },
-    include: { shop: true, warehouseProduct: true },
+    data: {
+      warehouseProductId: null,
+      personalizationEnabled: false,
+      personalizationTemplateId: null,
+    },
+    include: { shop: true, warehouseProduct: { include: { catalog: true } }, personalizationTemplate: true },
   });
 }
 
@@ -236,6 +271,47 @@ async function assertWarehouseProductBelongsToTenant(id: string, tenantId: strin
   });
   if (!product) throw new Error('Produkt magazynowy nie znaleziony');
   return product;
+}
+
+async function assertTemplateBelongsToTenant(id: string, tenantId: string) {
+  const template = await prisma.personalizationTemplate.findFirst({
+    where: { id, tenantId, isActive: true },
+  });
+  if (!template) throw new Error('Szablon personalizacji nie znaleziony');
+  return template;
+}
+
+async function resolvePersonalizationData(
+  tenantId: string,
+  warehouseProductId: string | null | undefined,
+  personalizationEnabled?: boolean,
+  personalizationTemplateId?: string | null
+) {
+  if (personalizationTemplateId) {
+    await assertTemplateBelongsToTenant(personalizationTemplateId, tenantId);
+  }
+
+  if (personalizationEnabled === true) {
+    if (!warehouseProductId) {
+      throw new Error('Najpierw powiąż produkt sklepu z produktem magazynowym');
+    }
+    if (!personalizationTemplateId) {
+      throw new Error('Wybierz szablon personalizacji');
+    }
+    return {
+      personalizationEnabled: true,
+      personalizationTemplateId,
+    };
+  }
+
+  if (personalizationEnabled === false) {
+    return {
+      personalizationEnabled: false,
+      personalizationTemplateId: null,
+    };
+  }
+
+  return {};
 }
 
 function isUniqueConstraintError(error: unknown) {

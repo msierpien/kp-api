@@ -4,6 +4,7 @@ import type { Tenant, TenantStatus } from '@prisma/client';
 import { ensureDefaultCatalog } from './warehouse-catalogs.service';
 import bcrypt from 'bcrypt';
 import { encrypt } from '../../lib/encryption';
+import { normalizeFeatures, type TenantFeatures } from '../../lib/features';
 
 export interface TenantItem {
   id: string;
@@ -16,6 +17,7 @@ export interface TenantItem {
     max_users?: number;
     max_cases_per_month?: number;
   };
+  features: TenantFeatures;
   _count?: {
     users: number;
     shops: number;
@@ -33,6 +35,7 @@ export interface CreateTenantInput {
     max_users?: number;
     max_cases_per_month?: number;
   };
+  features?: TenantFeatures;
 }
 
 export interface UpdateTenantInput {
@@ -45,6 +48,7 @@ export interface UpdateTenantInput {
     max_users?: number;
     max_cases_per_month?: number;
   };
+  features?: TenantFeatures;
 }
 
 export interface SetupTenantInput {
@@ -92,6 +96,7 @@ function mapTenant(tenant: Tenant & { _count?: any }): TenantItem {
     status: tenant.status,
     plan: tenant.plan || 'FREE',
     limits: (tenant.limitsJson as any) || {},
+    features: normalizeFeatures(tenant.featuresJson),
     _count: tenant._count,
     createdAt: tenant.createdAt,
     updatedAt: tenant.updatedAt,
@@ -173,6 +178,7 @@ export async function createTenant(input: CreateTenantInput): Promise<TenantItem
         status: 'ACTIVE',
         plan: input.plan || 'FREE',
         limitsJson: input.limits || {},
+        featuresJson: input.features || {},
       },
       include: {
         _count: {
@@ -231,6 +237,7 @@ export async function setupTenant(input: SetupTenantInput): Promise<SetupTenantR
         status: 'ACTIVE',
         plan: input.tenant.plan || 'FREE',
         limitsJson: input.tenant.limits || {},
+        featuresJson: input.tenant.features || {},
       },
       include: {
         _count: {
@@ -326,6 +333,7 @@ export async function updateTenant(id: string, input: UpdateTenantInput): Promis
   if (input.status !== undefined) updateData.status = input.status;
   if (input.plan !== undefined) updateData.plan = input.plan;
   if (input.limits !== undefined) updateData.limitsJson = input.limits;
+  if (input.features !== undefined) updateData.featuresJson = input.features;
 
   const tenant = await prisma.tenant.update({
     where: { id },

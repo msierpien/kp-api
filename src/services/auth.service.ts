@@ -1,6 +1,7 @@
 import bcrypt from 'bcrypt';
 import prisma from '../lib/prisma';
 import type { TokenResponse, JwtPayload, UserRole } from '../types';
+import { normalizeFeatures } from '../lib/features';
 
 const ACCESS_TOKEN_EXPIRY = '15m';
 const REFRESH_TOKEN_EXPIRY = '7d';
@@ -24,6 +25,7 @@ export class AuthService {
             id: true,
             name: true,
             slug: true,
+            featuresJson: true,
           },
         },
       },
@@ -70,7 +72,12 @@ export class AuthService {
         name: user.name,
         role: user.role as UserRole,
         tenantId: user.tenantId,
-        tenant: user.tenant,
+        tenant: {
+          id: user.tenant.id,
+          name: user.tenant.name,
+          slug: user.tenant.slug,
+          features: normalizeFeatures(user.tenant.featuresJson),
+        },
       },
     };
   }

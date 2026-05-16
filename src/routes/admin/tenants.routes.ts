@@ -12,6 +12,7 @@ const tenantResponseSchema = {
     status: { type: 'string' },
     plan: { type: 'string' },
     limits: { type: 'object', additionalProperties: true },
+    features: { type: 'object', additionalProperties: true },
     _count: {
       type: 'object',
       properties: {
@@ -70,6 +71,7 @@ export async function tenantsRoutes(fastify: FastifyInstance) {
                 slug: { type: 'string' },
                 plan: { type: 'string' },
                 limits: { type: 'object', additionalProperties: true },
+                features: { type: 'object', additionalProperties: true },
               },
             },
             admin: {
@@ -154,6 +156,9 @@ export async function tenantsRoutes(fastify: FastifyInstance) {
           properties: {
             name: { type: 'string' },
             slug: { type: 'string' },
+            plan: { type: 'string' },
+            limits: { type: 'object', additionalProperties: true },
+            features: { type: 'object', additionalProperties: true },
           },
         },
         response: { 201: tenantResponseSchema, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },

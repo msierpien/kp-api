@@ -44,6 +44,9 @@ export async function seed() {
         max_users: 20,
         max_cases_per_month: 10000,
       },
+      featuresJson: {
+        personalization_editor: true,
+      },
     },
   });
   console.log('✅ Tenant created:', tenant.name);
@@ -81,6 +84,9 @@ export async function seed() {
         max_shops: 2,
         max_users: 5,
         max_cases_per_month: 1000,
+      },
+      featuresJson: {
+        personalization_editor: false,
       },
     },
   });

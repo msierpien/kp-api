@@ -38,7 +38,7 @@ export async function personalizedProductsRoutes(fastify: FastifyInstance) {
           properties: {
             shopId: { type: 'string' },
             name: { type: 'string' },
-            identifierType: { type: 'string', enum: ['SKU', 'PRODUCT_ID', 'ATTRIBUTE_VALUE'] },
+            identifierType: { type: 'string', enum: ['SKU', 'INDEX', 'EAN'] },
             identifierValue: { type: 'string' },
             templateId: { type: 'string' },
           },

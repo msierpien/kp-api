@@ -35,6 +35,7 @@ export interface TokenResponse {
       id: string;
       name: string;
       slug: string;
+      features?: Record<string, boolean>;
     };
   };
 }

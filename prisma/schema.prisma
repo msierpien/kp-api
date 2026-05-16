@@ -25,6 +25,7 @@ model Tenant {
   status     TenantStatus @default(ACTIVE)
   plan       String       @default("FREE") // FREE, BASIC, PRO, ENTERPRISE
   limitsJson Json?        @map("limits_json") // { max_shops: 5, max_users: 10, max_cases_per_month: 1000 }
+  featuresJson Json?      @map("features_json") // { personalization_editor: true }
   createdAt  DateTime     @default(now()) @map("created_at")
   updatedAt  DateTime     @updatedAt @map("updated_at")
 
@@ -225,6 +226,7 @@ model PersonalizationTemplate {
   cases                PersonalizationCase[]
   personalizedProducts PersonalizedProduct[]
   templateAssets       TemplateAsset[]
+  shopProductMappings  ShopProductMapping[]
 
   @@unique([tenantId, code])
   @@index([tenantId])
@@ -592,6 +594,8 @@ model ShopProductMapping {
   externalName       String?   @map("external_name")
   externalPrice      Decimal?  @map("external_price") @db.Decimal(10, 2)
   warehouseProductId String?   @map("warehouse_product_id")
+  personalizationEnabled Boolean @default(false) @map("personalization_enabled")
+  personalizationTemplateId String? @map("personalization_template_id")
   isActive           Boolean   @default(true) @map("is_active")
   lastSyncAt         DateTime? @map("last_sync_at")
   createdAt          DateTime  @default(now()) @map("created_at")
@@ -600,6 +604,7 @@ model ShopProductMapping {
   tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   shop             Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
   warehouseProduct WarehouseProduct? @relation(fields: [warehouseProductId], references: [id], onDelete: SetNull)
+  personalizationTemplate PersonalizationTemplate? @relation(fields: [personalizationTemplateId], references: [id], onDelete: SetNull)
   priceSyncLogs    PriceSyncLog[]
 
   @@unique([shopId, externalProductId])
@@ -609,6 +614,8 @@ model ShopProductMapping {
   @@index([tenantId, externalSku])
   @@index([tenantId, externalEan])
   @@index([tenantId, isActive])
+  @@index([tenantId, personalizationEnabled])
+  @@index([personalizationTemplateId])
   @@map("shop_product_mappings")
 }
 

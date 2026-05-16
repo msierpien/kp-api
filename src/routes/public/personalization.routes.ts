@@ -5,6 +5,7 @@ import { validateAnswers } from '../../services/renderer/text-validator.service'
 import { saveFile, fileExists, buildStorageUrl } from '../../services/storage/local-storage.service';
 import { addFinalPdfJob } from '../../services/queue/render.queue';
 import { listFonts } from '../../services/admin/fonts.service';
+import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
 
 interface PersonalizationParams {
   token: string;
@@ -93,6 +94,24 @@ async function enrichTemplateLayoutWithGlobalFonts(template: any) {
   };
 }
 
+function getCaseTemplate(personalizationCase: any) {
+  return personalizationCase.template || personalizationCase.orderItem?.personalizedProduct?.template || null;
+}
+
+async function assertPersonalizationFeatureEnabled(personalizationCase: any, reply: FastifyReply) {
+  const tenantId = personalizationCase.order?.shop?.tenantId || personalizationCase.orderItem?.order?.shop?.tenantId;
+  if (!tenantId) return true;
+
+  const enabled = await tenantHasFeature(tenantId, FEATURE_PERSONALIZATION_EDITOR);
+  if (enabled) return true;
+
+  reply.status(403).send({
+    error: 'Forbidden',
+    message: 'Moduł personalizacji nie jest aktywny dla tej firmy',
+  });
+  return false;
+}
+
 export async function personalizationRoutes(fastify: FastifyInstance) {
   // GET /personalization/:token - Get personalization case by access token
   fastify.get<{ Params: PersonalizationParams }>(
@@ -126,6 +145,29 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         const personalizationCase = await prisma.personalizationCase.findUnique({
           where: { customerTokenHash: tokenHash },
           include: {
+            order: {
+              select: {
+                shop: { select: { tenantId: true } },
+              },
+            },
+            template: {
+              select: {
+                id: true,
+                code: true,
+                name: true,
+                description: true,
+                version: true,
+                layoutJson: true,
+                forms: {
+                  include: {
+                    fields: {
+                      orderBy: { sortOrder: 'asc' },
+                    },
+                  },
+                  orderBy: { sortOrder: 'asc' },
+                },
+              },
+            },
             orderItem: {
               include: {
                 order: {
@@ -182,9 +224,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
-        const enrichedTemplate = await enrichTemplateLayoutWithGlobalFonts(
-          personalizationCase.orderItem?.personalizedProduct?.template
-        );
+        if (!(await assertPersonalizationFeatureEnabled(personalizationCase, reply))) return;
+
+        const enrichedTemplate = await enrichTemplateLayoutWithGlobalFonts(getCaseTemplate(personalizationCase));
 
         return reply.send({
           ...personalizationCase,
@@ -196,7 +238,12 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
                       ...personalizationCase.orderItem.personalizedProduct,
                       template: enrichedTemplate,
                     }
-                  : personalizationCase.orderItem.personalizedProduct,
+                  : enrichedTemplate
+                    ? {
+                        id: `template-${enrichedTemplate.id}`,
+                        template: enrichedTemplate,
+                      }
+                    : null,
               }
             : personalizationCase.orderItem,
         });
@@ -259,6 +306,16 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         const personalizationCase = await prisma.personalizationCase.findUnique({
           where: { customerTokenHash: tokenHash },
           include: {
+            order: { select: { shop: { select: { tenantId: true } } } },
+            template: {
+              include: {
+                forms: {
+                  include: {
+                    fields: true,
+                  },
+                },
+              },
+            },
             orderItem: {
               include: {
                 personalizedProduct: {
@@ -294,9 +351,11 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
+        if (!(await assertPersonalizationFeatureEnabled(personalizationCase, reply))) return;
+
         // Zbuduj mapę fieldKey -> fieldId (na podstawie template)
         const fieldKeyToId = new Map<string, string>();
-        personalizationCase.orderItem?.personalizedProduct?.template?.forms?.forEach((form: any) => {
+        getCaseTemplate(personalizationCase)?.forms?.forEach((form: any) => {
           form.fields.forEach((f: any) => fieldKeyToId.set(f.key, f.id));
         });
 
@@ -381,6 +440,20 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         const personalizationCase = await prisma.personalizationCase.findUnique({
           where: { customerTokenHash: tokenHash },
           include: {
+            order: { select: { shop: { select: { tenantId: true } } } },
+            template: {
+              select: {
+                id: true,
+                code: true,
+                name: true,
+                version: true,
+                layoutJson: true,
+                forms: {
+                  include: { fields: { orderBy: { sortOrder: 'asc' } } },
+                  orderBy: { sortOrder: 'asc' },
+                },
+              },
+            },
             orderItem: {
               include: {
                 order: { select: { id: true, orderReference: true } },
@@ -420,9 +493,11 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
+        if (!(await assertPersonalizationFeatureEnabled(personalizationCase, reply))) return;
+
         // Zbuduj mapę fieldKey -> fieldId
         const fieldKeyToId = new Map<string, string>();
-        personalizationCase.orderItem?.personalizedProduct?.template?.forms?.forEach((form: any) => {
+        getCaseTemplate(personalizationCase)?.forms?.forEach((form: any) => {
           form.fields.forEach((f: any) => fieldKeyToId.set(f.key, f.id));
         });
 
@@ -440,7 +515,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
 
         // Pobierz wszystkie pola z template
         const allFields: any[] = [];
-        personalizationCase.orderItem?.personalizedProduct?.template?.forms?.forEach((form: any) => {
+        getCaseTemplate(personalizationCase)?.forms?.forEach((form: any) => {
           allFields.push(...form.fields);
         });
 
@@ -569,7 +644,17 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           include: {
             answers: true,
             order: {
-              select: { orderReference: true },
+              select: {
+                orderReference: true,
+                shop: { select: { tenantId: true } },
+              },
+            },
+            template: {
+              include: {
+                forms: {
+                  include: { fields: true },
+                },
+              },
             },
             orderItem: {
               include: {
@@ -604,9 +689,11 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
+        if (!(await assertPersonalizationFeatureEnabled(personalizationCase, reply))) return;
+
         // Zbuduj mapę fieldKey -> fieldId (na podstawie template)
         const fieldKeyToId = new Map<string, string>();
-        personalizationCase.orderItem?.personalizedProduct?.template?.forms?.forEach((form: any) => {
+        getCaseTemplate(personalizationCase)?.forms?.forEach((form: any) => {
           form.fields.forEach((f: any) => fieldKeyToId.set(f.key, f.id));
         });
 
@@ -639,9 +726,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         }
 
         // Pobierz dane potrzebne do renderowania
-        const submitTemplate = personalizationCase.orderItem?.personalizedProduct?.template;
+        const submitTemplate = getCaseTemplate(personalizationCase);
         const templateSlug = (submitTemplate as any)?.slug || submitTemplate?.name?.toLowerCase().replace(/\s+/g, '-') || 'default';
-        const templateVersion = personalizationCase.orderItem?.personalizedProduct?.template?.version || 1;
+        const templateVersion = submitTemplate?.version || personalizationCase.templateVersionFrozen || 1;
         const layoutConfig = (submitTemplate as any)?.layoutJson || null;
         const orderId = personalizationCase.orderId;
         const orderReference = personalizationCase.order?.orderReference;
@@ -764,6 +851,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
             orderItem: {
               select: {
                 orderId: true,
+                order: { select: { shop: { select: { tenantId: true } } } },
                 personalizedProduct: {
                   select: {
                     template: {
@@ -772,6 +860,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
                   },
                 },
               },
+            },
+            template: {
+              select: { version: true },
             },
           },
         });
@@ -789,6 +880,8 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
             message: 'Token jest nieaktywny',
           });
         }
+
+        if (!(await assertPersonalizationFeatureEnabled(personalizationCase, reply))) return;
 
         // Pobierz plik z multipart
         const data = await request.file();
@@ -816,7 +909,10 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         // Zapisz plik
         const savedFile = await saveFile(buffer, {
           orderId: personalizationCase.orderItem?.orderId || 'unknown',
-          templateVersion: personalizationCase.orderItem?.personalizedProduct?.template?.version || 1,
+          templateVersion:
+            personalizationCase.template?.version ||
+            personalizationCase.orderItem?.personalizedProduct?.template?.version ||
+            1,
           filename: `preview-${personalizationCase.id}`,
           extension: 'png',
         });

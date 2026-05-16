@@ -5,6 +5,7 @@ import { generateAccessToken } from '../../lib/token';
 import { config } from '../../config';
 import { emailService } from '../email/email.service';
 import { queuePersonalizationEmail } from '../queue/email.queue';
+import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
 
 function normalizeSku(value: string): string {
   return value.trim();
@@ -37,6 +38,8 @@ export async function createManualOrder(data: CreateManualOrderInput): Promise<M
   if (shop.platform !== 'MANUAL') {
     throw new Error('Można tworzyć ręczne zamówienia tylko dla sklepów typu MANUAL');
   }
+
+  const personalizationEnabledForTenant = await tenantHasFeature(shop.tenantId, FEATURE_PERSONALIZATION_EDITOR);
 
   // Sprawdź czy order reference już nie istnieje dla tego sklepu
   const existingOrder = await prisma.order.findUnique({
@@ -81,33 +84,36 @@ export async function createManualOrder(data: CreateManualOrderInput): Promise<M
     for (const item of data.items) {
       const normalizedSku = normalizeSku(item.sku);
 
-      // Sprawdź czy produkt jest personalizowany
-      const personalizedProducts = await tx.personalizedProduct.findMany({
+      const shopMapping = await tx.shopProductMapping.findFirst({
         where: {
           shopId: data.shopId,
+          externalSku: { equals: normalizedSku, mode: 'insensitive' },
           isActive: true,
         },
         include: {
-          template: {
-            include: {
-              forms: {
-                where: { isActive: true },
-                include: {
-                  fields: {
-                    orderBy: { sortOrder: 'asc' },
-                  },
-                },
-                orderBy: { sortOrder: 'asc' },
-              },
-            },
-          },
+          personalizationTemplate: true,
         },
       });
-      const personalizedProduct =
-        personalizedProducts.find((product) =>
-          product.identifierType === 'SKU' &&
-          normalizeSku(product.identifierValue) === normalizedSku
-        ) || null;
+
+      // Legacy fallback for SKU-based personalized products.
+      const personalizedProduct = personalizationEnabledForTenant && !shopMapping?.personalizationTemplate
+        ? await tx.personalizedProduct.findFirst({
+            where: {
+              shopId: data.shopId,
+              identifierType: 'SKU',
+              identifierValue: { equals: normalizedSku, mode: 'insensitive' },
+              isActive: true,
+            },
+            include: { template: true },
+          })
+        : null;
+
+      const mappingTemplate = personalizationEnabledForTenant &&
+        shopMapping?.warehouseProductId &&
+        shopMapping?.personalizationEnabled
+          ? shopMapping.personalizationTemplate
+          : null;
+      const caseTemplate = mappingTemplate || personalizedProduct?.template || null;
 
       // Utwórz pozycję zamówienia
       const orderItem = await tx.orderItem.create({
@@ -122,15 +128,15 @@ export async function createManualOrder(data: CreateManualOrderInput): Promise<M
       });
 
       // Jeśli produkt jest personalizowany, utwórz jeden case dla pozycji
-      if (personalizedProduct) {
+      if (caseTemplate) {
         const { token, hash, encrypted } = generateAccessToken();
 
         const newCase = await tx.personalizationCase.create({
           data: {
             orderId: newOrder.id,
             orderItemId: orderItem.id,
-            templateId: personalizedProduct.templateId,
-            templateVersionFrozen: personalizedProduct.template.version,
+            templateId: caseTemplate.id,
+            templateVersionFrozen: caseTemplate.version,
             status: 'WAITING_FOR_CUSTOMER',
             customerTokenHash: hash,
             customerTokenEncrypted: encrypted,

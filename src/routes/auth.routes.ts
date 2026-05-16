@@ -3,6 +3,7 @@ import { AuthService } from '../services/auth.service';
 import { loginSchema, refreshSchema, LoginInput, RefreshInput } from '../schemas/auth.schema';
 import prisma from '../lib/prisma';
 import { authMiddleware } from '../middleware/auth.middleware';
+import { normalizeFeatures } from '../lib/features';
 
 export async function authRoutes(fastify: FastifyInstance) {
   const authService = new AuthService({
@@ -46,6 +47,7 @@ export async function authRoutes(fastify: FastifyInstance) {
                       id: { type: 'string' },
                       name: { type: 'string' },
                       slug: { type: 'string' },
+                      features: { type: 'object', additionalProperties: true },
                     },
                   },
                 },
@@ -175,6 +177,7 @@ export async function authRoutes(fastify: FastifyInstance) {
                       id: { type: 'string' },
                       name: { type: 'string' },
                       slug: { type: 'string' },
+                      features: { type: 'object', additionalProperties: true },
                     },
                   },
                 },
@@ -201,6 +204,7 @@ export async function authRoutes(fastify: FastifyInstance) {
               id: true,
               name: true,
               slug: true,
+              featuresJson: true,
             },
           },
         },
@@ -213,7 +217,17 @@ export async function authRoutes(fastify: FastifyInstance) {
         });
       }
 
-      return reply.send({ user });
+      return reply.send({
+        user: {
+          ...user,
+          tenant: {
+            id: user.tenant.id,
+            name: user.tenant.name,
+            slug: user.tenant.slug,
+            features: normalizeFeatures(user.tenant.featuresJson),
+          },
+        },
+      });
     }
   );
 }

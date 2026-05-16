@@ -519,7 +519,7 @@ async function createWarehouseProductFromMappingInTx(
 ) {
   const mapping = await tx.shopProductMapping.findFirst({
     where: { id: mappingId, tenantId },
-    include: { shop: true, warehouseProduct: { include: { catalog: true } } },
+    include: { shop: true, warehouseProduct: { include: { catalog: true } }, personalizationTemplate: true },
   });
 
   if (!mapping) throw new Error('Mapowanie nie znalezione');
@@ -551,7 +551,7 @@ async function createWarehouseProductFromMappingInTx(
   const updatedMapping = await tx.shopProductMapping.update({
     where: { id: mapping.id },
     data: { warehouseProductId: warehouseProduct.id },
-    include: { shop: true, warehouseProduct: { include: { catalog: true } } },
+    include: { shop: true, warehouseProduct: { include: { catalog: true } }, personalizationTemplate: true },
   });
 
   return {

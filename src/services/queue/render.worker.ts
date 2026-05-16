@@ -49,6 +49,15 @@ async function processRenderJob(
     const personalizationCase = await prisma.personalizationCase.findUnique({
       where: { id: caseId },
       include: {
+        template: {
+          include: {
+            forms: {
+              include: {
+                fields: { orderBy: { sortOrder: 'asc' } },
+              },
+            },
+          },
+        },
         orderItem: {
           include: {
             personalizedProduct: {
@@ -76,7 +85,8 @@ async function processRenderJob(
     await job.updateProgress(20);
 
     // Pobierz pola formularza do walidacji
-    const formFields = personalizationCase.orderItem?.personalizedProduct?.template?.forms
+    const renderTemplate = personalizationCase.template || personalizationCase.orderItem?.personalizedProduct?.template;
+    const formFields = renderTemplate?.forms
       ?.flatMap(form => form.fields) || [];
 
     // Walidacja odpowiedzi

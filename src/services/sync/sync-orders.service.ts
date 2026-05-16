@@ -4,6 +4,7 @@ import { decrypt } from '../../lib/encryption';
 import { emailService } from '../email/email.service';
 import { generateAccessToken } from '../../lib/token';
 import { createWzForOrder, shouldAutoCreateWzForTenant } from '../admin/warehouse.service';
+import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
 
 const DEBUG_SHOP_SYNC = process.env.DEBUG_SHOP_SYNC === 'true';
 
@@ -39,7 +40,9 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
         productMappings: {
           where: {
             isActive: true,
-            warehouseProductId: { not: null },
+          },
+          include: {
+            personalizationTemplate: true,
           },
         },
       },
@@ -52,6 +55,8 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
     if (shop.status !== 'ACTIVE') {
       throw new Error('Shop is not active');
     }
+
+    const personalizationEnabledForTenant = await tenantHasFeature(shop.tenantId, FEATURE_PERSONALIZATION_EDITOR);
 
     // 2. Initialize PrestaShop client
     const config = (shop.configJson as any) || {};
@@ -101,10 +106,15 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
 
     if (DEBUG_SHOP_SYNC) console.log(`[Sync] Product map built: SKU=${productMap.SKU.size}, INDEX=${productMap.INDEX.size}, EAN=${productMap.EAN.size}`);
 
-    const warehouseSkuSet = new Set(
-      shop.productMappings.map((mapping) => mapping.externalSku.trim().toLowerCase()),
-    );
-    if (DEBUG_SHOP_SYNC) console.log(`[Sync] Warehouse product map built: SKU=${warehouseSkuSet.size}`);
+    const mappingsByExternalProductId = new Map<string, any>();
+    const mappingsBySku = new Map<string, any>();
+    for (const mapping of shop.productMappings as any[]) {
+      mappingsByExternalProductId.set(String(mapping.externalProductId), mapping);
+      if (mapping.externalSku) {
+        mappingsBySku.set(mapping.externalSku.trim().toLowerCase(), mapping);
+      }
+    }
+    if (DEBUG_SHOP_SYNC) console.log(`[Sync] Shop mapping map built: externalId=${mappingsByExternalProductId.size}, SKU=${mappingsBySku.size}`);
 
     // 5. Process each order
     for (const orderData of orders) {
@@ -148,13 +158,30 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
             null;
         };
 
+        const getShopMapping = (item: { product_id: number; product_reference: string }) => {
+          const byExternalId = mappingsByExternalProductId.get(String(item.product_id));
+          if (byExternalId) return byExternalId;
+
+          const ref = (item.product_reference || '').trim().toLowerCase();
+          return ref ? mappingsBySku.get(ref) || null : null;
+        };
+
         // Save order items that are either personalized or warehouse-mapped.
         const relevantItems = details.items.filter((item) => {
           const ref = (item.product_reference || '').toLowerCase();
           const personalizedProduct = getPersonalizedProduct(item);
-          const isWarehouseMapped = warehouseSkuSet.has(ref);
+          const shopMapping = getShopMapping(item);
+          const isWarehouseMapped = Boolean(shopMapping?.warehouseProductId);
+          const isPersonalizationMapped = Boolean(
+            personalizationEnabledForTenant &&
+            shopMapping?.warehouseProductId &&
+            shopMapping?.personalizationEnabled &&
+            shopMapping?.personalizationTemplateId
+          );
 
-          if (personalizedProduct) {
+          if (isPersonalizationMapped) {
+            if (DEBUG_SHOP_SYNC) console.log(`[Sync] Matched personalized mapping item: ${item.product_name} (reference: ${ref})`);
+          } else if (personalizationEnabledForTenant && personalizedProduct) {
             if (DEBUG_SHOP_SYNC) console.log(`[Sync] Matched personalized item: ${item.product_name} (reference: ${ref})`);
           } else if (isWarehouseMapped) {
             if (DEBUG_SHOP_SYNC) console.log(`[Sync] Matched warehouse item: ${item.product_name} (reference: ${ref})`);
@@ -162,7 +189,7 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
             if (DEBUG_SHOP_SYNC) console.log(`[Sync] No match: ${item.product_name} (reference: ${ref})`);
           }
 
-          return Boolean(personalizedProduct) || isWarehouseMapped;
+          return isPersonalizationMapped || (personalizationEnabledForTenant && Boolean(personalizedProduct)) || isWarehouseMapped;
         });
 
         if (relevantItems.length === 0) {
@@ -209,7 +236,15 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
 
         // Create order items for all relevant items; create personalization cases only where applicable.
         for (const item of relevantItems) {
+          const shopMapping: any = getShopMapping(item);
           const personalizedProduct: any = getPersonalizedProduct(item);
+          const mappingTemplate = personalizationEnabledForTenant &&
+            shopMapping?.warehouseProductId &&
+            shopMapping?.personalizationEnabled
+              ? shopMapping.personalizationTemplate
+              : null;
+          const legacyTemplate = personalizationEnabledForTenant ? personalizedProduct?.template : null;
+          const caseTemplate = mappingTemplate || legacyTemplate || null;
           const orderItem = await prisma.orderItem.create({
             data: {
               orderId: order.id,
@@ -221,7 +256,7 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
             },
           });
 
-          if (!personalizedProduct) {
+          if (!caseTemplate) {
             continue;
           }
 
@@ -233,8 +268,8 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
             data: {
               orderId: order.id,
               orderItemId: orderItem.id,
-              templateId: personalizedProduct.templateId,
-              templateVersionFrozen: personalizedProduct.template.version,
+              templateId: caseTemplate.id,
+              templateVersionFrozen: caseTemplate.version,
               status: 'NEW',
               customerTokenHash: tokenHash, // Hash do wyszukiwania
               customerTokenEncrypted: tokenEncrypted, // Zaszyfrowany token do pokazania adminom

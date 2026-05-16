@@ -1,26 +1,28 @@
-# Personalization API
+# Kreatywne Papierki API
 
-API do personalizacji zaproszeń z integracją wieloplatformową (PrestaShop, WooCommerce, Shopify, etc.).
+Backend Fastify dla systemu obslugi sklepow, magazynu, zamowien i personalizacji zaproszen. API jest wielotenantowe: jedna instalacja obsluguje wiele firm, a dane sa izolowane przez `tenantId`.
 
-## 🌐 Środowiska i adresy
+## Srodowiska
 
-- **Produkcja backendu Fastify / globalne API:** `https://api.kreatywneparty.pl`
-- **Swagger produkcyjny:** `https://api.kreatywneparty.pl/docs`
-- **Lokalne API developerskie:** `http://localhost:3001`
-- **Produkcyjny sklep PrestaShop:** `https://kp.kreatywneparty.pl`
-- **PrestaShop Webservice:** `https://kp.kreatywneparty.pl/api`
+- Produkcyjne API: `https://api.kreatywneparty.pl`
+- Swagger: `https://api.kreatywneparty.pl/docs`
+- Lokalne API: `http://localhost:3001`
+- Sklep PrestaShop Kreatywnych Papierkow: `https://kp.kreatywneparty.pl`
+- PrestaShop Webservice: `https://kp.kreatywneparty.pl/api`
 
-Panel admina i portal klienta komunikują się z backendem przez `NEXT_PUBLIC_API_URL`. W produkcji ustaw `NEXT_PUBLIC_API_URL=https://api.kreatywneparty.pl`. Adres `https://kp.kreatywneparty.pl` służy wyłącznie jako sklep PrestaShop i baza integracji sklepu, nie jako backend panelu.
+Panel admina i portal klienta zawsze lacza sie z Fastify przez `NEXT_PUBLIC_API_URL`. Adres sklepu PrestaShop jest zapisywany tylko w konfiguracji integracji sklepu.
 
-## 🚀 Szybki start
+## Start lokalny
 
-### Technologie
-- TypeScript + Fastify
-- Prisma ORM + PostgreSQL 16
-- Redis 7 + BullMQ (kolejka renderów)
-- Docker Compose
+Wymagania:
 
-### Start z Dockerem (zalecane)
+- Node.js 20+
+- pnpm 9+
+- PostgreSQL 16
+- Redis 7
+
+Docker:
+
 ```bash
 cd api
 cp .env.example .env
@@ -28,9 +30,9 @@ docker-compose up -d
 docker-compose exec api pnpm prisma migrate dev
 docker-compose exec api pnpm prisma:seed
 ```
-API: `http://localhost:3001`
 
-### Start bez Dockera
+Bez Dockera:
+
 ```bash
 cd api
 pnpm install
@@ -40,358 +42,198 @@ pnpm prisma:seed
 pnpm dev
 ```
 
-### Porty (Docker)
-- **API:** 3001
-- **PostgreSQL:** 5432
-- **Redis:** 6379
-- **Adminer:** 8081 (GUI bazy danych)
+Najwazniejsze skrypty:
 
-## 📋 API Endpoints
-
-### Health Check
-- `GET /health` - status API
-- `GET /` - informacje o API
-
-### Public (Portal Klienta)
-- `GET /personalization/:token` - dane case + formularz + answers
-- `PUT /personalization/:token/design` - zapis wersji roboczej (draft)
-- `POST /personalization/:token/upload-preview` - upload PNG z frontu
-- `POST /personalization/:token/preview` - walidacja + zwrot istniejącego preview (bez renderu)
-- `POST /personalization/:token/submit` - zatwierdzenie i utworzenie render job
-
-**Uwaga:** draft i submit zapisują również `layoutOverrides` dla warstw `text` i `textbox`, dzięki czemu finalny render respektuje pozycję i rozmiar ustawione przez klienta.
-Publiczny endpoint personalizacji wzbogaca też `layoutJson` o globalne czcionki, tak aby portal klienta renderował ten sam zestaw fontów co admin.
-
-### Auth
-- `POST /auth/login` - logowanie (email + password)
-- `POST /auth/refresh` - odświeżenie tokenu (refresh token)
-- `GET /auth/me` - pobranie danych zalogowanego użytkownika
-
-### Admin - Case Management
-- `GET /admin/cases` - lista case (paginacja, filtry, sortowanie)
-- `GET /admin/cases/:id` - szczegóły case
-- `PUT /admin/cases/:id/answers` - aktualizacja odpowiedzi (korekta sprzedawcy)
-- `PUT /admin/cases/:id/status` - zmiana statusu workflow
-- `POST /admin/cases/:id/notes` - dodanie notatki wewnętrznej
-
-### Admin - Integracje (Sklepy)
-- `GET /admin/shops` - lista integracji z platformami
-- `POST /admin/shops` - dodanie nowej integracji
-- `PUT /admin/shops/:id` - edycja integracji
-- `POST /admin/shops/:id/test` - test połączenia z API sklepu
-- `POST /admin/shops/:id/sync` - manualne uruchomienie synchronizacji zamówień
-- `DELETE /admin/shops/:id` - usunięcie integracji
-
-### Admin - Produkty personalizowane
-- `GET /admin/personalized-products` - lista mapowań SKU → template
-- `POST /admin/personalized-products` - dodanie produktu personalizowanego
-- `PUT /admin/personalized-products/:id` - edycja mapowania
-
-### Admin - Szablony i formularze
-- `GET /admin/templates` - lista szablonów
-- `GET /admin/templates/:id` - szczegóły szablonu
-- `GET /admin/templates/:id/form` - konfiguracja formularza
-- `PUT /admin/templates/:id/form` - aktualizacja formularza
-- `GET /admin/templates/:id/layout` - pobranie layoutu wizualnego
-- `PUT /admin/templates/:id/layout` - zapis layoutu wizualnego
-- `GET /admin/templates/:id/assets` - lista assetów szablonu
-- `POST /admin/templates/:id/assets` - upload assetu (PNG/JPG/SVG/WebP, max 10 MB)
-- `DELETE /admin/templates/:id/assets/:assetId` - usunięcie assetu
-
-### Admin - Czcionki (globalne)
-- `GET /admin/fonts` - lista wszystkich czcionek z `storage/fonts/`
-- `POST /admin/fonts` - upload czcionki (TTF/OTF/WOFF/WOFF2, max 10 MB)
-- `DELETE /admin/fonts/:fileName` - usunięcie czcionki
-
-### Admin - Zamówienia
-- `GET /admin/orders` - lista zamówień z items
-- `GET /admin/orders/:id` - szczegóły zamówienia
-- `POST /admin/orders` - ręczne utworzenie zamówienia testowego / manualnego
-
-### Admin - Logi i statystyki
-- `GET /admin/sync-logs` - historia synchronizacji z platformami
-- `GET /admin/stats` - statystyki (count cases per status)
-
-## 💾 Storage
-
-### Lokalizacja
-Pliki zapisują się w `api/storage/...`
-
-### Struktura
-```
-storage/
-├── fonts/                              # Globalne czcionki (TTF/OTF/WOFF/WOFF2)
-├── templates/
-│   └── {templateCode}/
-│       └── background/                 # Assety tła szablonu
-└── {orderId}/
-    └── v{templateVersion}/
-        ├── {timestamp}-preview.png     # PNG z portalu klienta
-        ├── final.pdf                   # Finalny PDF do druku
-        └── assets/                     # Uploaded files
-```
-
-### URL
-Pliki dostępne pod: `http://localhost:3001/storage/...`
-
-Endpoint: `GET /storage/*` (static file serving)
-
-## 🗄️ Baza danych
-
-### Modele Prisma
-
-**Integracje:**
-- `Shop` - konfiguracja sklepów e-commerce (credentials, API type)
-- `PersonalizedProduct` - mapowanie SKU/index/EAN → template
-- `SyncLog` - logi synchronizacji zamówień
-
-**Zamówienia:**
-- `Order` - zamówienia z platform e-commerce
-- `OrderItem` - pozycje zamówień
-
-**Personalizacja:**
-- `PersonalizationTemplate` - szablony (INV_KOMUNIA_01, etc.)
-- `Form` - formularze w szablonie
-- `FormField` - pola formularza (text, select, date, etc.)
-- `PersonalizationCase` - przypadki personalizacji (1 per order item, answers + layoutOverrides)
-- `PersonalizationAnswer` - odpowiedzi klienta
-
-**Użytkownicy:**
-- `User` - konta zespołu (role: `SUPER_ADMIN`, `ADMIN`, `OPERATOR`)
-
-### Migracje
 ```bash
-# Utworzenie nowej migracji
-pnpm prisma migrate dev --name nazwa_migracji
-
-# Zastosowanie migracji
-pnpm prisma migrate deploy
-
-# Reset bazy (DEV ONLY!)
-pnpm prisma migrate reset
+pnpm dev
+pnpm build
+pnpm prisma:migrate
+pnpm prisma:migrate:deploy
+pnpm prisma:seed
 ```
 
-### Seed (dane testowe)
+## Model systemu
+
+### Tenanty i uprawnienia
+
+`Tenant` reprezentuje firme korzystajaca z systemu. Uzytkownicy maja role `SUPER_ADMIN`, `ADMIN` albo `OPERATOR`.
+
+- `SUPER_ADMIN` zarzadza firmami, uzytkownikami i globalnymi operacjami.
+- `ADMIN` i `OPERATOR` pracuja w ramach swojego tenanta.
+- Middleware admina filtruje dostep po `tenantId`.
+
+Funkcje opcjonalne sa przechowywane w `Tenant.featuresJson`. Modul personalizacji zaproszen jest kontrolowany flaga:
+
+```json
+{
+  "personalization_editor": true
+}
+```
+
+Dla firm bez tej flagi endpointy personalizacji zwracaja `403`, a sync zamowien nie tworzy case'ow personalizacji.
+
+### Magazyn i produkty sklepu
+
+Magazyn jest zrodlem prawdy dla fizycznych produktow:
+
+- `WarehouseCatalog` porzadkuje katalogi produktow.
+- `WarehouseProduct` opisuje produkt magazynowy, ceny i stan.
+- `WarehouseProductBarcode` przechowuje EAN-y i przeliczniki opakowan.
+- `WarehouseDocument` i `WarehouseDocumentItem` obsluguja dokumenty `PZ`, `PW`, `WZ`, `RW`.
+
+Produkty ze sklepow nie tworza osobnej logiki produktowej. Laczy je model:
+
+```text
+ShopProductMapping
+  shop product SKU/EAN/id
+  -> WarehouseProduct
+```
+
+Mapowanie jest wykorzystywane przez import produktow, synchronizacje zamowien, stock sync, price sync i personalizacje.
+
+Szczegolowy opis magazynu jest w `warehouse.md`.
+
+### Personalizacja zaproszen
+
+Personalizacja jest opcja na zmapowanym produkcie sklepu, nie osobnym produktem.
+
+```text
+ShopProductMapping
+  personalizationEnabled
+  personalizationTemplateId
+```
+
+Przeplyw:
+
+1. Produkt sklepu jest importowany i mapowany do `WarehouseProduct`.
+2. Admin wybiera mapowanie i przypisuje `PersonalizationTemplate`.
+3. Sync zamowien znajduje `ShopProductMapping` dla pozycji zamowienia.
+4. Jesli mapping ma wlaczona personalizacje i szablon, API tworzy `PersonalizationCase`.
+5. Klient wypelnia formularz przez publiczny link.
+6. Worker renderuje pliki wynikowe dla druku.
+
+Model `PersonalizedProduct` zostaje jako legacy fallback dla starych danych i migracji, ale nowy panel przypisuje szablony przez `ShopProductMapping`.
+
+### Zamowienia i kolejki
+
+Zamowienia sa synchronizowane z integracji sklepow. API tworzy:
+
+- `Order` i `OrderItem`;
+- dokumenty magazynowe dla pozycji zmapowanych do magazynu;
+- `PersonalizationCase` tylko dla pozycji z aktywna personalizacja;
+- logi synchronizacji i zadania kolejek.
+
+BullMQ obsluguje m.in. renderowanie, e-mail, stock sync i price sync. Panel admina ma osobne widoki do monitorowania i retry kolejek.
+
+## Glowne grupy endpointow
+
+Publiczne:
+
+- `GET /health`
+- `GET /personalization/:token`
+- `PUT /personalization/:token/design`
+- `POST /personalization/:token/upload-preview`
+- `POST /personalization/:token/preview`
+- `POST /personalization/:token/submit`
+
+Auth:
+
+- `POST /auth/login`
+- `POST /auth/refresh`
+- `GET /auth/me`
+
+Admin:
+
+- `/admin/stats`
+- `/admin/cases`
+- `/admin/orders`
+- `/admin/shops`
+- `/admin/shop-mappings`
+- `/admin/templates`
+- `/admin/fonts`
+- `/admin/render-jobs`
+- `/admin/queues`
+- `/admin/sync-logs`
+- `/admin/storage`
+- `/admin/tenants`
+- `/admin/users`
+- `/admin/warehouse/*`
+- `/admin/wholesale/*`
+
+Pelna dokumentacja techniczna endpointow jest generowana w Swaggerze pod `/docs`.
+
+## Storage
+
+Pliki sa zapisywane w `api/storage`.
+
+```text
+storage/
+  fonts/
+  templates/
+    {templateCode}/
+      background/
+  {orderId}/
+    v{templateVersion}/
+      preview.png
+      final.pdf
+      assets/
+```
+
+Publiczne pliki sa serwowane przez `GET /storage/*`.
+
+## Migracje i baza
+
+Tworzenie migracji developerskiej:
+
+```bash
+pnpm prisma migrate dev --name nazwa_migracji
+```
+
+Wdrozenie migracji na srodowisku:
+
+```bash
+pnpm prisma migrate deploy
+```
+
+Seed:
+
 ```bash
 pnpm prisma:seed
 ```
 
-Tworzy:
-- Użytkowników: superadmin/admin/operator zależnie od seeda
-- Sklep: Kreatywne Papierki (PRESTASHOP)
-- Template: INV_KOMUNIA_01 z formularzem
-- Produkt personalizowany: SKU=INV-KOMUNIA-001
+Seed tworzy domyslnego tenanta Kreatywne Papierki, konta testowe, integracje, szablony i przykladowe dane potrzebne do pracy developerskiej.
 
-### Prisma Studio (GUI)
+## Konfiguracja
+
+Najwazniejsze zmienne:
+
+- `DATABASE_URL`
+- `REDIS_URL`
+- `API_URL`
+- `FRONTEND_URL`
+- `CLIENT_URL`
+- `JWT_ACCESS_SECRET`
+- `JWT_REFRESH_SECRET`
+- `ENCRYPTION_KEY`
+- `AUTO_SEND_EMAILS`
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`
+
+Pelna lista znajduje sie w `.env.example`.
+
+## Weryfikacja
+
+Przed commitem uruchom:
+
 ```bash
-pnpm prisma studio
-```
-Otworzy GUI na: `http://localhost:5555`
-
-## 🔒 Bezpieczeństwo
-
-### JWT Auth
-- **Access token:** 15 min (HTTP-only cookie)
-- **Refresh token:** 7 dni (HTTP-only cookie)
-- Middleware: `authenticateJWT` dla wszystkich `/admin/*`
-
-### Rate Limiting
-- Public endpoints: 100 req/15min
-- Admin endpoints: 1000 req/15min
-
-### CORS
-Dozwolone origins z `FRONTEND_URL` i `CLIENT_URL` (env)
-
-### Token personalizacji
-- Token w URL jest hashowany w bazie (SHA-256)
-- TTL: do momentu zatwierdzenia (submit)
-- Po submit: token nieaktywny
-
-## 🔧 Zmienne środowiskowe
-
-Najważniejsze (pełna lista w `.env.example`):
-
-**API:**
-- `API_PORT=3001`
-- `API_HOST=0.0.0.0`
-- `API_URL=http://localhost:3001` (do budowania URL storage)
-
-**Database:**
-- `DATABASE_URL=postgresql://user:pass@host:5432/db`
-
-**Redis:**
-- `REDIS_URL=redis://localhost:6379`
-
-**Auth:**
-- `JWT_ACCESS_SECRET` - secret dla access token
-- `JWT_REFRESH_SECRET` - secret dla refresh token
-
-**Frontend URLs:**
-- `FRONTEND_URL=http://localhost:3000` (admin panel)
-- `CLIENT_URL=http://localhost:3002` (portal klienta)
-
-**Storage:**
-- `STORAGE_PATH=./storage` - lokalizacja plików
-- `STORAGE_TYPE=local` (docelowo: s3)
-
-**Email:**
-- `SMTP_HOST`
-- `SMTP_PORT`
-- `SMTP_USER`
-- `SMTP_PASS`
-
-## 📊 Logowanie
-
-Używamy `pino` jako logger:
-- **Dev:** `pino-pretty` (kolorowe logi)
-- **Production:** JSON format
-
-Logi zawierają:
-- Request ID (X-Request-ID)
-- User ID (jeśli auth)
-- Timestamp, level, message
-
-## 🔄 Synchronizacja zamówień (PULL)
-
-### Workflow
-1. **Cron job** co X minut (5-15 min) - nadal do dokończenia
-2. Pobiera opłacone zamówienia z API sklepu
-3. **Filtruje** po SKU z tabeli `personalized_products`
-4. Tworzy `Order` + `OrderItem` + `PersonalizationCase`
-5. Generuje token dostępowy (hash do DB)
-6. **Wysyła e-mail** z linkiem
-7. Loguje do `sync_logs`
-
-### Zamówienia manualne
-
-- Zamówienie manualne może być utworzone z panelu admin
-- Dla pozycji dopasowanej do `PersonalizedProduct` tworzony jest `PersonalizationCase`
-- Case otrzymuje token klienta i może wejść do standardowego flow draft / submit / render
-
-### Manualne uruchomienie
-```bash
-# Z panelu admin
-POST /admin/shops/:id/sync
-
-# Bezpośrednio (dev)
-curl -X POST http://localhost:3001/admin/shops/{shopId}/sync \
-  -H "Authorization: Bearer {token}"
-```
-
-### Service: `syncShopOrders(shopId)`
-Lokalizacja: `src/services/shop-sync.service.ts`
-
-Obsługuje:
-- Idempotencję (check by external_order_id)
-- Rate limiting do API platform
-- Error handling i retry
-- Logowanie do `sync_logs`
-
-## 🎨 Render Pipeline
-
-### Obecny stan
-- ✅ PNG generowane w przeglądarce klienta (Fabric.js)
-- ✅ Upload PNG: `POST /personalization/:token/upload-preview`
-- ✅ PDF do druku generowany asynchronicznie przez BullMQ worker
-- ✅ `layoutOverrides` merge'owane z layoutem przy finalnym renderze
-
-### Docelowa architektura
-1. Klient klika "Zatwierdź" → `POST /personalization/:token/submit`
-2. API tworzy `RenderJob` w kolejce (BullMQ)
-3. **Worker** pobiera job i renderuje PDF
-4. PDF zapisany w storage: `{orderId}/v{version}/final.pdf`
-5. Status case: SUBMITTED → READY_FOR_PRINT
-
-## 🛠️ Development
-
-### Komendy
-```bash
-# Dev z hot-reload
-pnpm dev
-
-# Build produkcyjny
 pnpm build
-pnpm start
-
-# Linting
-pnpm lint
-pnpm lint:fix
-
-# Testy
-pnpm test
-pnpm test:watch
 ```
 
-**Uwaga:** pokrycie testami nadal jest niepełne; krytyczne flow są priorytetem na kolejny etap.
+Dla zmian w Prisma build generuje klienta Prisma automatycznie. Przy zmianach w migracjach sprawdz rowniez, czy `pnpm prisma migrate dev` przechodzi na lokalnej bazie.
 
-### Struktura kodu
-```
-api/src/
-├── index.ts              # Entry point, server Fastify
-├── lib/
-│   └── prisma.ts         # Singleton Prisma Client
-├── routes/
-│   ├── auth.routes.ts    # Auth endpoints
-│   ├── admin/            # Admin endpoints
-│   └── public/           # Public endpoints
-├── services/
-│   ├── auth.service.ts   # Logika JWT
-│   ├── shop-sync.service.ts  # Synchronizacja
-│   └── admin/            # Admin services
-├── middleware/
-│   ├── auth.middleware.ts    # JWT verification
-│   └── error-handler.ts      # Global error handler
-├── schemas/
-│   ├── auth.schema.ts    # Zod schemas
-│   └── admin.schema.ts
-├── types/
-│   └── index.ts          # TypeScript types
-└── utils/
-    └── logger.ts         # Pino logger
-```
+## Dokumentacja w repo
 
-### Hot-reload
-API używa `tsx watch` - automatyczny restart przy zmianach w `src/`.
+- `README.md` - aktualny opis backendu.
+- `warehouse.md` - zrodlo prawdy dla modulu magazynowego.
+- Swagger `/docs` - aktualne endpointy API.
 
-### Docker logs
-```bash
-# Wszystkie kontenery
-docker-compose logs -f
-
-# Tylko API
-docker-compose logs -f api
-
-# Tylko PostgreSQL
-docker-compose logs -f postgres
-```
-
-## 🧪 Testing
-
-### Health check
-```bash
-curl http://localhost:3001/health
-```
-
-### Login test
-```bash
-curl -X POST http://localhost:3001/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"admin@kreatywne-papierki.pl","password":"admin123"}'
-```
-
-### Dane testowe
-Po `pnpm prisma:seed`:
-- Admin: `admin@kreatywne-papierki.pl` / `admin123`
-- Operator: `operator@kreatywne-papierki.pl` / `operator123`
-
-## 📝 Coding Standards
-
-- TypeScript strict mode
-- ESLint + Prettier
-- Conventional Commits
-- Async/await (nie callbacks)
-- Error handling: try/catch + global handler
-
----
-
-**Zobacz też:** [../README.md](../README.md) - Główny README systemu
+Stare dzienniki postepu i plany refaktoryzacji nie sa trzymane w repo jako dokumentacja operacyjna.

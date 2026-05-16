@@ -35,7 +35,24 @@ export async function templatesRoutes(fastify: FastifyInstance) {
     schema: {
       tags: ['templates'],
       summary: 'Lista szablonów personalizacji',
-      response: { 200: { type: 'array', items: { type: 'object' } } },
+      response: {
+        200: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              name: { type: 'string' },
+              code: { type: 'string' },
+              description: { type: ['string', 'null'] },
+              version: { type: 'number' },
+              isActive: { type: 'boolean' },
+              createdAt: { type: 'string' },
+            },
+            required: ['id', 'name', 'code', 'version', 'isActive', 'createdAt'],
+          },
+        },
+      },
     },
   }, async (_request: FastifyRequest, reply: FastifyReply) => {
     const templates = await listTemplates();

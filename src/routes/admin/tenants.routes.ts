@@ -93,7 +93,17 @@ export async function tenantsRoutes(fastify: FastifyInstance) {
             },
           },
         },
-        response: { 201: { type: 'object' }, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+        response: {
+          201: {
+            type: 'object',
+            properties: {
+              tenant: tenantResponseSchema,
+              admin: { type: 'object', additionalProperties: true },
+              shop: { type: 'object', additionalProperties: true },
+            },
+          },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
       },
     },
     async (request: FastifyRequest<{ Body: SetupTenantInput }>, reply: FastifyReply) => {
@@ -146,7 +156,7 @@ export async function tenantsRoutes(fastify: FastifyInstance) {
             slug: { type: 'string' },
           },
         },
-        response: { 201: { type: 'object' }, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+        response: { 201: tenantResponseSchema, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
       },
     },
     async (request: FastifyRequest<{ Body: CreateTenantInput }>, reply: FastifyReply) => {
@@ -170,7 +180,7 @@ export async function tenantsRoutes(fastify: FastifyInstance) {
         summary: 'Zaktualizuj tenanta',
         params: { type: 'object', properties: { id: { type: 'string' } } },
         body: { type: 'object' },
-        response: { 200: { type: 'object' }, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+        response: { 200: tenantResponseSchema, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
       },
     },
     async (

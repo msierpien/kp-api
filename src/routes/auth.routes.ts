@@ -40,7 +40,14 @@ export async function authRoutes(fastify: FastifyInstance) {
                   name: { type: 'string' },
                   role: { type: 'string' },
                   tenantId: { type: 'string' },
-                  tenant: { type: 'object' },
+                  tenant: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'string' },
+                      name: { type: 'string' },
+                      slug: { type: 'string' },
+                    },
+                  },
                 },
               },
             },
@@ -162,7 +169,14 @@ export async function authRoutes(fastify: FastifyInstance) {
                   name: { type: 'string' },
                   role: { type: 'string' },
                   tenantId: { type: 'string' },
-                  tenant: { type: 'object' },
+                  tenant: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'string' },
+                      name: { type: 'string' },
+                      slug: { type: 'string' },
+                    },
+                  },
                 },
               },
             },

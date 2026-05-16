@@ -22,7 +22,7 @@ export async function usersRoutes(fastify: FastifyInstance) {
             tenantId: { type: 'string', description: 'Filtr po firmie (tylko SUPER_ADMIN)' },
           },
         },
-        response: { 200: { type: 'array', items: { type: 'object' } } },
+        response: { 200: { type: 'array', items: { type: 'object', additionalProperties: true } } },
       },
     },
     async (request: FastifyRequest<{ Querystring: { tenantId?: string } }>, reply: FastifyReply) => {
@@ -46,7 +46,7 @@ export async function usersRoutes(fastify: FastifyInstance) {
         tags: ['users'],
         summary: 'Szczegóły użytkownika',
         params: { type: 'object', properties: { id: { type: 'string' } } },
-        response: { 200: { type: 'object' }, 404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+        response: { 200: { type: 'object', additionalProperties: true }, 404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
       },
     },
     async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
@@ -80,7 +80,7 @@ export async function usersRoutes(fastify: FastifyInstance) {
             isActive: { type: 'boolean' },
           },
         },
-        response: { 201: { type: 'object' }, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+        response: { 201: { type: 'object', additionalProperties: true }, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
       },
     },
     async (request: FastifyRequest<{ Body: CreateUserInput }>, reply: FastifyReply) => {
@@ -104,7 +104,7 @@ export async function usersRoutes(fastify: FastifyInstance) {
         summary: 'Zaktualizuj użytkownika',
         params: { type: 'object', properties: { id: { type: 'string' } } },
         body: { type: 'object' },
-        response: { 200: { type: 'object' }, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+        response: { 200: { type: 'object', additionalProperties: true }, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
       },
     },
     async (

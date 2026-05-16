@@ -243,6 +243,9 @@ export async function updateUser(id: string, input: UpdateUserInput): Promise<Us
     if (!isSuperAdmin() && role === 'SUPER_ADMIN') {
       throw new Error('Tylko SUPER_ADMIN może nadawać rolę SUPER_ADMIN');
     }
+    if (existingUser.role === 'ADMIN' && role !== 'ADMIN') {
+      await assertCanDeactivateUser(existingUser);
+    }
     updateData.role = role;
   }
 
@@ -259,6 +262,9 @@ export async function updateUser(id: string, input: UpdateUserInput): Promise<Us
     }
 
     await assertTenantExists(input.tenantId);
+    if (existingUser.role === 'ADMIN' && input.tenantId !== existingUser.tenantId) {
+      await assertCanDeactivateUser(existingUser);
+    }
     await ensureDefaultCatalog(input.tenantId);
     updateData.tenantId = input.tenantId;
   }

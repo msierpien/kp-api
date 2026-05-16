@@ -382,7 +382,7 @@ curl -X POST http://localhost:3001/auth/login \
 ### Dane testowe
 Po `pnpm prisma:seed`:
 - Admin: `admin@kreatywne-papierki.pl` / `admin123`
-- Seller: `seller@kreatywne-papierki.pl` / `seller123`
+- Operator: `operator@kreatywne-papierki.pl` / `operator123`
 
 ## 📝 Coding Standards
 

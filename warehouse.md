@@ -114,6 +114,9 @@ Panel admina domknięty 2026-05-16:
 - mapowania sklepu i hurtowni mają server-side filtr `diagnosis`;
 - tworzenie produktów z hurtowni i mapowań pozwala wskazać katalog;
 - formularz dokumentu ma tryb skanera EAN i tryb ręcznego dodawania pozycji.
+- skaner EAN w dokumentach ma modal wielokrotnego użycia, kolejkę skanów, cache lookupu, dźwięki, ręczne zatwierdzanie ofert hurtowni i opcjonalny autosave dokumentów `DRAFT`.
+- backend skanera rozpoznaje EAN w kolejności: aktywny magazyn, blokada nieaktywnego EAN/produktu, aktywne oferty hurtowni, brak wyniku.
+- dokumenty `DRAFT` mają szybkie endpointy do merge, edycji i usuwania pozycji bez przepisywania całego dokumentu.
 
 Otwarte po QA:
 
@@ -358,6 +361,10 @@ Reguła:
 2. API zwraca produkt, EAN i `quantityMultiplier`.
 3. Pozycja dokumentu zapisuje snapshot: `barcodeId`, `scannedEan`, `baseQuantity`, `quantityMultiplier`, `quantity`.
 4. Katalog produktu może być zwracany w odpowiedzi lookupu dla wygody panelu admina.
+5. Jeśli EAN nie istnieje jako aktywny kod magazynowy, skaner sprawdza aktywne mapowania hurtowni po `externalEan`.
+6. Jeśli EAN istnieje w magazynie, ale kod albo produkt jest nieaktywny, skaner zwraca blokadę i nie pozwala utworzyć duplikatu z hurtowni.
+7. Oferta hurtowni wymaga ręcznego zatwierdzenia operatora. Akceptacja podpina istniejący produkt po SKU albo tworzy produkt w katalogu domyślnym/wskazanym, dodaje EAN i dopiero wtedy pozwala dodać pozycję do dokumentu.
+8. Duże dokumenty mogą działać w trybie autosave `DRAFT`: pierwszy poprawny skan tworzy dokument roboczy, a kolejne skany merge'ują pozycje w API.
 
 ### Synchronizacja stanów do sklepów
 
@@ -422,6 +429,7 @@ Rekomendacja tagowania:
 Definicja gotowości Swagger:
 
 - `/docs` pokazuje katalogi, produkty, dokumenty, EAN/skaner i mapowania.
+- `/docs` pokazuje też endpointy skanera `POST /admin/warehouse/scan/resolve`, `POST /admin/warehouse/scan/wholesale/:mappingId/accept` oraz szybkie endpointy pozycji dokumentów.
 - `POST /admin/warehouse/catalogs` da się przetestować z poziomu Swagger UI.
 - `POST /admin/warehouse/products` pokazuje `catalogId`.
 - `POST /admin/shop-mappings/:id/create-product` pokazuje opcjonalne body z `catalogId`.
@@ -602,6 +610,8 @@ Zakres:
 - `POST /admin/warehouse/recalculate-stock` przywraca zgodny cache.
 - Lookup EAN dalej zwraca produkt i przelicznik.
 - Skan EAN opakowania zbiorczego zapisuje poprawne `baseQuantity`, `quantityMultiplier` i finalne `quantity`.
+- Skan EAN znaleziony tylko w hurtowni pokazuje kandydatów i po akceptacji tworzy/podpina produkt bez zmiany stanu magazynowego.
+- Tryb autosave dokumentu `DRAFT` merge'uje powtarzane skany tej samej pary `productId + barcodeId`.
 - Stock sync dalej wysyła bieżący stan produktu do zmapowanych sklepów.
 
 ### Jakość
@@ -1902,6 +1912,30 @@ Efekt końcowy:
 - operator ma log sukcesów i błędów;
 - operator ma widok rozbieżności między magazynem i PrestaShop;
 - ceny nie mieszają się z logiką stanów.
+
+### Etap 8b: uniwersalny skaner EAN dla dokumentów
+
+Cel: przyspieszyć pracę z dokumentami magazynowymi i przygotować skaner do ponownego użycia w innych miejscach panelu.
+
+Status backend/API: wdrożone 2026-05-16.
+Status panelu admina: wdrożone 2026-05-16.
+
+Zakres:
+
+- `POST /admin/warehouse/scan/resolve` rozpoznaje EAN w magazynie albo aktywnych ofertach hurtowni;
+- `POST /admin/warehouse/scan/wholesale/:mappingId/accept` ręcznie akceptuje ofertę hurtowni, podpina/tworzy produkt i dodaje EAN;
+- `POST /admin/warehouse/documents/:id/items/merge` dodaje albo zwiększa pozycję dokumentu `DRAFT`;
+- `PATCH /admin/warehouse/documents/:id/items/:itemId` edytuje ilość, cenę i notatkę pozycji `DRAFT`;
+- `DELETE /admin/warehouse/documents/:id/items/:itemId` usuwa pozycję dokumentu `DRAFT`;
+- panel ma modal `ScannerCoreDialog` i dokumentowy wrapper z kolejką skanów, cache lookupu, dźwiękami i autosave.
+
+Decyzje:
+
+- skaner USB działa jako klawiatura, bez WebUSB;
+- produkty z hurtowni wymagają ręcznego zatwierdzenia;
+- kilka ofert po tym samym EAN pokazuje listę wyboru;
+- utworzenie produktu z hurtowni nie zmienia stanu magazynowego, dopiero dokument po zatwierdzeniu zmienia `currentStock`;
+- nieaktywny EAN albo produkt blokuje skan zamiast tworzyć duplikat.
 
 ### Etap 9: dokładniejsza kontrola stanów
 

@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import * as warehouseService from '../../services/admin/warehouse.service';
 import * as barcodeService from '../../services/admin/warehouse-barcodes.service';
+import * as scannerService from '../../services/admin/warehouse-scanner.service';
 import * as diagnosticsService from '../../services/admin/warehouse-diagnostics.service';
 import * as priceSyncService from '../../services/price/price-sync.service';
 import * as prestaReconciliationService from '../../services/prestashop/prestashop-reconciliation.service';
@@ -52,6 +53,59 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd wyszukiwania EAN';
       const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/scan/resolve', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Rozpoznaj skan EAN w magazynie albo hurtowniach',
+      body: {
+        type: 'object',
+        required: ['ean'],
+        properties: {
+          ean: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: scannerService.ResolveWarehouseScanInput }>, reply: FastifyReply) => {
+    try {
+      const result = await scannerService.resolveWarehouseScan(request.body);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd rozpoznawania skanu EAN';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/scan/wholesale/:mappingId/accept', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Utwórz albo podepnij produkt z oferty hurtowni znalezionej skanerem',
+      params: {
+        type: 'object',
+        required: ['mappingId'],
+        properties: { mappingId: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        properties: {
+          catalogId: { type: ['string', 'null'] },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { mappingId: string };
+    Body: scannerService.AcceptWholesaleScanInput;
+  }>, reply: FastifyReply) => {
+    try {
+      const result = await scannerService.acceptWholesaleScanMapping(request.params.mappingId, request.body ?? {});
+      return reply.status(201).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd akceptacji produktu z hurtowni';
+      const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }
   });
@@ -559,6 +613,103 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd edycji dokumentu';
       const status = message.includes('nie znaleziony') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/documents/:id/items/merge', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Dodaj albo zwiększ pozycję dokumentu DRAFT',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        required: ['productId'],
+        properties: {
+          productId: { type: 'string' },
+          quantity: { type: 'number', exclusiveMinimum: 0 },
+          barcodeId: { type: 'string' },
+          scannedEan: { type: 'string' },
+          baseQuantity: { type: 'number', exclusiveMinimum: 0 },
+          quantityMultiplier: { type: 'number', exclusiveMinimum: 0 },
+          unitPrice: { type: 'number', minimum: 0 },
+          notes: { type: 'string' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: warehouseService.DocumentItemInput;
+  }>, reply: FastifyReply) => {
+    try {
+      const doc = await warehouseService.mergeDocumentItem(request.params.id, request.body);
+      return reply.send(doc);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd dodawania pozycji dokumentu';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.patch('/documents/:id/items/:itemId', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Edytuj pozycję dokumentu DRAFT',
+      params: {
+        type: 'object',
+        required: ['id', 'itemId'],
+        properties: {
+          id: { type: 'string' },
+          itemId: { type: 'string' },
+        },
+      },
+      body: {
+        type: 'object',
+        properties: {
+          quantity: { type: 'number', exclusiveMinimum: 0 },
+          unitPrice: { type: ['number', 'null'], minimum: 0 },
+          notes: { type: ['string', 'null'] },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string; itemId: string };
+    Body: warehouseService.UpdateDocumentItemInput;
+  }>, reply: FastifyReply) => {
+    try {
+      const doc = await warehouseService.updateDocumentItem(request.params.id, request.params.itemId, request.body);
+      return reply.send(doc);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd edycji pozycji dokumentu';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.delete('/documents/:id/items/:itemId', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Usuń pozycję dokumentu DRAFT',
+      params: {
+        type: 'object',
+        required: ['id', 'itemId'],
+        properties: {
+          id: { type: 'string' },
+          itemId: { type: 'string' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string; itemId: string } }>, reply: FastifyReply) => {
+    try {
+      const doc = await warehouseService.deleteDocumentItem(request.params.id, request.params.itemId);
+      return reply.send(doc);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd usuwania pozycji dokumentu';
+      const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }
   });

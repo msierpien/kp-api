@@ -822,6 +822,7 @@ model WholesaleProductMapping {
   @@index([providerId])
   @@index([warehouseProductId])
   @@index([tenantId, externalSku])
+  @@index([tenantId, externalEan])
   @@index([tenantId, isActive])
   @@map("wholesale_product_mappings")
 }

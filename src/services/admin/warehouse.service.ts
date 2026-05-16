@@ -438,6 +438,12 @@ export interface UpdateDocumentInput {
   items?: DocumentItemInput[];
 }
 
+export interface UpdateDocumentItemInput {
+  quantity?: number;
+  unitPrice?: number | null;
+  notes?: string | null;
+}
+
 export interface CancelDocumentInput {
   reason?: string;
 }
@@ -717,6 +723,121 @@ export async function updateDocument(id: string, input: UpdateDocumentInput) {
     where: { id },
     data,
     include: { items: { include: { product: true, barcode: true } } },
+  });
+}
+
+export async function mergeDocumentItem(documentId: string, input: DocumentItemInput) {
+  const tenantId = getTenantId();
+  const where: any = { id: documentId };
+  if (tenantId) where.tenantId = tenantId;
+
+  const doc = await prisma.warehouseDocument.findFirst({ where });
+  if (!doc) throw new Error('Dokument nie znaleziony');
+  if (doc.status !== 'DRAFT') throw new Error('Można edytować tylko dokumenty w statusie DRAFT');
+
+  const [preparedItem] = await prepareDocumentItems(tenantId ?? doc.tenantId, [input], true);
+  if (!preparedItem) throw new Error('Pozycja dokumentu jest wymagana');
+
+  const updatedDocument = await prisma.$transaction(async (tx) => {
+    const existingItem = await tx.warehouseDocumentItem.findFirst({
+      where: {
+        documentId,
+        productId: preparedItem.productId,
+        barcodeId: preparedItem.barcodeId ?? null,
+      },
+    });
+
+    if (existingItem) {
+      await tx.warehouseDocumentItem.update({
+        where: { id: existingItem.id },
+        data: {
+          quantity: new Prisma.Decimal(existingItem.quantity).plus(preparedItem.quantity),
+          baseQuantity:
+            existingItem.baseQuantity || preparedItem.baseQuantity
+              ? new Prisma.Decimal(existingItem.baseQuantity ?? 0).plus(preparedItem.baseQuantity ?? 0)
+              : null,
+          quantityMultiplier: existingItem.quantityMultiplier ?? preparedItem.quantityMultiplier,
+          scannedEan: existingItem.scannedEan ?? preparedItem.scannedEan,
+          unitPrice: existingItem.unitPrice ?? preparedItem.unitPrice,
+          notes: existingItem.notes || preparedItem.notes,
+        },
+      });
+    } else {
+      await tx.warehouseDocumentItem.create({
+        data: {
+          documentId,
+          productId: preparedItem.productId,
+          quantity: preparedItem.quantity,
+          barcodeId: preparedItem.barcodeId,
+          scannedEan: preparedItem.scannedEan,
+          baseQuantity: preparedItem.baseQuantity,
+          quantityMultiplier: preparedItem.quantityMultiplier,
+          unitPrice: preparedItem.unitPrice,
+          notes: preparedItem.notes,
+        },
+      });
+    }
+
+    return tx.warehouseDocument.findUnique({
+      where: { id: documentId },
+      include: { items: { include: { product: true, barcode: true } }, order: true },
+    });
+  });
+
+  return updatedDocument;
+}
+
+export async function updateDocumentItem(documentId: string, itemId: string, input: UpdateDocumentItemInput) {
+  const tenantId = getTenantId();
+  const documentWhere: any = { id: documentId };
+  if (tenantId) documentWhere.tenantId = tenantId;
+
+  const doc = await prisma.warehouseDocument.findFirst({ where: documentWhere });
+  if (!doc) throw new Error('Dokument nie znaleziony');
+  if (doc.status !== 'DRAFT') throw new Error('Można edytować tylko dokumenty w statusie DRAFT');
+
+  const item = await prisma.warehouseDocumentItem.findFirst({ where: { id: itemId, documentId } });
+  if (!item) throw new Error('Pozycja dokumentu nie znaleziona');
+
+  const data: Prisma.WarehouseDocumentItemUpdateInput = {};
+  if (input.quantity !== undefined) {
+    if (input.quantity <= 0) throw new Error('Ilość pozycji musi być większa od 0');
+    data.quantity = input.quantity;
+  }
+  if (input.unitPrice !== undefined) {
+    if (input.unitPrice !== null && input.unitPrice < 0) throw new Error('Cena pozycji nie może być ujemna');
+    data.unitPrice = input.unitPrice;
+  }
+  if (input.notes !== undefined) data.notes = input.notes;
+
+  await prisma.warehouseDocumentItem.update({
+    where: { id: itemId },
+    data,
+  });
+
+  return prisma.warehouseDocument.findUnique({
+    where: { id: documentId },
+    include: { items: { include: { product: true, barcode: true } }, order: true },
+  });
+}
+
+export async function deleteDocumentItem(documentId: string, itemId: string) {
+  const tenantId = getTenantId();
+  const documentWhere: any = { id: documentId };
+  if (tenantId) documentWhere.tenantId = tenantId;
+
+  const doc = await prisma.warehouseDocument.findFirst({ where: documentWhere });
+  if (!doc) throw new Error('Dokument nie znaleziony');
+  if (doc.status !== 'DRAFT') throw new Error('Można edytować tylko dokumenty w statusie DRAFT');
+
+  const item = await prisma.warehouseDocumentItem.findFirst({ where: { id: itemId, documentId } });
+  if (!item) throw new Error('Pozycja dokumentu nie znaleziona');
+
+  await prisma.warehouseDocumentItem.delete({ where: { id: itemId } });
+
+  return prisma.warehouseDocument.findUnique({
+    where: { id: documentId },
+    include: { items: { include: { product: true, barcode: true } }, order: true },
   });
 }
 

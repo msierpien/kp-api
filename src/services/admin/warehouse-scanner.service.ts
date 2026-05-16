@@ -6,6 +6,7 @@ import { resolveCatalogForProduct } from './warehouse-catalogs.service';
 export interface ResolveWarehouseScanInput {
   ean: string;
   providerIds?: string[];
+  includeWholesalePrice?: boolean;
 }
 
 export interface AcceptWholesaleScanInput {
@@ -78,6 +79,39 @@ function wholesaleSource(mapping: {
   };
 }
 
+async function findWholesaleSourceForWarehouseMatch(input: {
+  tenantId: string;
+  ean: string;
+  warehouseProductId: string;
+  providerIds?: string[];
+}) {
+  if (input.providerIds?.length === 0) return undefined;
+
+  const mapping = await prisma.wholesaleProductMapping.findFirst({
+    where: {
+      tenantId: input.tenantId,
+      isActive: true,
+      lastKnownPrice: { not: null },
+      ...(input.providerIds ? { providerId: { in: input.providerIds } } : {}),
+      provider: { isActive: true },
+      OR: [
+        { warehouseProductId: input.warehouseProductId },
+        { externalEan: input.ean, warehouseProductId: null },
+      ],
+    },
+    orderBy: [
+      { lastKnownPrice: 'asc' },
+      { lastSyncAt: 'desc' },
+      { updatedAt: 'desc' },
+      { externalName: 'asc' },
+      { externalSku: 'asc' },
+    ],
+    include: { provider: true },
+  });
+
+  return mapping ? wholesaleSource(mapping) : undefined;
+}
+
 export async function resolveWarehouseScan(input: ResolveWarehouseScanInput) {
   const tenantId = requireTenantId();
   const ean = normalizeEan(input.ean);
@@ -110,7 +144,16 @@ export async function resolveWarehouseScan(input: ResolveWarehouseScanInput) {
       };
     }
 
-    return warehouseMatchPayload(ean, existingBarcode, existingBarcode.warehouseProduct);
+    const source = input.includeWholesalePrice
+      ? await findWholesaleSourceForWarehouseMatch({
+        tenantId,
+        ean,
+        warehouseProductId: existingBarcode.warehouseProductId,
+        providerIds,
+      })
+      : undefined;
+
+    return warehouseMatchPayload(ean, existingBarcode, existingBarcode.warehouseProduct, source);
   }
 
   const candidates = providerIds?.length === 0 ? [] : await prisma.wholesaleProductMapping.findMany({

@@ -66,6 +66,7 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
         required: ['ean'],
         properties: {
           ean: { type: 'string', minLength: 1 },
+          includeWholesalePrice: { type: 'boolean' },
           providerIds: {
             type: 'array',
             items: { type: 'string' },

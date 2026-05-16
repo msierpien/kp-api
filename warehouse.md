@@ -6,6 +6,18 @@
 
 ---
 
+## 0. Adresy środowisk i integracji
+
+- **Globalne API backendu Fastify:** `https://api.kreatywneparty.pl`
+- **Swagger produkcyjnego API:** `https://api.kreatywneparty.pl/docs`
+- **Lokalne API developerskie:** `http://localhost:3001`
+- **Produkcyjny sklep PrestaShop:** `https://kp.kreatywneparty.pl`
+- **PrestaShop Webservice:** `https://kp.kreatywneparty.pl/api`
+
+W panelu admina i portalu klienta `NEXT_PUBLIC_API_URL` ma wskazywać na backend Fastify. Dla produkcji jest to `https://api.kreatywneparty.pl`. Adres `https://kp.kreatywneparty.pl` jest adresem sklepu PrestaShop i trafia do konfiguracji integracji sklepu, razem z ręcznie podanym kluczem Webservice.
+
+---
+
 ## 1. Cel
 
 Moduł magazynowy ma być centralnym miejscem kontroli fizycznych produktów, stanów i dokumentów magazynowych dla wielu sklepów. Inspirujemy się podejściem BaseLinkera, w którym magazyn nie jest tylko listą stanów, ale ma katalog produktów, a produkty są przypisane do katalogu i dopiero z niego mapowane do sklepów, magazynów oraz integracji.

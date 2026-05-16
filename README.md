@@ -2,6 +2,16 @@
 
 API do personalizacji zaproszeń z integracją wieloplatformową (PrestaShop, WooCommerce, Shopify, etc.).
 
+## 🌐 Środowiska i adresy
+
+- **Produkcja backendu Fastify / globalne API:** `https://api.kreatywneparty.pl`
+- **Swagger produkcyjny:** `https://api.kreatywneparty.pl/docs`
+- **Lokalne API developerskie:** `http://localhost:3001`
+- **Produkcyjny sklep PrestaShop:** `https://kp.kreatywneparty.pl`
+- **PrestaShop Webservice:** `https://kp.kreatywneparty.pl/api`
+
+Panel admina i portal klienta komunikują się z backendem przez `NEXT_PUBLIC_API_URL`. W produkcji ustaw `NEXT_PUBLIC_API_URL=https://api.kreatywneparty.pl`. Adres `https://kp.kreatywneparty.pl` służy wyłącznie jako sklep PrestaShop i baza integracji sklepu, nie jako backend panelu.
+
 ## 🚀 Szybki start
 
 ### Technologie
@@ -147,7 +157,7 @@ Endpoint: `GET /storage/*` (static file serving)
 - `PersonalizationAnswer` - odpowiedzi klienta
 
 **Użytkownicy:**
-- `User` - konta admin/seller (role: ADMIN, SELLER)
+- `User` - konta zespołu (role: `SUPER_ADMIN`, `ADMIN`, `OPERATOR`)
 
 ### Migracje
 ```bash
@@ -167,7 +177,7 @@ pnpm prisma:seed
 ```
 
 Tworzy:
-- Użytkowników: admin@kreatywne-papierki.pl, seller@kreatywne-papierki.pl
+- Użytkowników: superadmin/admin/operator zależnie od seeda
 - Sklep: Kreatywne Papierki (PRESTASHOP)
 - Template: INV_KOMUNIA_01 z formularzem
 - Produkt personalizowany: SKU=INV-KOMUNIA-001

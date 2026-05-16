@@ -440,6 +440,8 @@ export interface UpdateDocumentInput {
 
 export interface UpdateDocumentItemInput {
   quantity?: number;
+  baseQuantity?: number | null;
+  quantityMultiplier?: number | null;
   unitPrice?: number | null;
   notes?: string | null;
 }
@@ -803,6 +805,14 @@ export async function updateDocumentItem(documentId: string, itemId: string, inp
   if (input.quantity !== undefined) {
     if (input.quantity <= 0) throw new Error('Ilość pozycji musi być większa od 0');
     data.quantity = input.quantity;
+  }
+  if (input.baseQuantity !== undefined) {
+    if (input.baseQuantity !== null && input.baseQuantity <= 0) throw new Error('Ilość bazowa musi być większa od 0');
+    data.baseQuantity = input.baseQuantity;
+  }
+  if (input.quantityMultiplier !== undefined) {
+    if (input.quantityMultiplier !== null && input.quantityMultiplier <= 0) throw new Error('Przelicznik EAN musi być większy od 0');
+    data.quantityMultiplier = input.quantityMultiplier;
   }
   if (input.unitPrice !== undefined) {
     if (input.unitPrice !== null && input.unitPrice < 0) throw new Error('Cena pozycji nie może być ujemna');

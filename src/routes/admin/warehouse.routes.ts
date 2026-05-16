@@ -66,6 +66,10 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
         required: ['ean'],
         properties: {
           ean: { type: 'string', minLength: 1 },
+          providerIds: {
+            type: 'array',
+            items: { type: 'string' },
+          },
         },
       },
     },
@@ -671,6 +675,8 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
         type: 'object',
         properties: {
           quantity: { type: 'number', exclusiveMinimum: 0 },
+          baseQuantity: { type: ['number', 'null'], exclusiveMinimum: 0 },
+          quantityMultiplier: { type: ['number', 'null'], exclusiveMinimum: 0 },
           unitPrice: { type: ['number', 'null'], minimum: 0 },
           notes: { type: ['string', 'null'] },
         },

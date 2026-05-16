@@ -5,6 +5,7 @@ import { resolveCatalogForProduct } from './warehouse-catalogs.service';
 
 export interface ResolveWarehouseScanInput {
   ean: string;
+  providerIds?: string[];
 }
 
 export interface AcceptWholesaleScanInput {
@@ -81,6 +82,7 @@ export async function resolveWarehouseScan(input: ResolveWarehouseScanInput) {
   const tenantId = requireTenantId();
   const ean = normalizeEan(input.ean);
   if (!ean) throw new Error('EAN jest wymagany');
+  const providerIds = input.providerIds?.map((id) => id.trim()).filter(Boolean);
 
   const existingBarcode = await prisma.warehouseProductBarcode.findFirst({
     where: { tenantId, ean },
@@ -111,11 +113,12 @@ export async function resolveWarehouseScan(input: ResolveWarehouseScanInput) {
     return warehouseMatchPayload(ean, existingBarcode, existingBarcode.warehouseProduct);
   }
 
-  const candidates = await prisma.wholesaleProductMapping.findMany({
+  const candidates = providerIds?.length === 0 ? [] : await prisma.wholesaleProductMapping.findMany({
     where: {
       tenantId,
       externalEan: ean,
       isActive: true,
+      ...(providerIds ? { providerId: { in: providerIds } } : {}),
       provider: { isActive: true },
     },
     take: 20,

@@ -1923,6 +1923,7 @@ Status panelu admina: wdrożone 2026-05-16.
 Zakres:
 
 - `POST /admin/warehouse/scan/resolve` rozpoznaje EAN w magazynie albo aktywnych ofertach hurtowni;
+- `POST /admin/warehouse/scan/resolve` przyjmuje opcjonalne `providerIds`, żeby skaner przeszukiwał tylko wybrane hurtownie;
 - `POST /admin/warehouse/scan/wholesale/:mappingId/accept` ręcznie akceptuje ofertę hurtowni, podpina/tworzy produkt i dodaje EAN;
 - `POST /admin/warehouse/documents/:id/items/merge` dodaje albo zwiększa pozycję dokumentu `DRAFT`;
 - `PATCH /admin/warehouse/documents/:id/items/:itemId` edytuje ilość, cenę i notatkę pozycji `DRAFT`;

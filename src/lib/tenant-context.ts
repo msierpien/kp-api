@@ -7,30 +7,33 @@ interface TenantContext {
   overrideTenantId?: string; // For SUPER_ADMIN to filter by specific tenant
 }
 
+const DEBUG_TENANT_CONTEXT = process.env.DEBUG_TENANT_CONTEXT === 'true';
+
 export function getTenantId(): string | null {
   const context = requestContext.get('tenantContext') as TenantContext | null;
 
-  // Debug logging
-  console.log('[getTenantId] Context:', JSON.stringify(context || { status: 'NO_CONTEXT' }));
+  if (DEBUG_TENANT_CONTEXT) {
+    console.log('[getTenantId] Context:', JSON.stringify(context || { status: 'NO_CONTEXT' }));
+  }
 
   if (!context) {
-    console.log('[getTenantId] NO CONTEXT - returning null');
+    if (DEBUG_TENANT_CONTEXT) console.log('[getTenantId] NO CONTEXT - returning null');
     return null;
   }
 
   // If SUPER_ADMIN specified override, use it
   if (context.overrideTenantId) {
-    console.log('[getTenantId] Using override:', context.overrideTenantId);
+    if (DEBUG_TENANT_CONTEXT) console.log('[getTenantId] Using override:', context.overrideTenantId);
     return context.overrideTenantId;
   }
 
   // SUPER_ADMIN without override sees all data (return null = no filter)
   if (context.role === 'SUPER_ADMIN') {
-    console.log('[getTenantId] SUPER_ADMIN without override - returning null');
+    if (DEBUG_TENANT_CONTEXT) console.log('[getTenantId] SUPER_ADMIN without override - returning null');
     return null;
   }
 
-  console.log('[getTenantId] Returning tenantId:', context.tenantId);
+  if (DEBUG_TENANT_CONTEXT) console.log('[getTenantId] Returning tenantId:', context.tenantId);
   return context.tenantId || null;
 }
 

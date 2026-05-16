@@ -19,8 +19,14 @@ import { initializeScheduler } from './services/scheduler/scheduler.service';
 import { initStorage } from './services/storage/local-storage.service';
 import { startRenderWorker, stopRenderWorker } from './services/queue/render.worker';
 import { startEmailWorker, stopEmailWorker } from './services/queue/email.worker';
+import { startStockSyncWorker, stopStockSyncWorker } from './services/queue/stock-sync.worker';
+import { startPriceSyncWorker, stopPriceSyncWorker } from './services/queue/price-sync.worker';
+import { startWholesaleSyncWorker, stopWholesaleSyncWorker } from './services/queue/wholesale-sync.worker';
 import { closeQueue, getQueueStats } from './services/queue/render.queue';
 import { closeEmailQueue } from './services/queue/email.queue';
+import { closeStockSyncQueue } from './services/queue/stock-sync.queue';
+import { closePriceSyncQueue } from './services/queue/price-sync.queue';
+import { closeWholesaleSyncQueue } from './services/queue/wholesale-sync.queue';
 // Puppeteer removed - no browser to close anymore
 import bullBoardPlugin from './plugins/bull-board';
 import swaggerDocsPlugin from './plugins/swagger-docs.plugin';
@@ -28,7 +34,14 @@ import { errorHandlerPlugin } from './plugins/error-handler.plugin';
 import { validationPlugin } from './plugins/validation.plugin';
 import type { JwtPayload } from './types';
 
+type TenantContextData = Pick<JwtPayload, 'tenantId' | 'userId' | 'role'> & {
+  overrideTenantId?: string;
+};
+
 const server = Fastify({
+  routerOptions: {
+    ignoreTrailingSlash: true,
+  },
   logger: {
     level: 'info',
     transport: config.app.isDevelopment
@@ -53,7 +66,7 @@ server.register(requestContext, {
 // Tenant context hook - runs for every request
 server.addHook('onRequest', async (request) => {
   // Prepare context data
-  let contextData = { tenantId: '', userId: '', role: '' };
+  let contextData: TenantContextData = { tenantId: '', userId: '', role: 'ADMIN' };
 
   try {
     const authHeader = request.headers.authorization;
@@ -72,7 +85,7 @@ server.addHook('onRequest', async (request) => {
       if (decoded.role === 'SUPER_ADMIN') {
         const overrideTenantId = (request.query as any)?.tenantId;
         if (overrideTenantId && typeof overrideTenantId === 'string') {
-          (contextData as any).overrideTenantId = overrideTenantId;
+          contextData.overrideTenantId = overrideTenantId;
         }
       }
     }
@@ -85,7 +98,7 @@ server.addHook('onRequest', async (request) => {
 });
 
 // Custom content type parser to allow empty JSON bodies (Fastify v5 fix)
-server.addContentTypeParser('application/json', { parseAs: 'string' }, function (req, body, done) {
+server.addContentTypeParser('application/json', { parseAs: 'string' }, function (_req, body, done) {
   try {
     const json = body === '' ? {} : JSON.parse(body as string);
     done(null, json);
@@ -236,6 +249,12 @@ const gracefulShutdown = async () => {
   try {
     await stopRenderWorker();
     await stopEmailWorker();
+    await stopStockSyncWorker();
+    await stopPriceSyncWorker();
+    await stopWholesaleSyncWorker();
+    await closeStockSyncQueue();
+    await closePriceSyncQueue();
+    await closeWholesaleSyncQueue();
     await closeQueue();
     await closeEmailQueue();
     server.log.info('🛑 Workers and queues stopped');
@@ -302,6 +321,27 @@ const start = async () => {
       server.log.info('📧 Email worker started (BullMQ)');
     } catch (error) {
       server.log.error({ err: error }, '❌ Failed to start email worker');
+    }
+
+    try {
+      startStockSyncWorker();
+      server.log.info('Stock sync worker started (BullMQ)');
+    } catch (error) {
+      server.log.error({ err: error }, 'Failed to start stock sync worker');
+    }
+
+    try {
+      startPriceSyncWorker();
+      server.log.info('Price sync worker started (BullMQ)');
+    } catch (error) {
+      server.log.error({ err: error }, 'Failed to start price sync worker');
+    }
+
+    try {
+      startWholesaleSyncWorker();
+      server.log.info('Wholesale sync worker started (BullMQ)');
+    } catch (error) {
+      server.log.error({ err: error }, 'Failed to start wholesale sync worker');
     }
 
     await server.listen({ port, host });

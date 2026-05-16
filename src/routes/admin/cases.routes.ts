@@ -159,7 +159,7 @@ export async function casesRoutes(fastify: FastifyInstance) {
             error: 'Validation Error',
             message: !paramsValidation.success
               ? paramsValidation.error.errors[0].message
-              : bodyValidation.error.errors[0].message,
+              : (bodyValidation as any).error.errors[0].message,
           });
         }
 
@@ -221,7 +221,7 @@ export async function casesRoutes(fastify: FastifyInstance) {
             error: 'Validation Error',
             message: !paramsValidation.success
               ? paramsValidation.error.errors[0].message
-              : bodyValidation.error.errors[0].message,
+              : (bodyValidation as any).error.errors[0].message,
           });
         }
 
@@ -280,7 +280,7 @@ export async function casesRoutes(fastify: FastifyInstance) {
             error: 'Validation Error',
             message: !paramsValidation.success
               ? paramsValidation.error.errors[0].message
-              : bodyValidation.error.errors[0].message,
+              : (bodyValidation as any).error.errors[0].message,
           });
         }
 

@@ -29,12 +29,21 @@ model Tenant {
   updatedAt  DateTime     @updatedAt @map("updated_at")
 
   // Relations
-  users              User[]
-  shops              Shop[]
-  templates          PersonalizationTemplate[]
-  emailSettings      EmailSettings[]
-  warehouseProducts  WarehouseProduct[]
-  warehouseDocuments WarehouseDocument[]
+  users               User[]
+  shops               Shop[]
+  templates           PersonalizationTemplate[]
+  emailSettings       EmailSettings[]
+  warehouseProducts   WarehouseProduct[]
+  warehouseCatalogs   WarehouseCatalog[]
+  warehouseDocuments  WarehouseDocument[]
+  warehouseBarcodes   WarehouseProductBarcode[]
+  shopProductMappings ShopProductMapping[]
+  stockSyncLogs       StockSyncLog[]
+  priceSyncLogs       PriceSyncLog[]
+  shopProductImportLogs ShopProductImportLog[]
+  wholesaleProviders  WholesaleProvider[]
+  wholesaleMappings   WholesaleProductMapping[]
+  wholesaleSyncLogs   WholesaleSyncLog[]
 
   @@index([status])
   @@index([slug])
@@ -81,6 +90,10 @@ model Shop {
   orders               Order[]
   syncLogs             SyncLog[]
   personalizedProducts PersonalizedProduct[]
+  productMappings      ShopProductMapping[]
+  stockSyncLogs        StockSyncLog[]
+  priceSyncLogs        PriceSyncLog[]
+  productImportLogs    ShopProductImportLog[]
 
   @@index([tenantId])
   @@index([status])
@@ -288,29 +301,29 @@ model FormField {
 // ============================================
 
 model PersonalizationCase {
-  id                    String    @id @default(cuid())
-  orderId               String    @map("order_id")
-  orderItemId           String    @unique @map("order_item_id")
-  templateId            String    @map("template_id")
-  templateVersionFrozen Int       @map("template_version_frozen")
-  status                String    @default("NEW") // NEW, WAITING_FOR_CUSTOMER, PREVIEW_READY, SUBMITTED, RENDERED, FAILED_RENDER, READY_FOR_PRINT, ARCHIVED
-  customerTokenHash     String?   @unique @map("customer_token_hash")
-  customerTokenEncrypted String?  @map("customer_token_encrypted") // Zaszyfrowany token (plain text) do pokazania adminom
-  tokenActive           Boolean   @default(true) @map("token_active")
-  submittedAt           DateTime? @map("submitted_at")
-  answersJson           Json?     @map("answers_json")
-  layoutOverrides       Json?     @map("layout_overrides")
-  validationSummary     Json?     @map("validation_summary") // { errors: [], warnings: [] }
-  notesInternal         String?   @map("notes_internal")
-  
+  id                     String    @id @default(cuid())
+  orderId                String    @map("order_id")
+  orderItemId            String    @unique @map("order_item_id")
+  templateId             String    @map("template_id")
+  templateVersionFrozen  Int       @map("template_version_frozen")
+  status                 String    @default("NEW") // NEW, WAITING_FOR_CUSTOMER, PREVIEW_READY, SUBMITTED, RENDERED, FAILED_RENDER, READY_FOR_PRINT, ARCHIVED
+  customerTokenHash      String?   @unique @map("customer_token_hash")
+  customerTokenEncrypted String?   @map("customer_token_encrypted") // Zaszyfrowany token (plain text) do pokazania adminom
+  tokenActive            Boolean   @default(true) @map("token_active")
+  submittedAt            DateTime? @map("submitted_at")
+  answersJson            Json?     @map("answers_json")
+  layoutOverrides        Json?     @map("layout_overrides")
+  validationSummary      Json?     @map("validation_summary") // { errors: [], warnings: [] }
+  notesInternal          String?   @map("notes_internal")
+
   // Email tracking
-  emailSentAt           DateTime? @map("email_sent_at") // Kiedy email został wysłany
-  emailFailedAt         DateTime? @map("email_failed_at") // Kiedy ostatnia próba failed
-  emailError            String?   @map("email_error") // Komunikat błędu
-  emailAttempts         Int       @default(0) @map("email_attempts") // Liczba prób
-  
-  createdAt             DateTime  @default(now()) @map("created_at")
-  updatedAt             DateTime  @updatedAt @map("updated_at")
+  emailSentAt   DateTime? @map("email_sent_at") // Kiedy email został wysłany
+  emailFailedAt DateTime? @map("email_failed_at") // Kiedy ostatnia próba failed
+  emailError    String?   @map("email_error") // Komunikat błędu
+  emailAttempts Int       @default(0) @map("email_attempts") // Liczba prób
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   order          Order                          @relation(fields: [orderId], references: [id], onDelete: Cascade)
   orderItem      OrderItem                      @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
@@ -501,67 +514,341 @@ enum WarehouseDocumentType {
 }
 
 enum WarehouseDocumentStatus {
-  DRAFT     // Roboczy — nie wpływa na stany
+  DRAFT // Roboczy — nie wpływa na stany
   CONFIRMED // Zatwierdzony — wpływa na stany
   CANCELLED // Anulowany
 }
 
-model WarehouseProduct {
-  id          String   @id @default(cuid())
-  tenantId    String   @map("tenant_id")
-  sku         String
-  name        String
-  unit        String   @default("szt")
-  description String?
-  isActive    Boolean  @default(true) @map("is_active")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+enum WholesalePlatform {
+  CSV_FEED
+  XML_FEED
+  REST_API
+}
 
-  tenant Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  items  WarehouseDocumentItem[]
+model WarehouseProduct {
+  id           String   @id @default(cuid())
+  tenantId     String   @map("tenant_id")
+  catalogId    String   @map("catalog_id")
+  sku          String
+  name         String
+  unit         String   @default("szt")
+  description  String?
+  purchasePrice Decimal? @map("purchase_price") @db.Decimal(10, 2)
+  retailPrice   Decimal? @map("retail_price") @db.Decimal(10, 2)
+  currentStock Decimal  @default(0) @map("current_stock") @db.Decimal(10, 3)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tenant              Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  catalog             WarehouseCatalog          @relation(fields: [catalogId], references: [id], onDelete: Restrict)
+  items               WarehouseDocumentItem[]
+  barcodes            WarehouseProductBarcode[]
+  shopProductMappings ShopProductMapping[]
+  stockSyncLogs       StockSyncLog[]
+  priceSyncLogs       PriceSyncLog[]
+  wholesaleMappings   WholesaleProductMapping[]
 
   @@unique([tenantId, sku])
   @@index([tenantId])
+  @@index([catalogId])
   @@index([tenantId, isActive])
   @@map("warehouse_products")
 }
 
-model WarehouseDocument {
-  id          String                  @id @default(cuid())
-  tenantId    String                  @map("tenant_id")
-  number      String
-  type        WarehouseDocumentType
-  status      WarehouseDocumentStatus @default(DRAFT)
-  date        DateTime                @default(now())
+model WarehouseCatalog {
+  id          String   @id @default(cuid())
+  tenantId    String   @map("tenant_id")
+  code        String
+  name        String
   description String?
-  orderId     String?                 @map("order_id")
-  createdAt   DateTime                @default(now()) @map("created_at")
-  updatedAt   DateTime                @updatedAt @map("updated_at")
+  isDefault   Boolean  @default(false) @map("is_default")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  tenant   Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  products WarehouseProduct[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@map("warehouse_catalogs")
+}
+
+model ShopProductMapping {
+  id                 String    @id @default(cuid())
+  tenantId           String    @map("tenant_id")
+  shopId             String    @map("shop_id")
+  externalProductId  String    @map("external_product_id")
+  externalSku        String    @map("external_sku")
+  externalEan        String?   @map("external_ean")
+  externalName       String?   @map("external_name")
+  externalPrice      Decimal?  @map("external_price") @db.Decimal(10, 2)
+  warehouseProductId String?   @map("warehouse_product_id")
+  isActive           Boolean   @default(true) @map("is_active")
+  lastSyncAt         DateTime? @map("last_sync_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shop             Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  warehouseProduct WarehouseProduct? @relation(fields: [warehouseProductId], references: [id], onDelete: SetNull)
+  priceSyncLogs    PriceSyncLog[]
+
+  @@unique([shopId, externalProductId])
+  @@index([tenantId])
+  @@index([shopId])
+  @@index([warehouseProductId])
+  @@index([tenantId, externalSku])
+  @@index([tenantId, externalEan])
+  @@index([tenantId, isActive])
+  @@map("shop_product_mappings")
+}
+
+model ShopProductImportLog {
+  id              String    @id @default(cuid())
+  tenantId        String    @map("tenant_id")
+  shopId          String    @map("shop_id")
+  status          String    @default("SUCCESS")
+  itemsFetched    Int       @default(0) @map("items_fetched")
+  mappingsCreated Int       @default(0) @map("mappings_created")
+  mappingsUpdated Int       @default(0) @map("mappings_updated")
+  skipped         Int       @default(0)
+  skippedNoSku    Int       @default(0) @map("skipped_no_sku")
+  errorMessage    String?   @map("error_message") @db.Text
+  startedAt       DateTime  @default(now()) @map("started_at")
+  finishedAt      DateTime? @map("finished_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([shopId])
+  @@index([status])
+  @@index([startedAt])
+  @@map("shop_product_import_logs")
+}
+
+model WarehouseProductBarcode {
+  id                 String   @id @default(cuid())
+  tenantId           String   @map("tenant_id")
+  warehouseProductId String   @map("warehouse_product_id")
+  ean                String
+  label              String?
+  quantityMultiplier Decimal  @default(1) @map("quantity_multiplier") @db.Decimal(10, 3)
+  isPrimary          Boolean  @default(false) @map("is_primary")
+  isActive           Boolean  @default(true) @map("is_active")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  tenant           Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseProduct WarehouseProduct        @relation(fields: [warehouseProductId], references: [id], onDelete: Cascade)
+  documentItems    WarehouseDocumentItem[]
+
+  @@unique([tenantId, ean])
+  @@index([tenantId])
+  @@index([warehouseProductId])
+  @@index([tenantId, isActive])
+  @@map("warehouse_product_barcodes")
+}
+
+model WarehouseDocument {
+  id                String                  @id @default(cuid())
+  tenantId          String                  @map("tenant_id")
+  number            String
+  type              WarehouseDocumentType
+  status            WarehouseDocumentStatus @default(DRAFT)
+  date              DateTime                @default(now())
+  description       String?
+  orderId           String?                 @map("order_id")
+  createdByUserId   String?                 @map("created_by_user_id")
+  confirmedAt       DateTime?               @map("confirmed_at")
+  confirmedByUserId String?                 @map("confirmed_by_user_id")
+  cancelledAt       DateTime?               @map("cancelled_at")
+  cancelledByUserId String?                 @map("cancelled_by_user_id")
+  cancelReason      String?                 @map("cancel_reason") @db.Text
+  isAutoGenerated   Boolean                 @default(false) @map("is_auto_generated")
+  metadataJson      Json?                   @map("metadata_json")
+  createdAt         DateTime                @default(now()) @map("created_at")
+  updatedAt         DateTime                @updatedAt @map("updated_at")
 
   tenant Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   order  Order?                  @relation(fields: [orderId], references: [id])
   items  WarehouseDocumentItem[]
+  stockSyncLogs StockSyncLog[]
 
   @@unique([tenantId, number])
   @@index([tenantId])
   @@index([tenantId, type])
   @@index([tenantId, status])
   @@index([tenantId, date])
+  @@index([createdByUserId])
+  @@index([confirmedByUserId])
+  @@index([cancelledByUserId])
+  @@index([isAutoGenerated])
   @@map("warehouse_documents")
 }
 
 model WarehouseDocumentItem {
-  id         String   @id @default(cuid())
-  documentId String   @map("document_id")
-  productId  String   @map("product_id")
-  quantity   Decimal  @db.Decimal(10, 3)
-  unitPrice  Decimal? @map("unit_price") @db.Decimal(10, 2)
-  notes      String?
+  id                 String   @id @default(cuid())
+  documentId         String   @map("document_id")
+  productId          String   @map("product_id")
+  barcodeId          String?  @map("barcode_id")
+  quantity           Decimal  @db.Decimal(10, 3)
+  unitPrice          Decimal? @map("unit_price") @db.Decimal(10, 2)
+  scannedEan         String?  @map("scanned_ean")
+  baseQuantity       Decimal? @map("base_quantity") @db.Decimal(10, 3)
+  quantityMultiplier Decimal? @map("quantity_multiplier") @db.Decimal(10, 3)
+  notes              String?
 
-  document WarehouseDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  product  WarehouseProduct  @relation(fields: [productId], references: [id])
+  document WarehouseDocument        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  product  WarehouseProduct         @relation(fields: [productId], references: [id])
+  barcode  WarehouseProductBarcode? @relation(fields: [barcodeId], references: [id], onDelete: SetNull)
 
   @@index([documentId])
   @@index([productId])
+  @@index([barcodeId])
   @@map("warehouse_document_items")
+}
+
+model StockSyncLog {
+  id                 String    @id @default(cuid())
+  tenantId           String    @map("tenant_id")
+  warehouseProductId String    @map("warehouse_product_id")
+  shopId             String    @map("shop_id")
+  triggeredBy        String    @map("triggered_by")
+  documentId         String?   @map("document_id")
+  stockBefore        Decimal?  @map("stock_before") @db.Decimal(10, 3)
+  stockAfter         Decimal   @map("stock_after") @db.Decimal(10, 3)
+  status             String    @default("PENDING")
+  errorMessage       String?   @map("error_message") @db.Text
+  attemptCount       Int       @default(0) @map("attempt_count")
+  syncedAt           DateTime? @map("synced_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseProduct WarehouseProduct   @relation(fields: [warehouseProductId], references: [id], onDelete: Cascade)
+  shop             Shop               @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  document         WarehouseDocument? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([warehouseProductId])
+  @@index([shopId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("stock_sync_logs")
+}
+
+model PriceSyncLog {
+  id                   String    @id @default(cuid())
+  tenantId             String    @map("tenant_id")
+  warehouseProductId   String    @map("warehouse_product_id")
+  shopId               String    @map("shop_id")
+  shopProductMappingId String    @map("shop_product_mapping_id")
+  triggeredBy          String    @map("triggered_by")
+  priceBefore          Decimal?  @map("price_before") @db.Decimal(10, 2)
+  priceAfter           Decimal   @map("price_after") @db.Decimal(10, 2)
+  status               String    @default("PENDING")
+  errorMessage         String?   @map("error_message") @db.Text
+  attemptCount         Int       @default(0) @map("attempt_count")
+  syncedAt             DateTime? @map("synced_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  tenant             Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseProduct   WarehouseProduct   @relation(fields: [warehouseProductId], references: [id], onDelete: Cascade)
+  shop               Shop               @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  shopProductMapping ShopProductMapping @relation(fields: [shopProductMappingId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([warehouseProductId])
+  @@index([shopId])
+  @@index([shopProductMappingId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("price_sync_logs")
+}
+
+model WholesaleProvider {
+  id          String            @id @default(cuid())
+  tenantId    String            @map("tenant_id")
+  name        String
+  platform    WholesalePlatform @default(CSV_FEED)
+  feedUrl     String            @map("feed_url") @db.Text
+  configJson  Json?             @map("config_json")
+  syncEnabled Boolean           @default(true) @map("sync_enabled")
+  syncInterval Int               @default(1440) @map("sync_interval")
+  isActive    Boolean           @default(true) @map("is_active")
+  lastSyncAt  DateTime?         @map("last_sync_at")
+  createdAt   DateTime          @default(now()) @map("created_at")
+  updatedAt   DateTime          @updatedAt @map("updated_at")
+
+  tenant   Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  mappings WholesaleProductMapping[]
+  syncLogs WholesaleSyncLog[]
+
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@index([tenantId, syncEnabled])
+  @@map("wholesale_providers")
+}
+
+model WholesaleProductMapping {
+  id                 String    @id @default(cuid())
+  tenantId           String    @map("tenant_id")
+  providerId         String    @map("provider_id")
+  externalSku        String    @map("external_sku")
+  externalEan        String?   @map("external_ean")
+  externalName       String?   @map("external_name")
+  externalCategory   String?   @map("external_category")
+  warehouseProductId String?   @map("warehouse_product_id")
+  lastKnownStock     Decimal?  @map("last_known_stock") @db.Decimal(10, 3)
+  lastKnownPrice     Decimal?  @map("last_known_price") @db.Decimal(10, 2)
+  payloadJson        Json?     @map("payload_json")
+  isActive           Boolean   @default(true) @map("is_active")
+  lastSyncAt         DateTime? @map("last_sync_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider         WholesaleProvider  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  warehouseProduct WarehouseProduct?  @relation(fields: [warehouseProductId], references: [id], onDelete: SetNull)
+
+  @@unique([providerId, externalSku])
+  @@index([tenantId])
+  @@index([providerId])
+  @@index([warehouseProductId])
+  @@index([tenantId, externalSku])
+  @@index([tenantId, isActive])
+  @@map("wholesale_product_mappings")
+}
+
+model WholesaleSyncLog {
+  id              String    @id @default(cuid())
+  tenantId        String    @map("tenant_id")
+  providerId      String    @map("provider_id")
+  status          String    @default("SUCCESS")
+  totalItems      Int       @default(0) @map("total_items")
+  processedItems  Int       @default(0) @map("processed_items")
+  batchSize       Int       @default(500) @map("batch_size")
+  itemsFetched    Int       @default(0) @map("items_fetched")
+  mappingsCreated Int       @default(0) @map("mappings_created")
+  mappingsUpdated Int       @default(0) @map("mappings_updated")
+  skipped         Int       @default(0)
+  errorMessage    String?   @map("error_message") @db.Text
+  startedAt       DateTime  @default(now()) @map("started_at")
+  finishedAt      DateTime? @map("finished_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider WholesaleProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([providerId])
+  @@index([status])
+  @@index([startedAt])
+  @@map("wholesale_sync_logs")
 }

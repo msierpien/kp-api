@@ -1,8 +1,61 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import * as warehouseService from '../../services/admin/warehouse.service';
-import { getStock, getProductStock } from '../../services/admin/warehouse-stock.service';
+import * as barcodeService from '../../services/admin/warehouse-barcodes.service';
+import * as diagnosticsService from '../../services/admin/warehouse-diagnostics.service';
+import * as priceSyncService from '../../services/price/price-sync.service';
+import * as prestaReconciliationService from '../../services/prestashop/prestashop-reconciliation.service';
+import { getStock, getProductStock, recalculateStockCache } from '../../services/admin/warehouse-stock.service';
 
 export async function warehouseRoutes(fastify: FastifyInstance) {
+  fastify.get('/dashboard', {
+    schema: {
+      tags: ['warehouse-diagnostics'],
+      summary: 'Dashboard problemów i kontroli magazynu',
+      querystring: {
+        type: 'object',
+        properties: {
+          lowStockThreshold: { type: 'number', default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 50, default: 10 },
+          failedSinceDays: { type: 'integer', minimum: 1, maximum: 90, default: 7 },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: diagnosticsService.WarehouseDashboardQuery }>, reply: FastifyReply) => {
+    try {
+      const result = await diagnosticsService.getWarehouseDashboard(request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania dashboardu magazynu';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  // ─── Barcodes / scanner ──────────────────────────────────────────────────
+
+  fastify.get('/barcodes/:ean/lookup', {
+    schema: { tags: ['warehouse'], summary: 'Znajdź produkt magazynowy po kodzie EAN' },
+  }, async (request: FastifyRequest<{ Params: { ean: string } }>, reply: FastifyReply) => {
+    try {
+      const barcode = await barcodeService.lookupBarcode(request.params.ean);
+      if (!barcode) return reply.status(404).send({ error: 'Not Found', message: 'Kod EAN nie znaleziony' });
+      return reply.send({
+        barcode: {
+          id: barcode.id,
+          ean: barcode.ean,
+          label: barcode.label,
+          quantityMultiplier: barcode.quantityMultiplier,
+          isPrimary: barcode.isPrimary,
+        },
+        product: barcode.warehouseProduct,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd wyszukiwania EAN';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   // ─── Products ─────────────────────────────────────────────────────────────
 
   // GET /admin/warehouse/products
@@ -16,7 +69,14 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
           page: { type: 'integer', minimum: 1, default: 1 },
           limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
           search: { type: 'string' },
+          catalogId: { type: 'string' },
           isActive: { type: 'boolean' },
+          stockStatus: { type: 'string', enum: ['available', 'zero', 'negative', 'low'] },
+          missingPrice: { type: 'string', enum: ['purchase', 'retail'] },
+          stockBelow: { type: 'number' },
+          hasBarcode: { type: 'boolean' },
+          hasShopMapping: { type: 'boolean' },
+          hasWholesaleOffer: { type: 'boolean' },
         },
       },
     },
@@ -25,8 +85,10 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
       const result = await warehouseService.getProducts(request.query);
       return reply.send(result);
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się pobrać produktów';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
       fastify.log.error(error);
-      return reply.status(500).send({ error: 'Internal Server Error', message: 'Nie udało się pobrać produktów' });
+      return reply.status(status).send({ error: 'Error', message });
     }
   });
 
@@ -39,10 +101,13 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
         type: 'object',
         required: ['sku', 'name'],
         properties: {
+          catalogId: { type: ['string', 'null'] },
           sku: { type: 'string', minLength: 1 },
           name: { type: 'string', minLength: 1 },
           unit: { type: 'string', default: 'szt' },
           description: { type: 'string' },
+          purchasePrice: { type: 'number', minimum: 0 },
+          retailPrice: { type: 'number', minimum: 0 },
         },
       },
     },
@@ -53,6 +118,64 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd tworzenia produktu';
       return reply.status(400).send({ error: 'Bad Request', message });
+    }
+  });
+
+  fastify.post('/products/bulk/update', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Masowo zaktualizuj produkty magazynowe',
+      body: {
+        type: 'object',
+        required: ['productIds'],
+        properties: {
+          productIds: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 500,
+            items: { type: 'string' },
+          },
+          isActive: { type: 'boolean' },
+          catalogId: { type: ['string', 'null'] },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: warehouseService.BulkUpdateProductsInput }>, reply: FastifyReply) => {
+    try {
+      const result = await warehouseService.bulkUpdateProducts(request.body);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd masowej aktualizacji produktów';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/products/bulk/delete', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Masowo usuń produkty magazynowe',
+      body: {
+        type: 'object',
+        required: ['productIds'],
+        properties: {
+          productIds: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 500,
+            items: { type: 'string' },
+          },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: warehouseService.BulkDeleteProductsInput }>, reply: FastifyReply) => {
+    try {
+      const result = await warehouseService.bulkDeleteProducts(request.body);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd masowego usuwania produktów';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
     }
   });
 
@@ -70,6 +193,47 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.get('/products/:id/barcodes', {
+    schema: { tags: ['warehouse'], summary: 'Lista kodów EAN produktu' },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const product = await warehouseService.getProductById(request.params.id);
+      if (!product) return reply.status(404).send({ error: 'Not Found', message: 'Produkt nie znaleziony' });
+      const barcodes = await barcodeService.getProductBarcodes(request.params.id);
+      return reply.send(barcodes);
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ error: 'Internal Server Error', message: 'Błąd pobierania kodów EAN' });
+    }
+  });
+
+  fastify.post('/products/:id/barcodes', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Dodaj kod EAN do produktu',
+      body: {
+        type: 'object',
+        required: ['ean'],
+        properties: {
+          ean: { type: 'string', minLength: 1 },
+          label: { type: 'string' },
+          quantityMultiplier: { type: 'number', exclusiveMinimum: 0, default: 1 },
+          isPrimary: { type: 'boolean', default: false },
+          isActive: { type: 'boolean', default: true },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: barcodeService.CreateBarcodeInput }>, reply: FastifyReply) => {
+    try {
+      const barcode = await barcodeService.createBarcode(request.params.id, request.body);
+      return reply.status(201).send(barcode);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd dodawania EAN';
+      const status = message.includes('nie znaleziony') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   // PUT /admin/warehouse/products/:id
   fastify.put('/products/:id', {
     schema: {
@@ -78,9 +242,12 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
       body: {
         type: 'object',
         properties: {
+          catalogId: { type: ['string', 'null'] },
           name: { type: 'string', minLength: 1 },
           unit: { type: 'string' },
           description: { type: 'string' },
+          purchasePrice: { type: ['number', 'null'], minimum: 0 },
+          retailPrice: { type: ['number', 'null'], minimum: 0 },
           isActive: { type: 'boolean' },
         },
       },
@@ -92,6 +259,71 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd edycji produktu';
       const status = message.includes('nie znaleziony') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.put('/products/:id/prices', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Zaktualizuj ceny produktu magazynowego',
+      body: {
+        type: 'object',
+        properties: {
+          purchasePrice: { type: ['number', 'null'], minimum: 0 },
+          retailPrice: { type: ['number', 'null'], minimum: 0 },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: Pick<warehouseService.UpdateProductInput, 'purchasePrice' | 'retailPrice'>;
+  }>, reply: FastifyReply) => {
+    try {
+      const product = await warehouseService.updateProduct(request.params.id, request.body);
+      return reply.send(product);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd aktualizacji cen';
+      const status = message.includes('nie znaleziony') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/products/:id/sync-price', {
+    schema: {
+      tags: ['price-sync'],
+      summary: 'Wyślij cenę sprzedaży produktu do aktywnych sklepów',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        properties: {
+          shopId: { type: 'string' },
+        },
+      },
+      response: {
+        202: {
+          type: 'object',
+          properties: {
+            enqueued: { type: 'integer' },
+            logs: { type: 'array', items: { type: 'object' } },
+          },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: Pick<priceSyncService.SyncProductPriceOptions, 'shopId'>;
+  }>, reply: FastifyReply) => {
+    try {
+      const result = await priceSyncService.syncProductPrice(request.params.id, request.body ?? {});
+      return reply.status(202).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd synchronizacji ceny';
+      const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }
   });
@@ -110,6 +342,46 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.put('/barcodes/:id', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Edytuj kod EAN',
+      body: {
+        type: 'object',
+        properties: {
+          ean: { type: 'string', minLength: 1 },
+          label: { type: ['string', 'null'] },
+          quantityMultiplier: { type: 'number', exclusiveMinimum: 0 },
+          isPrimary: { type: 'boolean' },
+          isActive: { type: 'boolean' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: barcodeService.UpdateBarcodeInput }>, reply: FastifyReply) => {
+    try {
+      const barcode = await barcodeService.updateBarcode(request.params.id, request.body);
+      return reply.send(barcode);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd edycji EAN';
+      const status = message.includes('nie znaleziony') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.delete('/barcodes/:id', {
+    schema: { tags: ['warehouse'], summary: 'Usuń lub dezaktywuj kod EAN' },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await barcodeService.deleteBarcode(request.params.id);
+      if (result.action === 'deactivated') return reply.send(result.barcode);
+      return reply.status(204).send();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd usuwania EAN';
+      const status = message.includes('nie znaleziony') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   // GET /admin/warehouse/products/:id/stock
   fastify.get('/products/:id/stock', {
     schema: { tags: ['warehouse'], summary: 'Aktualny stan produktu' },
@@ -121,6 +393,41 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({ error: 'Internal Server Error', message: 'Błąd pobierania stanu' });
+    }
+  });
+
+  fastify.get('/products/:id/movements', {
+    schema: {
+      tags: ['warehouse-diagnostics'],
+      summary: 'Historia ruchów magazynowych produktu',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      querystring: {
+        type: 'object',
+        properties: {
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+          status: { type: 'string', enum: ['DRAFT', 'CONFIRMED', 'CANCELLED'] },
+          type: { type: 'string', enum: ['PZ', 'PW', 'WZ', 'RW'] },
+          dateFrom: { type: 'string' },
+          dateTo: { type: 'string' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Querystring: diagnosticsService.ProductMovementsQuery;
+  }>, reply: FastifyReply) => {
+    try {
+      const result = await diagnosticsService.getProductMovements(request.params.id, request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania ruchów produktu';
+      const status = message.includes('nie znaleziony') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
     }
   });
 
@@ -166,15 +473,21 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
           date: { type: 'string' },
           description: { type: 'string' },
           orderId: { type: 'string' },
+          isAutoGenerated: { type: 'boolean' },
+          metadataJson: { type: 'object', additionalProperties: true },
           items: {
             type: 'array',
             minItems: 1,
             items: {
               type: 'object',
-              required: ['productId', 'quantity'],
+              required: ['productId'],
               properties: {
                 productId: { type: 'string' },
                 quantity: { type: 'number', exclusiveMinimum: 0 },
+                barcodeId: { type: 'string' },
+                scannedEan: { type: 'string' },
+                baseQuantity: { type: 'number', exclusiveMinimum: 0 },
+                quantityMultiplier: { type: 'number', exclusiveMinimum: 0 },
                 unitPrice: { type: 'number', minimum: 0 },
                 notes: { type: 'string' },
               },
@@ -223,10 +536,14 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
             minItems: 1,
             items: {
               type: 'object',
-              required: ['productId', 'quantity'],
+              required: ['productId'],
               properties: {
                 productId: { type: 'string' },
                 quantity: { type: 'number', exclusiveMinimum: 0 },
+                barcodeId: { type: 'string' },
+                scannedEan: { type: 'string' },
+                baseQuantity: { type: 'number', exclusiveMinimum: 0 },
+                quantityMultiplier: { type: 'number', exclusiveMinimum: 0 },
                 unitPrice: { type: 'number', minimum: 0 },
                 notes: { type: 'string' },
               },
@@ -262,10 +579,19 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
 
   // POST /admin/warehouse/documents/:id/cancel
   fastify.post('/documents/:id/cancel', {
-    schema: { tags: ['warehouse'], summary: 'Anuluj dokument' },
-  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Anuluj dokument',
+      body: {
+        type: 'object',
+        properties: {
+          reason: { type: 'string' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: warehouseService.CancelDocumentInput }>, reply: FastifyReply) => {
     try {
-      const doc = await warehouseService.cancelDocument(request.params.id);
+      const doc = await warehouseService.cancelDocument(request.params.id, request.body ?? {});
       return reply.send(doc);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd anulowania dokumentu';
@@ -300,6 +626,171 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({ error: 'Internal Server Error', message: 'Błąd pobierania stanów' });
+    }
+  });
+
+  fastify.get('/stock/discrepancies', {
+    schema: {
+      tags: ['warehouse-diagnostics'],
+      summary: 'Rozbieżności currentStock względem dokumentów CONFIRMED',
+      querystring: {
+        type: 'object',
+        properties: {
+          includeZero: { type: 'boolean', default: false },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: diagnosticsService.StockDiscrepanciesQuery }>, reply: FastifyReply) => {
+    try {
+      const result = await diagnosticsService.getStockDiscrepancies(request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania rozbieżności stanów';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.get('/prestashop-reconciliation', {
+    schema: {
+      tags: ['warehouse-diagnostics'],
+      summary: 'Porównaj ceny i stany magazynu z aktualnymi danymi w PrestaShop',
+      querystring: {
+        type: 'object',
+        properties: {
+          shopId: { type: 'string' },
+          warehouseProductId: { type: 'string' },
+          limit: { type: 'integer', minimum: 1, maximum: 1000, default: 200 },
+          includeInSync: { type: 'boolean', default: false },
+          priceTolerance: { type: 'number', minimum: 0, default: 0.01 },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Querystring: prestaReconciliationService.PrestaShopReconciliationQuery;
+  }>, reply: FastifyReply) => {
+    try {
+      const result = await prestaReconciliationService.getPrestaShopReconciliation(request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd reconciliation PrestaShop';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/recalculate-stock', {
+    schema: { tags: ['warehouse'], summary: 'Przelicz cache currentStock z dokumentów CONFIRMED' },
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const result = await recalculateStockCache();
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd przeliczania stanów';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  // ─── Stock sync diagnostics ───────────────────────────────────────────────
+
+  fastify.get('/stock-sync-logs', {
+    schema: {
+      tags: ['warehouse-diagnostics'],
+      summary: 'Logi synchronizacji stanów magazynowych do sklepów',
+      querystring: {
+        type: 'object',
+        properties: {
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+          shopId: { type: 'string' },
+          warehouseProductId: { type: 'string' },
+          status: { type: 'string', enum: ['PENDING', 'PROCESSING', 'SUCCESS', 'FAILED'] },
+          dateFrom: { type: 'string' },
+          dateTo: { type: 'string' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: diagnosticsService.StockSyncLogsQuery }>, reply: FastifyReply) => {
+    try {
+      const result = await diagnosticsService.getStockSyncLogs(request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania logów synchronizacji stanów';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/stock-sync-logs/:id/retry', {
+    schema: {
+      tags: ['warehouse-diagnostics'],
+      summary: 'Ponów synchronizację stanu na podstawie logu',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await diagnosticsService.retryStockSyncLog(request.params.id);
+      return reply.status(201).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd ponawiania synchronizacji stanu';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  // ─── Price sync diagnostics ───────────────────────────────────────────────
+
+  fastify.get('/price-sync-logs', {
+    schema: {
+      tags: ['price-sync'],
+      summary: 'Logi synchronizacji cen sprzedaży do sklepów',
+      querystring: {
+        type: 'object',
+        properties: {
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+          shopId: { type: 'string' },
+          warehouseProductId: { type: 'string' },
+          status: { type: 'string', enum: ['PENDING', 'PROCESSING', 'SUCCESS', 'FAILED'] },
+          dateFrom: { type: 'string' },
+          dateTo: { type: 'string' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: priceSyncService.PriceSyncLogsQuery }>, reply: FastifyReply) => {
+    try {
+      const result = await priceSyncService.getPriceSyncLogs(request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania logów synchronizacji cen';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/price-sync-logs/:id/retry', {
+    schema: {
+      tags: ['price-sync'],
+      summary: 'Ponów synchronizację ceny na podstawie logu',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await priceSyncService.retryPriceSyncLog(request.params.id);
+      return reply.status(201).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd ponawiania synchronizacji ceny';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
     }
   });
 }

@@ -3,6 +3,29 @@ import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
 
+async function ensureDefaultWarehouseCatalog(tenantId: string) {
+  return prisma.warehouseCatalog.upsert({
+    where: {
+      tenantId_code: {
+        tenantId,
+        code: 'default',
+      },
+    },
+    update: {
+      isDefault: true,
+      isActive: true,
+    },
+    create: {
+      tenantId,
+      code: 'default',
+      name: 'Katalog główny',
+      description: 'Domyślny katalog produktów magazynowych',
+      isDefault: true,
+      isActive: true,
+    },
+  });
+}
+
 export async function seed() {
   console.log('🌱 Seeding database...');
 
@@ -24,6 +47,8 @@ export async function seed() {
     },
   });
   console.log('✅ Tenant created:', tenant.name);
+  await ensureDefaultWarehouseCatalog(tenant.id);
+  console.log('✅ Default warehouse catalog ensured for:', tenant.name);
 
   // 2. Utwórz przykładowy sklep (tenant 1)
   const shop = await prisma.shop.upsert({
@@ -60,6 +85,8 @@ export async function seed() {
     },
   });
   console.log('✅ Tenant2 created:', tenant2.name);
+  await ensureDefaultWarehouseCatalog(tenant2.id);
+  console.log('✅ Default warehouse catalog ensured for:', tenant2.name);
 
   const shop2 = await prisma.shop.upsert({
     where: { id: 'shop_2' },

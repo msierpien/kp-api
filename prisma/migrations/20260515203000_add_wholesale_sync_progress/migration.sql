@@ -1,0 +1,4 @@
+ALTER TABLE "wholesale_sync_logs"
+ADD COLUMN "total_items" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "processed_items" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "batch_size" INTEGER NOT NULL DEFAULT 500;

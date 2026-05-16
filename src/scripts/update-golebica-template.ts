@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client'
+import { Prisma, PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
 
@@ -508,13 +508,13 @@ async function main() {
           sortOrder: field.sortOrder,
           placeholder: field.placeholder ?? null,
           defaultValue: field.defaultValue ?? null,
-          optionsJson: field.optionsJson ?? null,
+          optionsJson: field.optionsJson ?? Prisma.JsonNull,
           helpText: field.helpText ?? null,
           minLength: null,
           maxLength: null,
           pattern: null,
           repeaterGroupKey: null,
-          validationRulesJson: null,
+          validationRulesJson: Prisma.JsonNull,
         },
       })
       continue
@@ -530,7 +530,7 @@ async function main() {
         sortOrder: field.sortOrder,
         placeholder: field.placeholder ?? null,
         defaultValue: field.defaultValue ?? null,
-        optionsJson: field.optionsJson ?? null,
+        optionsJson: field.optionsJson ?? Prisma.JsonNull,
         helpText: field.helpText ?? null,
       },
     })

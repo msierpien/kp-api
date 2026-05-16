@@ -161,7 +161,7 @@ export async function automationsRoutes(fastify: FastifyInstance) {
           error: 'Validation Error',
           message: !paramsParsed.success
             ? paramsParsed.error.errors[0].message
-            : bodyParsed.error.errors[0].message,
+            : (bodyParsed as any).error.errors[0].message,
         });
       }
 
@@ -238,7 +238,7 @@ export async function automationsRoutes(fastify: FastifyInstance) {
           error: 'Validation Error',
           message: !paramsParsed.success
             ? paramsParsed.error.errors[0].message
-            : bodyParsed.error.errors[0].message,
+            : (bodyParsed as any).error.errors[0].message,
         });
       }
 

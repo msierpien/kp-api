@@ -28,6 +28,26 @@ interface PrestaShopCustomer {
   lastname: string;
 }
 
+interface PrestaShopProduct {
+  id: number | string;
+  reference?: string;
+  ean13?: string;
+  name?: unknown;
+  price?: string;
+  active?: string | number | boolean;
+}
+
+const DEBUG_SHOP_SYNC = process.env.DEBUG_SHOP_SYNC === 'true';
+
+export interface PrestaShopProductDetails {
+  id: string;
+  sku: string;
+  ean?: string;
+  name: string;
+  price?: number;
+  active: boolean;
+}
+
 export interface PrestaShopOrderDetails {
   order: PrestaShopOrder;
   customer: PrestaShopCustomer;
@@ -62,7 +82,7 @@ export class PrestaShopClient {
     const url = `${this.baseUrl}/api/${endpoint}${endpoint.includes('?') ? '&' : '?'}output_format=JSON`;
     const authHeader = 'Basic ' + Buffer.from(`${this.apiKey}:`).toString('base64');
 
-    console.log(`[PrestaShop] Requesting: ${endpoint}`);
+    if (DEBUG_SHOP_SYNC) console.log(`[PrestaShop] Requesting: ${endpoint}`);
 
     let response = await fetch(url, {
       headers: {
@@ -73,7 +93,7 @@ export class PrestaShopClient {
 
     // Fallback: some hosts strip Authorization header
     if (!response.ok && response.status === 401) {
-      console.log('[PrestaShop] Auth header failed, trying ws_key parameter');
+      if (DEBUG_SHOP_SYNC) console.log('[PrestaShop] Auth header failed, trying ws_key parameter');
       const urlWithKey = `${url}&ws_key=${encodeURIComponent(this.apiKey)}`;
       response = await fetch(urlWithKey, {
         headers: { Accept: 'application/json' },
@@ -114,19 +134,58 @@ export class PrestaShopClient {
     return orders;
   }
 
+  async fetchProducts(params: { limit?: number; offset?: number; activeOnly?: boolean } = {}): Promise<PrestaShopProductDetails[]> {
+    const limit = params.limit ?? 100;
+    const offset = params.offset ?? 0;
+    const queryParams = [
+      'display=[id,reference,ean13,name,price,active]',
+      `limit=${offset},${limit}`,
+      'sort=[id_ASC]',
+    ];
+
+    if (params.activeOnly ?? true) {
+      queryParams.push('filter[active]=[1]');
+    }
+
+    const data = await this.fetchWebService<any>(`products?${queryParams.join('&')}`);
+    if (!data.products) return [];
+
+    const products = Array.isArray(data.products) ? data.products : [data.products];
+
+    return products.map((product: PrestaShopProduct) => {
+      const sku = String(product.reference ?? '').trim();
+      const ean = String(product.ean13 ?? '').trim() || undefined;
+      const name = normalizePrestaShopLocalizedValue(product.name) || sku || `Produkt ${product.id}`;
+      const price = product.price === undefined || product.price === '' ? undefined : Number(product.price);
+
+      return {
+        id: String(product.id),
+        sku,
+        ean,
+        name,
+        price: Number.isFinite(price) ? price : undefined,
+        active: product.active === undefined ? true : String(product.active) !== '0',
+      };
+    });
+  }
+
   async fetchOrderDetails(orderId: number): Promise<PrestaShopOrderDetails> {
     try {
-      console.log(`[PrestaShop] Fetching order ${orderId} from: orders/${orderId}?display=full`);
+      if (DEBUG_SHOP_SYNC) console.log(`[PrestaShop] Fetching order ${orderId} from: orders/${orderId}?display=full`);
       const orderData = await this.fetchWebService<any>(`orders/${orderId}?display=full`);
       
-      console.log(`[PrestaShop] Raw response for order ${orderId}:`, JSON.stringify(orderData, null, 2));
-      console.log(`[PrestaShop] Response keys:`, Object.keys(orderData));
+      if (DEBUG_SHOP_SYNC) {
+        console.log(`[PrestaShop] Raw response for order ${orderId}:`, JSON.stringify(orderData, null, 2));
+        console.log(`[PrestaShop] Response keys:`, Object.keys(orderData));
+      }
       
       // PrestaShop returns orders as array even for single order request
       const order = orderData.order || (orderData.orders && orderData.orders[0]) || orderData;
-      console.log(`[PrestaShop] Extracted order object:`, JSON.stringify(order, null, 2).substring(0, 500));
-      console.log(`[PrestaShop] Order keys:`, Object.keys(order || {}));
-      console.log(`[PrestaShop] id_customer value:`, order?.id_customer);
+      if (DEBUG_SHOP_SYNC) {
+        console.log(`[PrestaShop] Extracted order object:`, JSON.stringify(order, null, 2).substring(0, 500));
+        console.log(`[PrestaShop] Order keys:`, Object.keys(order || {}));
+        console.log(`[PrestaShop] id_customer value:`, order?.id_customer);
+      }
 
       if (!order || !order.id_customer) {
         console.error(`[PrestaShop] Invalid order data for ID ${orderId}`);
@@ -134,20 +193,24 @@ export class PrestaShopClient {
         throw new Error(`Invalid order data for ID ${orderId}`);
       }
 
-      console.log(`[PrestaShop] Fetching customer ${order.id_customer}`);
+      if (DEBUG_SHOP_SYNC) console.log(`[PrestaShop] Fetching customer ${order.id_customer}`);
       const customerData = await this.fetchWebService<any>(`customers/${order.id_customer}?display=full`);
       
-      console.log(`[PrestaShop] Customer raw response:`, JSON.stringify(customerData, null, 2).substring(0, 1000));
-      console.log(`[PrestaShop] Customer data keys:`, Object.keys(customerData));
+      if (DEBUG_SHOP_SYNC) {
+        console.log(`[PrestaShop] Customer raw response:`, JSON.stringify(customerData, null, 2).substring(0, 1000));
+        console.log(`[PrestaShop] Customer data keys:`, Object.keys(customerData));
+      }
       
       // Handle both single customer and array
       const customer = customerData.customer || 
                       (customerData.customers && customerData.customers[0]) || 
                       customerData;
       
-      console.log(`[PrestaShop] Customer ${order.id_customer} email: "${customer.email}"`);
-      console.log(`[PrestaShop] Customer ${order.id_customer} firstname: "${customer.firstname}"`);
-      console.log(`[PrestaShop] Customer ${order.id_customer} lastname: "${customer.lastname}"`);
+      if (DEBUG_SHOP_SYNC) {
+        console.log(`[PrestaShop] Customer ${order.id_customer} email: "${customer.email}"`);
+        console.log(`[PrestaShop] Customer ${order.id_customer} firstname: "${customer.firstname}"`);
+        console.log(`[PrestaShop] Customer ${order.id_customer} lastname: "${customer.lastname}"`);
+      }
 
       // Fetch order items
       const items: Array<{
@@ -186,4 +249,24 @@ export class PrestaShopClient {
     // Implementation depends on PrestaShop version
     console.log(`Would add note to order ${orderId}: ${message}`);
   }
+}
+
+function normalizePrestaShopLocalizedValue(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (!value || typeof value !== 'object') return '';
+
+  const maybeRecord = value as any;
+
+  if (Array.isArray(maybeRecord)) {
+    const firstValue = maybeRecord
+      .map((item) => normalizePrestaShopLocalizedValue(item))
+      .find(Boolean);
+    return firstValue ?? '';
+  }
+
+  if (typeof maybeRecord.value === 'string') return maybeRecord.value.trim();
+  if (typeof maybeRecord.language === 'string') return maybeRecord.language.trim();
+  if (Array.isArray(maybeRecord.language)) return normalizePrestaShopLocalizedValue(maybeRecord.language);
+
+  return '';
 }

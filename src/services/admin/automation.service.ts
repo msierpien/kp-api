@@ -355,8 +355,8 @@ export async function triggerAutomations(context: AutomationContext): Promise<vo
     // Wykonaj każdą automatyzację
     for (const automation of automations) {
       try {
-        const conditions = automation.conditions as AutomationCondition[];
-        const actions = automation.actions as AutomationAction[];
+        const conditions = automation.conditions as unknown as AutomationCondition[];
+        const actions = automation.actions as unknown as AutomationAction[];
 
         // Sprawdź warunki
         const conditionsMet = evaluateConditions(conditions, context);

@@ -1,4 +1,5 @@
 import prisma from '../../lib/prisma';
+import { Prisma } from '@prisma/client';
 import type { TemplateLayoutInput } from '../../schemas/admin.schema';
 import type { TemplateLayoutJson, TemplateAssetItem } from '../../types/template-layout';
 import fs from 'fs/promises';
@@ -21,7 +22,7 @@ export async function getTemplateLayout(templateId: string): Promise<TemplateLay
     throw new Error('Szablon nie znaleziony');
   }
 
-  return (template.layoutJson as TemplateLayoutJson) ?? null;
+  return (template.layoutJson as unknown as TemplateLayoutJson) ?? null;
 }
 
 export async function updateTemplateLayout(
@@ -56,7 +57,7 @@ export async function updateTemplateLayout(
     select: { layoutJson: true },
   });
 
-  return updated.layoutJson as TemplateLayoutJson;
+  return updated.layoutJson as unknown as TemplateLayoutJson;
 }
 
 // ============================================
@@ -121,7 +122,7 @@ export async function uploadTemplateAsset(
       filePath: relativePath,
       fileSize: fileBuffer.length,
       mimeType,
-      metadata: metadata ?? null,
+      metadata: metadata ?? Prisma.JsonNull,
     },
   });
 

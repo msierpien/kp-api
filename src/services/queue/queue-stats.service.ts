@@ -1,11 +1,17 @@
 import { Queue, Job, type JobType } from 'bullmq';
 import { getRenderQueue } from './render.queue';
 import { getEmailQueue } from './email.queue';
+import { getStockSyncQueue } from './stock-sync.queue';
+import { getPriceSyncQueue } from './price-sync.queue';
+import { getWholesaleSyncQueue } from './wholesale-sync.queue';
 
 // Map queue names to queue instances
 const queues: Record<string, () => Queue> = {
   render: getRenderQueue,
   email: getEmailQueue,
+  stockSync: getStockSyncQueue,
+  priceSync: getPriceSyncQueue,
+  wholesaleSync: getWholesaleSyncQueue,
 };
 
 export interface QueueStats {
@@ -162,7 +168,7 @@ export async function retryJob(
  */
 export async function retryAllFailed(queueName: string): Promise<number> {
   const failedJobs = await getFailedJobs(queueName, 500);
-  
+
   let retriedCount = 0;
   for (const job of failedJobs) {
     try {

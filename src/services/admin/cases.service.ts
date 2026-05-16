@@ -204,7 +204,8 @@ export async function updateCaseAnswers(id: string, answers: any) {
   if (shouldSubmit) {
     await triggerAutomations({
       trigger: AutomationTrigger.CASE_SUBMITTED,
-      caseItem: updated,
+      caseId: updated.id,
+      caseData: updated,
     });
   }
 
@@ -257,8 +258,10 @@ export async function updateCaseStatus(id: string, status: string) {
   // Trigger automation for status change
   await triggerAutomations({
     trigger: AutomationTrigger.CASE_STATUS_CHANGED,
-    caseItem: updated,
-    oldStatus,
+    caseId: updated.id,
+    caseData: updated,
+    previousStatus: oldStatus,
+    newStatus: updated.status,
   });
 
   return updated;

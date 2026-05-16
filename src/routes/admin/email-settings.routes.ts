@@ -1,9 +1,7 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { 
   emailSettingsSchema, 
   emailSettingsIdParamsSchema,
-  type EmailSettingsInput,
-  type EmailSettingsIdParams,
 } from '../../schemas/admin.schema';
 import {
   getAllEmailSettings,
@@ -14,7 +12,7 @@ import {
   testEmailSettings,
 } from '../../services/admin/email-settings.service';
 
-export const emailSettingsRoutes: FastifyPluginAsync = async (server) => {
+export const emailSettingsRoutes: FastifyPluginAsync = async (server: any) => {
   // GET /admin/email-settings - lista wszystkich konfiguracji
   server.get('/', {
     schema: {
@@ -22,7 +20,7 @@ export const emailSettingsRoutes: FastifyPluginAsync = async (server) => {
       summary: 'Lista konfiguracji email SMTP',
       response: { 200: { type: 'array', items: { type: 'object' } } },
     },
-  }, async (request, reply) => {
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
       const settings = await getAllEmailSettings();
       return reply.send(settings);
@@ -54,7 +52,7 @@ export const emailSettingsRoutes: FastifyPluginAsync = async (server) => {
       },
       response: { 200: { type: 'object', properties: { success: { type: 'boolean' }, message: { type: 'string' } } } },
     },
-  }, async (request, reply) => {
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const parsed = emailSettingsSchema.safeParse(request.body);
       
@@ -102,7 +100,7 @@ export const emailSettingsRoutes: FastifyPluginAsync = async (server) => {
       },
       response: { 201: { type: 'object' } },
     },
-  }, async (request, reply) => {
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const parsed = emailSettingsSchema.safeParse(request.body);
       
@@ -135,7 +133,7 @@ export const emailSettingsRoutes: FastifyPluginAsync = async (server) => {
         404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
       },
     },
-  }, async (request, reply) => {
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const params = request.params as { id: string };
       const parsed = emailSettingsIdParamsSchema.safeParse(params);
@@ -175,7 +173,7 @@ export const emailSettingsRoutes: FastifyPluginAsync = async (server) => {
         404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
       },
     },
-  }, async (request, reply) => {
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const params = request.params as { id: string };
       const paramsValidation = emailSettingsIdParamsSchema.safeParse(params);
@@ -214,7 +212,7 @@ export const emailSettingsRoutes: FastifyPluginAsync = async (server) => {
         404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
       },
     },
-  }, async (request, reply) => {
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const params = request.params as { id: string };
       const parsed = emailSettingsIdParamsSchema.safeParse(params);

@@ -1,11 +1,11 @@
 /// <reference lib="dom" />
 import prisma from '../../lib/prisma';
 import { encrypt, decrypt } from '../../lib/encryption';
-import { getTenantContext } from '../../lib/tenant-context';
 import { config as appConfig } from '../../config';
 import type { CreateShopInput, UpdateShopInput } from '../../schemas/admin.schema';
 import type { ShopItem } from '../../types';
 import { removeShopFromScheduler } from '../scheduler/scheduler.service';
+import { getTenantContext, getTenantId } from '../../lib/tenant-context';
 
 const mapShop = (shop: any): ShopItem => ({
   id: shop.id,
@@ -232,4 +232,74 @@ export async function testShopConnection(id: string) {
       process.env.NODE_TLS_REJECT_UNAUTHORIZED = prevTls;
     }
   }
+}
+
+export async function getShopImportReadiness(id: string) {
+  const tenantId = getTenantId();
+  const context = getTenantContext();
+  if (!tenantId && context?.role !== 'SUPER_ADMIN') throw new Error('Brak kontekstu tenanta');
+
+  const shop = await prisma.shop.findFirst({
+    where: {
+      id,
+      ...(tenantId ? { tenantId } : {}),
+    },
+  });
+  if (!shop) throw new Error('Sklep nie znaleziony');
+
+  const mappingWhere = {
+    shopId: shop.id,
+    ...(tenantId ? { tenantId } : {}),
+  };
+
+  const [
+    totalMappings,
+    mappedMappings,
+    activeMappings,
+    lastImportLog,
+    defaultCatalog,
+  ] = await Promise.all([
+    prisma.shopProductMapping.count({ where: mappingWhere }),
+    prisma.shopProductMapping.count({ where: { ...mappingWhere, warehouseProductId: { not: null } } }),
+    prisma.shopProductMapping.count({ where: { ...mappingWhere, isActive: true } }),
+    prisma.shopProductImportLog.findFirst({
+      where: mappingWhere,
+      orderBy: { startedAt: 'desc' },
+    }),
+    prisma.warehouseCatalog.findFirst({
+      where: {
+        tenantId: shop.tenantId,
+        isDefault: true,
+      },
+    }),
+  ]);
+
+  const hasApiKey = Boolean(decrypt(shop.apiKey || '').trim());
+  const isSupportedPlatform = shop.platform === 'PRESTASHOP';
+  const isActive = shop.status === 'ACTIVE';
+  const hasDefaultCatalog = Boolean(defaultCatalog);
+
+  return {
+    shop: {
+      id: shop.id,
+      name: shop.name,
+      platform: shop.platform,
+      status: shop.status,
+      lastSyncAt: shop.lastSyncAt,
+    },
+    ready: isSupportedPlatform && isActive && hasApiKey && hasDefaultCatalog,
+    checks: {
+      isSupportedPlatform,
+      isActive,
+      hasApiKey,
+      hasDefaultCatalog,
+    },
+    mappings: {
+      total: totalMappings,
+      mapped: mappedMappings,
+      unmapped: totalMappings - mappedMappings,
+      active: activeMappings,
+    },
+    lastImportLog,
+  };
 }

@@ -7,7 +7,14 @@ import {
   type UpdateShopInput,
   type ShopIdParamsInput,
 } from '../../schemas/admin.schema';
-import { createShop, deleteShop, listShops, testShopConnection, updateShop } from '../../services/admin/shops.service';
+import {
+  createShop,
+  deleteShop,
+  getShopImportReadiness,
+  listShops,
+  testShopConnection,
+  updateShop,
+} from '../../services/admin/shops.service';
 import {
   triggerManualSync,
   enableShopSync,
@@ -30,6 +37,7 @@ const shopResponseSchema = {
     authType: { type: 'string' },
     config: { type: 'object', additionalProperties: true },
   },
+  additionalProperties: true,
 };
 
 const shopBodyProperties = {
@@ -216,6 +224,36 @@ export async function shopsRoutes(fastify: FastifyInstance) {
     }
   );
 
+  fastify.get<{ Params: ShopIdParamsInput }>(
+    '/:id/import-readiness',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Sprawdź gotowość integracji sklepu do importu produktów',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: { 200: { type: 'object', additionalProperties: true } },
+      },
+    },
+    async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
+      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: paramsParsed.error.errors[0].message,
+        });
+      }
+
+      try {
+        const result = await getShopImportReadiness(paramsParsed.data.id);
+        return reply.send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Nie udało się sprawdzić gotowości importu';
+        const status = message.includes('nie znalezion') ? 404 : 400;
+        return reply.status(status).send({ error: 'Error', message });
+      }
+    }
+  );
+
   // POST /admin/shops/:id/test
   fastify.post<{ Params: ShopIdParamsInput }>(
     '/:id/test',
@@ -252,17 +290,26 @@ export async function shopsRoutes(fastify: FastifyInstance) {
   );
 
   // POST /admin/shops/:id/sync - Manual sync trigger
-  fastify.post<{ Params: ShopIdParamsInput }>(
+  fastify.post<{ Params: ShopIdParamsInput; Querystring: { wait?: string | boolean } }>(
     '/:id/sync',
     {
       schema: {
         tags: ['shops'],
         summary: 'Ręcznie uruchom synchronizację zamówień',
         params: { type: 'object', properties: { id: { type: 'string' } } },
-        response: { 200: { type: 'object' } },
+        querystring: {
+          type: 'object',
+          properties: {
+            wait: { anyOf: [{ type: 'boolean' }, { type: 'string', enum: ['true', 'false'] }] },
+          },
+        },
+        response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
-    async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
+    async (
+      request: FastifyRequest<{ Params: ShopIdParamsInput; Querystring: { wait?: string | boolean } }>,
+      reply: FastifyReply
+    ) => {
       const paramsParsed = shopIdParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
         return reply.status(400).send({
@@ -272,8 +319,9 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       }
 
       try {
-        fastify.log.info({ shopId: paramsParsed.data.id }, 'Manual sync triggered');
-        const result = await triggerManualSync(paramsParsed.data.id);
+        const wait = request.query.wait === true || request.query.wait === 'true';
+        fastify.log.info({ shopId: paramsParsed.data.id, wait }, 'Manual sync triggered');
+        const result = await triggerManualSync(paramsParsed.data.id, { wait });
         return reply.send(result);
       } catch (error) {
         fastify.log.error(error);

@@ -27,6 +27,33 @@ export interface UpdateProductInput {
   isActive?: boolean;
 }
 
+export interface BulkUpdateProductsInput {
+  productIds: string[];
+  isActive?: boolean;
+  catalogId?: string | null;
+}
+
+export interface BulkUpdateProductsResult {
+  requested: number;
+  updated: number;
+  notFound: number;
+  failed: number;
+  errors: Array<{ productId: string; message: string }>;
+}
+
+export interface BulkDeleteProductsInput {
+  productIds: string[];
+}
+
+export interface BulkDeleteProductsResult {
+  requested: number;
+  deleted: number;
+  notFound: number;
+  blockedByDocuments: number;
+  failed: number;
+  errors: Array<{ productId: string; message: string }>;
+}
+
 export interface ProductsQuery {
   page?: number;
   limit?: number;
@@ -40,6 +67,8 @@ export interface ProductsQuery {
   hasShopMapping?: boolean;
   hasWholesaleOffer?: boolean;
 }
+
+const MAX_BULK_PRODUCT_IDS = 500;
 
 function requireTenantId() {
   const tenantId = getTenantId();
@@ -212,6 +241,167 @@ export async function deleteProduct(id: string) {
   if (itemCount > 0) throw new Error('Nie można usunąć produktu — posiada powiązane pozycje dokumentów');
 
   return prisma.warehouseProduct.delete({ where: { id } });
+}
+
+export async function bulkUpdateProducts(input: BulkUpdateProductsInput): Promise<BulkUpdateProductsResult> {
+  const tenantId = requireTenantId();
+  const productIds = normalizeBulkProductIds(input.productIds);
+
+  if (input.isActive === undefined && input.catalogId === undefined) {
+    throw new Error('Podaj przynajmniej jedną zmianę masową');
+  }
+
+  const where: Prisma.WarehouseProductWhereInput = { id: { in: productIds } };
+  if (tenantId) where.tenantId = tenantId;
+
+  const products = await prisma.warehouseProduct.findMany({
+    where,
+    select: { id: true, tenantId: true },
+  });
+  const foundIds = products.map((product) => product.id);
+  const foundIdSet = new Set(foundIds);
+  const errors = productIds
+    .filter((productId) => !foundIdSet.has(productId))
+    .map((productId) => ({ productId, message: 'Produkt nie znaleziony' }));
+
+  if (foundIds.length === 0) {
+    return {
+      requested: productIds.length,
+      updated: 0,
+      notFound: errors.length,
+      failed: 0,
+      errors,
+    };
+  }
+
+  const data: Prisma.WarehouseProductUncheckedUpdateManyInput = {};
+  if (input.isActive !== undefined) data.isActive = input.isActive;
+  if (input.catalogId !== undefined) {
+    const productTenantIds = Array.from(new Set(products.map((product) => product.tenantId)));
+    if (!tenantId && productTenantIds.length !== 1) {
+      throw new Error('Masowa zmiana katalogu wymaga produktów z jednego tenanta');
+    }
+
+    const catalog = await resolveCatalogForProduct(tenantId ?? productTenantIds[0], input.catalogId);
+    data.catalogId = catalog.id;
+  }
+
+  const result = await prisma.warehouseProduct.updateMany({
+    where: {
+      id: { in: foundIds },
+      ...(tenantId ? { tenantId } : {}),
+    },
+    data,
+  });
+
+  const failed = Math.max(0, foundIds.length - result.count);
+  if (failed > 0) {
+    errors.push({
+      productId: '*',
+      message: `Nie udało się zaktualizować ${failed} produktów`,
+    });
+  }
+
+  return {
+    requested: productIds.length,
+    updated: result.count,
+    notFound: productIds.length - products.length,
+    failed,
+    errors,
+  };
+}
+
+export async function bulkDeleteProducts(input: BulkDeleteProductsInput): Promise<BulkDeleteProductsResult> {
+  const tenantId = requireTenantId();
+  const productIds = normalizeBulkProductIds(input.productIds);
+
+  const where: Prisma.WarehouseProductWhereInput = { id: { in: productIds } };
+  if (tenantId) where.tenantId = tenantId;
+
+  const products = await prisma.warehouseProduct.findMany({
+    where,
+    select: { id: true },
+  });
+  const foundIds = products.map((product) => product.id);
+  const foundIdSet = new Set(foundIds);
+  const errors = productIds
+    .filter((productId) => !foundIdSet.has(productId))
+    .map((productId) => ({ productId, message: 'Produkt nie znaleziony' }));
+
+  if (foundIds.length === 0) {
+    return {
+      requested: productIds.length,
+      deleted: 0,
+      notFound: errors.length,
+      blockedByDocuments: 0,
+      failed: 0,
+      errors,
+    };
+  }
+
+  const blockedItems = await prisma.warehouseDocumentItem.findMany({
+    where: { productId: { in: foundIds } },
+    distinct: ['productId'],
+    select: { productId: true },
+  });
+  const blockedIds = new Set(blockedItems.map((item) => item.productId));
+  for (const productId of blockedIds) {
+    errors.push({
+      productId,
+      message: 'Nie można usunąć produktu — posiada powiązane pozycje dokumentów',
+    });
+  }
+
+  const deletableIds = foundIds.filter((productId) => !blockedIds.has(productId));
+  let deleted = 0;
+  let failed = 0;
+
+  if (deletableIds.length > 0) {
+    try {
+      const result = await prisma.warehouseProduct.deleteMany({
+        where: {
+          id: { in: deletableIds },
+          ...(tenantId ? { tenantId } : {}),
+        },
+      });
+      deleted = result.count;
+
+      if (deleted !== deletableIds.length) {
+        const remainingProducts = await prisma.warehouseProduct.findMany({
+          where: { id: { in: deletableIds }, ...(tenantId ? { tenantId } : {}) },
+          select: { id: true },
+        });
+        failed = remainingProducts.length;
+        for (const product of remainingProducts) {
+          errors.push({ productId: product.id, message: 'Nie udało się usunąć produktu' });
+        }
+      }
+    } catch (error) {
+      failed = deletableIds.length;
+      const message = error instanceof Error ? error.message : 'Nie udało się usunąć produktu';
+      for (const productId of deletableIds) {
+        errors.push({ productId, message });
+      }
+    }
+  }
+
+  return {
+    requested: productIds.length,
+    deleted,
+    notFound: productIds.length - products.length,
+    blockedByDocuments: blockedIds.size,
+    failed,
+    errors,
+  };
+}
+
+function normalizeBulkProductIds(productIds: string[]) {
+  const ids = Array.from(new Set((productIds ?? []).map((id) => id.trim()).filter(Boolean)));
+  if (ids.length === 0) throw new Error('Lista produktów jest wymagana');
+  if (ids.length > MAX_BULK_PRODUCT_IDS) {
+    throw new Error(`Operacja masowa może obejmować maksymalnie ${MAX_BULK_PRODUCT_IDS} produktów`);
+  }
+  return ids;
 }
 
 // ─── Documents ───────────────────────────────────────────────────────────────
@@ -719,11 +909,33 @@ async function prepareDocumentItems(
   requireActiveProduct: boolean,
 ): Promise<PreparedDocumentItem[]> {
   const preparedItems: PreparedDocumentItem[] = [];
+  const productIds = Array.from(new Set(items.map((item) => item.productId).filter(Boolean)));
+  const barcodeIds = Array.from(new Set(items.map((item) => item.barcodeId).filter(Boolean) as string[]));
+
+  const [products, barcodes] = await Promise.all([
+    prisma.warehouseProduct.findMany({
+      where: { id: { in: productIds }, tenantId },
+      select: { id: true, name: true, isActive: true },
+    }),
+    barcodeIds.length > 0
+      ? prisma.warehouseProductBarcode.findMany({
+          where: { id: { in: barcodeIds }, tenantId },
+          select: {
+            id: true,
+            warehouseProductId: true,
+            ean: true,
+            quantityMultiplier: true,
+            isActive: true,
+          },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const productById = new Map(products.map((product) => [product.id, product]));
+  const barcodeById = new Map(barcodes.map((barcode) => [barcode.id, barcode]));
 
   for (const item of items) {
-    const product = await prisma.warehouseProduct.findFirst({
-      where: { id: item.productId, tenantId },
-    });
+    const product = productById.get(item.productId);
     if (!product) throw new Error(`Produkt ${item.productId} nie znaleziony`);
     if (requireActiveProduct && !product.isActive) throw new Error(`Produkt "${product.name}" jest nieaktywny`);
 
@@ -732,10 +944,11 @@ async function prepareDocumentItems(
     const barcodeId = item.barcodeId;
 
     if (barcodeId) {
-      const barcode = await prisma.warehouseProductBarcode.findFirst({
-        where: { id: barcodeId, tenantId, warehouseProductId: item.productId },
-      });
+      const barcode = barcodeById.get(barcodeId);
       if (!barcode) throw new Error(`Kod EAN ${barcodeId} nie znaleziony dla produktu "${product.name}"`);
+      if (barcode.warehouseProductId !== item.productId) {
+        throw new Error(`Kod EAN ${barcodeId} nie znaleziony dla produktu "${product.name}"`);
+      }
       if (!barcode.isActive) throw new Error(`Kod EAN "${barcode.ean}" jest nieaktywny`);
       scannedEan = scannedEan ?? barcode.ean;
       quantityMultiplier = quantityMultiplier ?? Number(barcode.quantityMultiplier);

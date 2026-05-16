@@ -5,6 +5,7 @@ import { getRedisConnection } from './render.queue';
 import { STOCK_SYNC_QUEUE_NAME, type StockSyncJobData } from './stock-sync.queue';
 
 let stockSyncWorker: Worker<StockSyncJobData> | null = null;
+const PRESTASHOP_SYNC_RATE_LIMIT = { max: 30, duration: 60_000 };
 
 async function processStockSyncJob(job: Job<StockSyncJobData>) {
   const { logId, warehouseProductId, shopId, externalProductId } = job.data;
@@ -57,7 +58,8 @@ export function startStockSyncWorker() {
     async (job) => processStockSyncJob(job),
     {
       connection: getRedisConnection(),
-      concurrency: 3,
+      concurrency: 1,
+      limiter: PRESTASHOP_SYNC_RATE_LIMIT,
     },
   );
 

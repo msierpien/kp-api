@@ -121,6 +121,64 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.post('/products/bulk/update', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Masowo zaktualizuj produkty magazynowe',
+      body: {
+        type: 'object',
+        required: ['productIds'],
+        properties: {
+          productIds: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 500,
+            items: { type: 'string' },
+          },
+          isActive: { type: 'boolean' },
+          catalogId: { type: ['string', 'null'] },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: warehouseService.BulkUpdateProductsInput }>, reply: FastifyReply) => {
+    try {
+      const result = await warehouseService.bulkUpdateProducts(request.body);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd masowej aktualizacji produktów';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/products/bulk/delete', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Masowo usuń produkty magazynowe',
+      body: {
+        type: 'object',
+        required: ['productIds'],
+        properties: {
+          productIds: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 500,
+            items: { type: 'string' },
+          },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: warehouseService.BulkDeleteProductsInput }>, reply: FastifyReply) => {
+    try {
+      const result = await warehouseService.bulkDeleteProducts(request.body);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd masowego usuwania produktów';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   // GET /admin/warehouse/products/:id
   fastify.get('/products/:id', {
     schema: { tags: ['warehouse'], summary: 'Szczegóły produktu' },

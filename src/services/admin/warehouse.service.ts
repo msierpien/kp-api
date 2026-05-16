@@ -33,6 +33,8 @@ export interface ProductsQuery {
   search?: string;
   catalogId?: string;
   isActive?: boolean;
+  stockStatus?: 'available' | 'zero' | 'negative' | 'low';
+  missingPrice?: 'purchase' | 'retail';
   stockBelow?: number;
   hasBarcode?: boolean;
   hasShopMapping?: boolean;
@@ -54,6 +56,8 @@ export async function getProducts(query: ProductsQuery = {}) {
     search,
     catalogId,
     isActive,
+    stockStatus,
+    missingPrice,
     stockBelow,
     hasBarcode,
     hasShopMapping,
@@ -65,7 +69,13 @@ export async function getProducts(query: ProductsQuery = {}) {
   if (tenantId) where.tenantId = tenantId;
   if (catalogId) where.catalogId = catalogId;
   if (isActive !== undefined) where.isActive = isActive;
-  if (stockBelow !== undefined) where.currentStock = { lt: stockBelow };
+  if (stockStatus === 'available') where.currentStock = { gt: 0 };
+  else if (stockStatus === 'zero') where.currentStock = { equals: 0 };
+  else if (stockStatus === 'negative') where.currentStock = { lt: 0 };
+  else if (stockStatus === 'low') where.currentStock = { lt: stockBelow ?? 1 };
+  else if (stockBelow !== undefined) where.currentStock = { lt: stockBelow };
+  if (missingPrice === 'purchase') where.purchasePrice = null;
+  if (missingPrice === 'retail') where.retailPrice = null;
   if (hasBarcode !== undefined) {
     where.barcodes = hasBarcode
       ? { some: { isActive: true } }

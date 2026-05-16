@@ -61,6 +61,7 @@ export interface BulkCreateWarehouseProductsFromFiltersInput extends CreateWareh
   search?: string;
   isMapped?: boolean;
   isActive?: boolean;
+  diagnosis?: 'mapped' | 'ready' | 'missingSku' | 'missingEan' | 'nameOnly' | 'missingData';
 }
 
 export interface BulkCreateWarehouseProductsResult {
@@ -349,6 +350,7 @@ export async function bulkCreateWarehouseProductsFromFilters(
   };
   if (input.shopId) where.shopId = input.shopId;
   if (input.isActive !== undefined) where.isActive = input.isActive;
+  applyShopMappingDiagnosis(where, input.diagnosis);
   if (input.search) {
     where.OR = [
       { externalSku: { contains: input.search, mode: 'insensitive' } },
@@ -367,6 +369,51 @@ export async function bulkCreateWarehouseProductsFromFilters(
     mappingIds: mappings.map((mapping) => mapping.id),
     catalogId: input.catalogId,
   });
+}
+
+function applyShopMappingDiagnosis(
+  where: Prisma.ShopProductMappingWhereInput,
+  diagnosis?: BulkCreateWarehouseProductsFromFiltersInput['diagnosis'],
+) {
+  if (!diagnosis) return;
+
+  if (diagnosis === 'mapped') {
+    where.warehouseProductId = { not: null };
+    return;
+  }
+
+  where.warehouseProductId = null;
+
+  if (diagnosis === 'ready') {
+    where.externalSku = { not: '' };
+    where.externalEan = { not: null };
+    where.externalName = { not: null };
+    return;
+  }
+
+  if (diagnosis === 'missingSku') {
+    where.externalSku = '';
+    return;
+  }
+
+  if (diagnosis === 'missingEan') {
+    where.externalSku = { not: '' };
+    where.externalEan = null;
+    return;
+  }
+
+  if (diagnosis === 'nameOnly') {
+    where.externalSku = '';
+    where.externalEan = null;
+    where.externalName = { not: null };
+    return;
+  }
+
+  if (diagnosis === 'missingData') {
+    where.externalSku = '';
+    where.externalEan = null;
+    where.externalName = null;
+  }
 }
 
 export async function autoMapShopProducts(input: AutoMapShopProductsInput = {}): Promise<AutoMapShopProductsResult> {

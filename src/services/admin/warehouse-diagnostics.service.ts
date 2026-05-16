@@ -235,6 +235,11 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
     status: 'FAILED',
     createdAt: { gte: failedSince },
   };
+  const failedPriceSyncWhere: Prisma.PriceSyncLogWhereInput = {
+    tenantId,
+    status: 'FAILED',
+    createdAt: { gte: failedSince },
+  };
   const failedWholesaleSyncWhere: Prisma.WholesaleSyncLogWhereInput = {
     tenantId,
     status: 'FAILED',
@@ -251,6 +256,7 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
     productsWithoutShopMappingCount,
     productsWithoutWholesaleOfferCount,
     failedStockSyncLogsCount,
+    failedPriceSyncLogsCount,
     failedWholesaleSyncLogsCount,
     draftDocumentsCount,
     lowStockProducts,
@@ -259,6 +265,7 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
     productsWithoutShopMapping,
     productsWithoutWholesaleOffer,
     failedStockSyncLogs,
+    failedPriceSyncLogs,
     failedWholesaleSyncLogs,
   ] = await Promise.all([
     prisma.warehouseProduct.count({ where: { tenantId } }),
@@ -270,6 +277,7 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
     prisma.warehouseProduct.count({ where: withoutShopMappingWhere }),
     prisma.warehouseProduct.count({ where: withoutWholesaleOfferWhere }),
     prisma.stockSyncLog.count({ where: failedStockSyncWhere }),
+    prisma.priceSyncLog.count({ where: failedPriceSyncWhere }),
     prisma.wholesaleSyncLog.count({ where: failedWholesaleSyncWhere }),
     prisma.warehouseDocument.count({ where: { tenantId, status: 'DRAFT' } }),
     prisma.warehouseProduct.findMany({
@@ -311,6 +319,15 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
         shop: { select: { id: true, name: true, platform: true } },
       },
     }),
+    prisma.priceSyncLog.findMany({
+      where: failedPriceSyncWhere,
+      take: limit,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        warehouseProduct: { select: { id: true, sku: true, name: true, retailPrice: true } },
+        shop: { select: { id: true, name: true, platform: true } },
+      },
+    }),
     prisma.wholesaleSyncLog.findMany({
       where: failedWholesaleSyncWhere,
       take: limit,
@@ -332,6 +349,7 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
       productsWithoutShopMapping: productsWithoutShopMappingCount,
       productsWithoutWholesaleOffer: productsWithoutWholesaleOfferCount,
       failedStockSyncLogs: failedStockSyncLogsCount,
+      failedPriceSyncLogs: failedPriceSyncLogsCount,
       failedWholesaleSyncLogs: failedWholesaleSyncLogsCount,
       draftDocuments: draftDocumentsCount,
     },
@@ -347,6 +365,7 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
       productsWithoutShopMapping,
       productsWithoutWholesaleOffer,
       failedStockSyncLogs,
+      failedPriceSyncLogs,
       failedWholesaleSyncLogs,
     },
   };

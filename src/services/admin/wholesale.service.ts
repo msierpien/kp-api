@@ -41,6 +41,7 @@ export interface WholesaleMappingsQuery {
   search?: string;
   isMapped?: boolean;
   isActive?: boolean;
+  diagnosis?: 'mapped' | 'ready' | 'missingSku' | 'missingEan' | 'nameOnly' | 'missingData';
 }
 
 export interface WholesaleSyncLogsQuery {
@@ -324,12 +325,13 @@ export async function getWholesaleMappings(providerId: string, query: WholesaleM
   const tenantId = requireTenantId();
   await assertProviderBelongsToTenant(providerId, tenantId);
 
-  const { page = 1, limit = 50, search, isMapped, isActive } = query;
+  const { page = 1, limit = 50, search, isMapped, isActive, diagnosis } = query;
   const skip = (page - 1) * limit;
 
   const where: Prisma.WholesaleProductMappingWhereInput = { tenantId, providerId };
   if (isActive !== undefined) where.isActive = isActive;
   if (isMapped !== undefined) where.warehouseProductId = isMapped ? { not: null } : null;
+  applyWholesaleMappingDiagnosis(where, diagnosis);
   if (search) {
     where.OR = [
       { externalSku: { contains: search, mode: 'insensitive' } },
@@ -350,6 +352,51 @@ export async function getWholesaleMappings(providerId: string, query: WholesaleM
   ]);
 
   return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+}
+
+function applyWholesaleMappingDiagnosis(
+  where: Prisma.WholesaleProductMappingWhereInput,
+  diagnosis?: WholesaleMappingsQuery['diagnosis'],
+) {
+  if (!diagnosis) return;
+
+  if (diagnosis === 'mapped') {
+    where.warehouseProductId = { not: null };
+    return;
+  }
+
+  where.warehouseProductId = null;
+
+  if (diagnosis === 'ready') {
+    where.externalSku = { not: '' };
+    where.externalEan = { not: null };
+    where.externalName = { not: null };
+    return;
+  }
+
+  if (diagnosis === 'missingSku') {
+    where.externalSku = '';
+    return;
+  }
+
+  if (diagnosis === 'missingEan') {
+    where.externalSku = { not: '' };
+    where.externalEan = null;
+    return;
+  }
+
+  if (diagnosis === 'nameOnly') {
+    where.externalSku = '';
+    where.externalEan = null;
+    where.externalName = { not: null };
+    return;
+  }
+
+  if (diagnosis === 'missingData') {
+    where.externalSku = '';
+    where.externalEan = null;
+    where.externalName = null;
+  }
 }
 
 export async function mapWholesaleProduct(mappingId: string, input: MapWholesaleProductInput) {
@@ -687,32 +734,13 @@ export async function runWholesaleSyncJob(data: WholesaleSyncJobData) {
     },
   });
 
-  if (activeLog) return activeLog;
-
-  const batchSize = normalizeSyncBatchSize(options.batchSize);
-  const log = await prisma.wholesaleSyncLog.create({
-    data: {
-      tenantId,
-      providerId,
-      status: 'PENDING',
-      startedAt: new Date(),
-      batchSize,
-    },
-  });
-
-  await addWholesaleSyncJob({
-    logId: log.id,
-    providerId,
-    tenantId,
-    limit: normalizeSyncLimit(options.limit),
-    batchSize,
-  });
-
-  return log;
+  return processWholesaleSyncJob({ ...data, limit, batchSize });
 }
 
 export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
-  const { logId, providerId, tenantId, limit, batchSize } = data;
+  const { logId, providerId, tenantId } = data;
+  const limit = normalizeSyncLimit(data.limit);
+  const batchSize = normalizeSyncBatchSize(data.batchSize);
   const provider = await prisma.wholesaleProvider.findFirst({ where: { id: providerId, tenantId } });
   if (!provider) throw new Error('Provider hurtowni nie znaleziony');
   if (!provider.isActive) throw new Error('Provider hurtowni jest nieaktywny');
@@ -777,8 +805,6 @@ export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
       where: { id: logId },
       data: {
         status: 'SUCCESS',
-        totalItems: limitedRecords.length,
-        processedItems: limitedRecords.length,
         itemsFetched: limitedRecords.length,
         totalItems: limitedRecords.length,
         processedItems: processed,
@@ -1010,22 +1036,6 @@ function clampPreviewLimit(limit?: number) {
     throw new Error('Limit preview musi być liczbą całkowitą od 1 do 50');
   }
   return limit;
-}
-
-function normalizeSyncLimit(limit?: number) {
-  if (limit === undefined) return undefined;
-  if (!Number.isInteger(limit) || limit < 1) {
-    throw new Error('Limit synchronizacji musi być liczbą całkowitą większą od 0');
-  }
-  return limit;
-}
-
-function normalizeSyncBatchSize(batchSize?: number) {
-  if (batchSize === undefined) return 500;
-  if (!Number.isInteger(batchSize) || batchSize < 50 || batchSize > 2000) {
-    throw new Error('Rozmiar paczki synchronizacji musi być liczbą całkowitą od 50 do 2000');
-  }
-  return batchSize;
 }
 
 function validateWholesaleSyncInterval(intervalMinutes: number) {

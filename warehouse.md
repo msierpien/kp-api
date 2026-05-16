@@ -1,7 +1,7 @@
 # Plan rozbudowy modułu magazynowego: katalogi produktów i kontrola stanów
 
-> Data aktualizacji: 2026-05-15
-> Status: dokument architektoniczny po implementacji backendu Etapów 1-8 i sprintu operacyjnego dashboardu
+> Data aktualizacji: 2026-05-16
+> Status: źródło prawdy po implementacji backendu Etapów 1-8, panelu admina P0/P1 i QA P2
 > Zakres: magazyn, katalogi, dokumenty, stany, EAN/skaner, mapowania sklepów, stock sync, hurtownie CSV, diagnostyka, Swagger i proces Git
 
 ---
@@ -27,14 +27,15 @@ Taki podział daje porządek teraz i zostawia miejsce na przyszły moduł produk
 
 ## 2. Zakres
 
-### Robimy teraz
+### Wdrożone teraz
 
-- Domknięcie panelu admina dla wdrożonych endpointów magazynu.
+- Panel admina dla wdrożonych endpointów magazynu.
 - Widok katalogów magazynowych i wybór katalogu w formularzach produktów.
 - Dashboard operacyjny magazynu oparty o `GET /admin/warehouse/dashboard`.
-- Widoki diagnostyczne: logi stock sync, ruchy produktu i rozbieżności stanów.
+- Widoki diagnostyczne: logi stock sync, price sync, ruchy produktu, rozbieżności i PrestaShop reconciliation.
 - Panel integracji hurtowni: providery CSV, preview, synchronizacja, logi i mapowania.
-- Aktualizację `warehouse.md` jako źródła prawdy dla dalszych sprintów.
+- Subnawigacja modułu magazynu wewnątrz `/warehouse/*`.
+- `warehouse.md` jako jedyny dokument źródłowy dla modułu magazynowego.
 
 ### Zostaje w magazynie, bez przebudowy
 
@@ -100,16 +101,26 @@ Kolejne etapy backend/API wdrożone po Etapie 1:
 - Etap 8: `PriceSyncLog`, kolejka `price-sync`, worker, ręczna i automatyczna synchronizacja `retailPrice` do PrestaShop.
 - Etap 8a: reconciliation PrestaShop, czyli wykrywanie rozbieżności ceny/stanu bez uznawania Presty za źródło prawdy.
 
-Do domknięcia poza backendiem `kp-api`, w panelu admina:
+Panel admina domknięty 2026-05-16:
 
-- widok katalogów w panelu admina;
-- filtr katalogu na liście produktów w panelu;
-- wybór katalogu przy tworzeniu produktu z panelu i z mapowania sklepu;
-- dashboard magazynu z kaflami problemów;
-- logi stock sync z retry;
-- historia ruchów produktu i widok rozbieżności stanów;
-- `Integracje -> Hurtownie`: providery, preview CSV, sync, harmonogram, logi, mapowania i auto-mapowanie;
-- oferty hurtowni widoczne przy produktach magazynowych.
+- sidebar główny uproszczony do wejść wysokopoziomowych;
+- magazyn ma własny shell i subnawigację: start, produkty, dokumenty, katalogi, mapowania, kontrola, synchronizacje;
+- produkty używają globalnych filtrów API `stockStatus` i `missingPrice`;
+- dokumenty obsługują filtry z URL, `status=DRAFT`, paginację i osobny detal `/warehouse/documents/:id`;
+- historia ruchów produktu czyta `movement.document.*` i `stockDelta`;
+- dashboard pokazuje stock-sync i price-sync z tego samego okna `failedSinceDays`;
+- `/warehouse/control` pokazuje PrestaShop reconciliation;
+- `/warehouse/sync` scala stany, ceny i hurtownie w jednym widoku z tabami;
+- mapowania sklepu i hurtowni mają server-side filtr `diagnosis`;
+- tworzenie produktów z hurtowni i mapowań pozwala wskazać katalog;
+- formularz dokumentu ma tryb skanera EAN i tryb ręcznego dodawania pozycji.
+
+Otwarte po QA:
+
+- zrestartować docelowe API na `3001`, żeby serwowało aktualny kod;
+- uruchomić Redis i sprawdzić realne retry workerów end-to-end;
+- zrobić Browser screenshot-pass desktop/mobile;
+- potwierdzić wizualnie historię ruchów na bazie z realnymi dokumentami.
 
 Następny backend po domknięciu panelu:
 
@@ -690,7 +701,8 @@ Efekt końcowy:
 
 Cel: dodać `WarehouseCatalog` jako pierwszą warstwę porządkującą produkty magazynowe.
 
-Status backend/API: wdrożone w `kp-api` 2026-05-15.
+Status backend/API: wdrożone w `kp-api` 2026-05-15, rozszerzone 2026-05-16 o filtry server-side i price-sync na dashboardzie.
+Status panelu admina: wdrożone 2026-05-16.
 
 Zakres backend:
 
@@ -705,11 +717,12 @@ Zakres backend:
 
 Zakres panelu admina:
 
-- lista katalogów;
-- tworzenie i edycja katalogu;
-- filtr katalogu na liście produktów;
-- wybór katalogu przy ręcznym tworzeniu produktu;
-- wybór katalogu przy tworzeniu produktu z mapowania sklepu.
+- lista katalogów - wdrożone;
+- tworzenie i edycja katalogu - wdrożone;
+- filtr katalogu na liście produktów - wdrożone;
+- wybór katalogu przy ręcznym tworzeniu produktu - wdrożone;
+- wybór katalogu przy tworzeniu produktu z mapowania sklepu - wdrożone;
+- wybór katalogu przy tworzeniu produktów z hurtowni - wdrożone.
 
 Wytyczne dla frontendu panelu admina:
 
@@ -1706,6 +1719,7 @@ Zakres backend:
 - liczniki produktów bez EAN, bez mapowania sklepu, bez oferty hurtowni;
 - lista produktów z niskim albo ujemnym stanem;
 - lista ostatnich błędów stock sync do sklepów;
+- lista ostatnich błędów price sync do sklepów;
 - lista ostatnich błędów sync hurtowni;
 - bez migracji i bez zmiany modelu danych.
 
@@ -1735,6 +1749,7 @@ Odpowiedź:
     "productsWithoutShopMapping": 9,
     "productsWithoutWholesaleOffer": 30,
     "failedStockSyncLogs": 2,
+    "failedPriceSyncLogs": 1,
     "failedWholesaleSyncLogs": 1,
     "draftDocuments": 3
   },
@@ -1750,6 +1765,7 @@ Odpowiedź:
     "productsWithoutShopMapping": [],
     "productsWithoutWholesaleOffer": [],
     "failedStockSyncLogs": [],
+    "failedPriceSyncLogs": [],
     "failedWholesaleSyncLogs": []
   }
 }
@@ -1759,10 +1775,18 @@ Rozszerzone filtry produktów:
 
 ```text
 GET /admin/warehouse/products?stockBelow=1
+GET /admin/warehouse/products?stockStatus=available
+GET /admin/warehouse/products?stockStatus=zero
+GET /admin/warehouse/products?stockStatus=negative
+GET /admin/warehouse/products?stockStatus=low
+GET /admin/warehouse/products?missingPrice=purchase
+GET /admin/warehouse/products?missingPrice=retail
 GET /admin/warehouse/products?hasBarcode=false
 GET /admin/warehouse/products?hasShopMapping=false
 GET /admin/warehouse/products?hasWholesaleOffer=false
 ```
+
+Dla panelu admina `stockStatus` i `missingPrice` są preferowane, bo działają globalnie na wyniku API i nie fałszują paginacji. `stockBelow`, `hasBarcode`, `hasShopMapping` i `hasWholesaleOffer` zostają kompatybilne wstecz.
 
 Dodatkowo odpowiedź produktu zawiera `_count`:
 
@@ -1797,6 +1821,30 @@ Efekt końcowy:
 - operator zaczyna dzień od widoku priorytetów;
 - produkty wymagające porządkowania są łatwe do znalezienia;
 - panel nie musi wykonywać wielu osobnych zapytań tylko po to, żeby policzyć problemy.
+
+Aktualizacja UI 2026-05-16:
+
+- główny sidebar ma tylko wysokopoziomowe wejścia, a szczegółowa nawigacja magazynu działa jako subnav modułu;
+- `/warehouse/documents` czyta filtry z URL, obsługuje deep-link `status=DRAFT` i używa paginacji;
+- `/warehouse/products` używa server-side filtrów `stockStatus` oraz `missingPrice`;
+- `/warehouse/control` pokazuje PrestaShop reconciliation z filtrami sklepu, produktu, tolerancji ceny i różnic;
+- dashboard magazynu pokazuje błędy price-sync z tego samego okna czasu co stock-sync.
+- `/warehouse/sync` scala kontrolę synchronizacji w tabach `Stany`, `Ceny`, `Hurtownie`, a stare `/warehouse/stock-sync-logs` i `/warehouse/price-sync-logs` zostają deep-linkami.
+- `/warehouse/documents/:id` daje osobny detal dokumentu z pozycjami, metadanymi i akcjami zatwierdzenia/anulowania/usunięcia.
+- formularz dokumentu ma dwa zwarte tryby dodawania pozycji: `Skaner` dla EAN i `Ręcznie` dla wyszukiwarki produktu.
+
+QA 2026-05-16:
+
+- `pnpm --dir admin lint` przechodzi z 9 istniejącymi warningami poza zmianami magazynu;
+- `pnpm --dir admin build` przechodzi;
+- `pnpm --dir api build` przechodzi;
+- protected route'y admina zwracają `200`: `/warehouse`, `/warehouse/documents?status=DRAFT`, `/warehouse/products?stock=low&missingPrice=retail`, `/warehouse/sync?tab=stock&status=FAILED`, `/warehouse/sync?tab=price&status=FAILED`, `/warehouse/sync?tab=wholesale`, `/warehouse/control`;
+- dashboard API na świeżym procesie zawiera `failedPriceSyncLogs` w `summary` i `sections`;
+- filtry produktów na aktualnym API działają server-side: `available`, `zero`, `negative`, `low`, `missingPrice=purchase`, `missingPrice=retail`;
+- `GET /admin/warehouse/documents?status=DRAFT&page=1&limit=5` zwraca poprawną paginowaną odpowiedź;
+- retry stock-sync i price-sync sprawdzone bez skutków ubocznych na fikcyjnych ID, oba endpointy zwracają oczekiwane `404`;
+- PrestaShop reconciliation zwraca `200`;
+- lokalny proces API na `3001` podczas QA wyglądał na starszy build, dlatego do wdrożenia trzeba go zrestartować.
 
 ### Etap 8: synchronizacja cen do sklepów
 
@@ -1902,40 +1950,26 @@ Efekt końcowy:
 - magazyn pozostaje prosty i stabilny;
 - moduł produktu może rosnąć bez przebudowy dokumentów magazynowych.
 
-### Rekomendowana kolejność sprintów
+### Aktualny status panelu admina
 
-| Sprint | Priorytet | Zakres | Dlaczego teraz |
-|---|---|---|---|
-| 1 | P0 | Panel katalogów i filtr produktów po katalogu | Backend katalogów jest gotowy, operator musi móc z niego korzystać |
-| 2 | P0 | Dashboard magazynu i filtry operacyjne produktów | Jeden punkt startowy do pracy z brakami i błędami |
-| 3 | P1 | Logi stock sync, historia ruchów, ponowienie syncu, rozbieżności | Mniej ręcznej diagnostyki i szybsze naprawianie stanów |
-| 4 | P1 | Panel hurtowni: provider, preview CSV, sync, logi, mapowania, auto-map | Backend integracji hurtowni jest gotowy, brakuje workflow operatora |
-| 5 | P1 | Import produktów sklepu: readiness, preview, automapowanie, bulk create | Pełny proces importu bez ręcznego klikania każdej pozycji |
-| 6 | P2 | Alerty stanów, rezerwacje, raporty | Dojrzałość operacyjna po ustabilizowaniu podstaw |
-| 7 | P3 | Produkt/PIM | Dopiero po stabilnym magazynie |
+Zrealizowane:
 
-### Backlog wykonawczy dla panelu admina
+- `Magazyn -> Katalogi`: lista, dodawanie, edycja, usuwanie, blokada usuwania katalogu domyślnego i katalogu z produktami;
+- `Magazyn -> Produkty`: filtr katalogu, kolumna katalogu, liczniki EAN/mapowań/ofert, filtry server-side `stockStatus`, `missingPrice`, `stockBelow`, `hasBarcode`, `hasShopMapping`, `hasWholesaleOffer`;
+- formularz produktu: wybór aktywnego katalogu przy tworzeniu i edycji;
+- mapowania sklepu i hurtowni: tworzenie produktów z wyborem katalogu;
+- dashboard magazynu: priorytety operatora, linki do przefiltrowanych list, błędy stock-sync, price-sync i hurtowni;
+- dokumenty: URL-backed filtry, paginacja, detal dokumentu, workflow skanera i ręcznego dodawania pozycji;
+- produkt: historia ruchów oparta o `movement.document.*` i `stockDelta`;
+- synchronizacje: zbiorczy ekran `Magazyn -> Synchronizacje` z tabami `Stany`, `Ceny`, `Hurtownie`;
+- kontrola: ekran PrestaShop reconciliation.
 
-P0:
+Otwarte operacyjnie:
 
-- `Magazyn -> Katalogi`: lista, dodawanie, edycja, usuwanie, blokada usuwania katalogu domyślnego i katalogu z produktami.
-- `Magazyn -> Produkty`: filtr katalogu, kolumna katalogu, liczniki EAN/mapowań/ofert, filtry `stockBelow`, `hasBarcode`, `hasShopMapping`, `hasWholesaleOffer`.
-- Formularz produktu: wybór aktywnego katalogu przy tworzeniu i edycji, z domyślnym katalogiem jako wartością startową.
-- Mapowania sklepu: modal wyboru katalogu przy tworzeniu produktu magazynowego z mapowania.
-- Dashboard magazynu: kafle problemów z `GET /admin/warehouse/dashboard` prowadzące do odpowiednio przefiltrowanych list.
-
-P1:
-
-- Logi stock sync: tabela, filtry, podgląd błędu i akcja `Ponów sync`.
-- Karta produktu: sekcja ruchów magazynowych z filtrami typu/statusu/daty.
-- Rozbieżności stanów: widok `currentStock` kontra stan liczony z dokumentów oraz akcja przeliczenia cache.
-- `Integracje -> Hurtownie`: lista providerów, szczegóły, sync ręczny, harmonogram, logi i tabela mapowań.
-- Kreator hurtowni CSV: preview, mapowanie kolumn, zapis providera, uruchomienie syncu i auto-mapowanie.
-- Import produktów sklepu: readiness, preview importu, automapowanie po SKU/EAN i bulk create produktów w wybranym katalogu.
-
-P2:
-
-- Alerty i raporty stanów po stabilizacji panelu operacyjnego.
+- restart docelowego API po deployu zmian;
+- Redis i pełny test retry workerów;
+- screenshot-pass Browser desktop/mobile;
+- alerty stanów, rezerwacje, raporty i przyszły produkt/PIM jako dalsze sprinty.
 
 ---
 

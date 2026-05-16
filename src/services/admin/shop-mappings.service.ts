@@ -10,6 +10,7 @@ export interface ShopMappingsQuery {
   search?: string;
   isMapped?: boolean;
   isActive?: boolean;
+  diagnosis?: 'mapped' | 'ready' | 'missingSku' | 'missingEan' | 'nameOnly' | 'missingData';
 }
 
 export interface CreateShopMappingInput {
@@ -44,7 +45,7 @@ function requireTenantId() {
 
 export async function getShopMappings(query: ShopMappingsQuery = {}) {
   const tenantId = requireTenantId();
-  const { page = 1, limit = 50, shopId, warehouseProductId, search, isMapped, isActive } = query;
+  const { page = 1, limit = 50, shopId, warehouseProductId, search, isMapped, isActive, diagnosis } = query;
   const skip = (page - 1) * limit;
 
   const where: Prisma.ShopProductMappingWhereInput = { tenantId };
@@ -55,6 +56,7 @@ export async function getShopMappings(query: ShopMappingsQuery = {}) {
   if (isMapped !== undefined && !warehouseProductId) {
     where.warehouseProductId = isMapped ? { not: null } : null;
   }
+  applyShopMappingDiagnosis(where, diagnosis);
   if (search) {
     where.OR = [
       { externalSku: { contains: search, mode: 'insensitive' } },
@@ -79,6 +81,51 @@ export async function getShopMappings(query: ShopMappingsQuery = {}) {
 
 export async function getUnmappedProducts(shopId: string, query: Omit<ShopMappingsQuery, 'shopId' | 'isMapped'> = {}) {
   return getShopMappings({ ...query, shopId, isMapped: false });
+}
+
+function applyShopMappingDiagnosis(
+  where: Prisma.ShopProductMappingWhereInput,
+  diagnosis?: ShopMappingsQuery['diagnosis'],
+) {
+  if (!diagnosis) return;
+
+  if (diagnosis === 'mapped') {
+    where.warehouseProductId = { not: null };
+    return;
+  }
+
+  where.warehouseProductId = null;
+
+  if (diagnosis === 'ready') {
+    where.externalSku = { not: '' };
+    where.externalEan = { not: null };
+    where.externalName = { not: null };
+    return;
+  }
+
+  if (diagnosis === 'missingSku') {
+    where.externalSku = '';
+    return;
+  }
+
+  if (diagnosis === 'missingEan') {
+    where.externalSku = { not: '' };
+    where.externalEan = null;
+    return;
+  }
+
+  if (diagnosis === 'nameOnly') {
+    where.externalSku = '';
+    where.externalEan = null;
+    where.externalName = { not: null };
+    return;
+  }
+
+  if (diagnosis === 'missingData') {
+    where.externalSku = '';
+    where.externalEan = null;
+    where.externalName = null;
+  }
 }
 
 export async function createShopMapping(input: CreateShopMappingInput) {

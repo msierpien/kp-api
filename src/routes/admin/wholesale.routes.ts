@@ -307,6 +307,7 @@ export async function wholesaleRoutes(fastify: FastifyInstance) {
           search: { type: 'string' },
           isMapped: { type: 'boolean' },
           isActive: { type: 'boolean' },
+          diagnosis: { type: 'string', enum: ['mapped', 'ready', 'missingSku', 'missingEan', 'nameOnly', 'missingData'] },
         },
       },
     },

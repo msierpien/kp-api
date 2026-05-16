@@ -71,6 +71,8 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
           search: { type: 'string' },
           catalogId: { type: 'string' },
           isActive: { type: 'boolean' },
+          stockStatus: { type: 'string', enum: ['available', 'zero', 'negative', 'low'] },
+          missingPrice: { type: 'string', enum: ['purchase', 'retail'] },
           stockBelow: { type: 'number' },
           hasBarcode: { type: 'boolean' },
           hasShopMapping: { type: 'boolean' },

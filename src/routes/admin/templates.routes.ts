@@ -29,6 +29,59 @@ import {
   deleteTemplateAsset,
 } from '../../services/admin/templates-layout.service';
 
+const templateItemResponseSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    name: { type: 'string' },
+    code: { type: 'string' },
+    description: { type: ['string', 'null'] },
+    version: { type: 'number' },
+    isActive: { type: 'boolean' },
+    createdAt: { type: 'string' },
+  },
+  required: ['id', 'name', 'code', 'version', 'isActive', 'createdAt'],
+} as const;
+
+const templateFormResponseSchema = {
+  type: 'object',
+  properties: {
+    forms: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          fields: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: true,
+            },
+          },
+        },
+      },
+    },
+  },
+  required: ['forms'],
+} as const;
+
+const templateLayoutResponseSchema = {
+  type: 'object',
+  properties: {
+    layout: {
+      type: ['object', 'null'],
+      additionalProperties: true,
+    },
+  },
+  required: ['layout'],
+} as const;
+
+const templateAssetResponseSchema = {
+  type: 'object',
+  additionalProperties: true,
+} as const;
+
 export async function templatesRoutes(fastify: FastifyInstance) {
   // GET /admin/templates
   fastify.get('/', {
@@ -38,19 +91,7 @@ export async function templatesRoutes(fastify: FastifyInstance) {
       response: {
         200: {
           type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              name: { type: 'string' },
-              code: { type: 'string' },
-              description: { type: ['string', 'null'] },
-              version: { type: 'number' },
-              isActive: { type: 'boolean' },
-              createdAt: { type: 'string' },
-            },
-            required: ['id', 'name', 'code', 'version', 'isActive', 'createdAt'],
-          },
+          items: templateItemResponseSchema,
         },
       },
     },
@@ -76,7 +117,7 @@ export async function templatesRoutes(fastify: FastifyInstance) {
           },
         },
         response: {
-          201: { type: 'object' },
+          201: templateItemResponseSchema,
           400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
       },
@@ -104,7 +145,7 @@ export async function templatesRoutes(fastify: FastifyInstance) {
         tags: ['templates'],
         summary: 'Pobierz konfigurację formularza szablonu',
         params: { type: 'object', properties: { id: { type: 'string' } } },
-        response: { 200: { type: 'object' } },
+        response: { 200: templateFormResponseSchema },
       },
     },
     async (request: FastifyRequest<{ Params: TemplateIdParams }>, reply: FastifyReply) => {
@@ -133,7 +174,7 @@ export async function templatesRoutes(fastify: FastifyInstance) {
           },
         },
         response: {
-          200: { type: 'object' },
+          200: templateItemResponseSchema,
           400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
       },
@@ -166,7 +207,7 @@ export async function templatesRoutes(fastify: FastifyInstance) {
         summary: 'Zastąp konfigurację formularza szablonu',
         params: { type: 'object', properties: { id: { type: 'string' } } },
         body: { type: 'object', description: 'Konfiguracja formularza z polami (TemplateFormInput)' },
-        response: { 200: { type: 'object' } },
+        response: { 200: templateFormResponseSchema },
       },
     },
     async (request: FastifyRequest<{ Params: TemplateIdParams; Body: TemplateFormInput }>, reply: FastifyReply) => {
@@ -225,7 +266,7 @@ export async function templatesRoutes(fastify: FastifyInstance) {
         summary: 'Pobierz konfigurację wizualnego layoutu (Fabric.js JSON)',
         params: { type: 'object', properties: { id: { type: 'string' } } },
         response: {
-          200: { type: 'object', properties: { layout: { type: 'object' } } },
+          200: templateLayoutResponseSchema,
           404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
       },
@@ -255,7 +296,7 @@ export async function templatesRoutes(fastify: FastifyInstance) {
         params: { type: 'object', properties: { id: { type: 'string' } } },
         body: { type: 'object', description: 'Konfiguracja layoutu Fabric.js z warstwami i fontami' },
         response: {
-          200: { type: 'object', properties: { layout: { type: 'object' } } },
+          200: templateLayoutResponseSchema,
           400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
       },
@@ -295,7 +336,18 @@ export async function templatesRoutes(fastify: FastifyInstance) {
         tags: ['templates'],
         summary: 'Lista zasobów graficznych szablonu',
         params: { type: 'object', properties: { id: { type: 'string' } } },
-        response: { 200: { type: 'object', properties: { assets: { type: 'array', items: { type: 'object' } } } } },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              assets: {
+                type: 'array',
+                items: templateAssetResponseSchema,
+              },
+            },
+            required: ['assets'],
+          },
+        },
       },
     },
     async (request: FastifyRequest<{ Params: TemplateIdParams }>, reply: FastifyReply) => {
@@ -319,7 +371,11 @@ export async function templatesRoutes(fastify: FastifyInstance) {
         consumes: ['multipart/form-data'],
         params: { type: 'object', properties: { id: { type: 'string' } } },
         response: {
-          201: { type: 'object', properties: { asset: { type: 'object' } } },
+          201: {
+            type: 'object',
+            properties: { asset: templateAssetResponseSchema },
+            required: ['asset'],
+          },
           400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
       },

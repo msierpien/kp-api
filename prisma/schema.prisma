@@ -482,13 +482,19 @@ model Automation {
 // Użytkownicy admin (MVP)
 // ============================================
 
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  OPERATOR
+}
+
 model User {
   id           String    @id @default(cuid())
   tenantId     String    @map("tenant_id")
   email        String    @unique
   passwordHash String    @map("password_hash")
   name         String
-  role         String    @default("ADMIN") // SUPER_ADMIN, ADMIN
+  role         UserRole  @default(OPERATOR)
   isActive     Boolean   @default(true) @map("is_active")
   lastLoginAt  DateTime? @map("last_login_at")
   createdAt    DateTime  @default(now()) @map("created_at")

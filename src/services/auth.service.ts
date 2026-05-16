@@ -1,6 +1,6 @@
 import bcrypt from 'bcrypt';
 import prisma from '../lib/prisma';
-import type { TokenResponse, JwtPayload } from '../types';
+import type { TokenResponse, JwtPayload, UserRole } from '../types';
 
 const ACCESS_TOKEN_EXPIRY = '15m';
 const REFRESH_TOKEN_EXPIRY = '7d';
@@ -18,6 +18,15 @@ export class AuthService {
   async login(email: string, password: string): Promise<TokenResponse> {
     const user = await prisma.user.findUnique({
       where: { email },
+      include: {
+        tenant: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+          },
+        },
+      },
     });
 
     if (!user) {
@@ -42,7 +51,7 @@ export class AuthService {
     const payload: JwtPayload = {
       userId: user.id,
       email: user.email,
-      role: user.role as 'ADMIN' | 'SUPER_ADMIN',
+      role: user.role as UserRole,
       tenantId: user.tenantId,
     };
 
@@ -59,7 +68,9 @@ export class AuthService {
         id: user.id,
         email: user.email,
         name: user.name,
-        role: user.role,
+        role: user.role as UserRole,
+        tenantId: user.tenantId,
+        tenant: user.tenant,
       },
     };
   }
@@ -84,7 +95,7 @@ export class AuthService {
       const payload: JwtPayload = {
         userId: user.id,
         email: user.email,
-        role: user.role as 'ADMIN' | 'SUPER_ADMIN',
+        role: user.role as UserRole,
         tenantId: user.tenantId,
       };
 

@@ -1,9 +1,10 @@
 import { requestContext } from '@fastify/request-context';
+import type { UserRole } from '../types';
 
 interface TenantContext {
   tenantId: string;
   userId: string;
-  role: string;
+  role: UserRole;
   overrideTenantId?: string; // For SUPER_ADMIN to filter by specific tenant
 }
 

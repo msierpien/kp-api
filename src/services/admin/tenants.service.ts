@@ -2,6 +2,8 @@ import prisma from '../../lib/prisma';
 import { isSuperAdmin } from '../../lib/tenant-context';
 import type { Tenant, TenantStatus } from '@prisma/client';
 import { ensureDefaultCatalog } from './warehouse-catalogs.service';
+import bcrypt from 'bcrypt';
+import { encrypt } from '../../lib/encryption';
 
 export interface TenantItem {
   id: string;
@@ -42,6 +44,43 @@ export interface UpdateTenantInput {
     max_shops?: number;
     max_users?: number;
     max_cases_per_month?: number;
+  };
+}
+
+export interface SetupTenantInput {
+  tenant: CreateTenantInput;
+  admin: {
+    email: string;
+    password: string;
+    name: string;
+  };
+  shop?: {
+    name?: string;
+    platform?: 'PRESTASHOP';
+    baseUrl: string;
+    apiKey?: string | null;
+    authType?: 'WEB_SERVICE';
+  };
+}
+
+export interface SetupTenantResult {
+  tenant: TenantItem;
+  admin: {
+    id: string;
+    email: string;
+    name: string;
+    role: 'ADMIN';
+    tenantId: string;
+    isActive: boolean;
+    createdAt: Date;
+  };
+  shop?: {
+    id: string;
+    name: string;
+    platform: string;
+    baseUrl: string;
+    status: string;
+    tenantId: string;
   };
 }
 
@@ -151,6 +190,112 @@ export async function createTenant(input: CreateTenantInput): Promise<TenantItem
   });
 
   return mapTenant(tenant);
+}
+
+/**
+ * Create tenant with first ADMIN user and optional PrestaShop integration.
+ */
+export async function setupTenant(input: SetupTenantInput): Promise<SetupTenantResult> {
+  if (!isSuperAdmin()) {
+    throw new Error('Tylko SUPER_ADMIN może tworzyć firmę z administratorem');
+  }
+
+  if (!input.tenant?.name || !input.tenant?.slug) {
+    throw new Error('Nazwa i slug firmy są wymagane');
+  }
+
+  if (!input.admin?.email || !input.admin?.name || !input.admin?.password) {
+    throw new Error('Dane pierwszego administratora są wymagane');
+  }
+
+  const [existingTenant, existingUser] = await Promise.all([
+    prisma.tenant.findUnique({ where: { slug: input.tenant.slug } }),
+    prisma.user.findUnique({ where: { email: input.admin.email } }),
+  ]);
+
+  if (existingTenant) {
+    throw new Error(`Firma o slug "${input.tenant.slug}" już istnieje`);
+  }
+
+  if (existingUser) {
+    throw new Error(`Użytkownik o email "${input.admin.email}" już istnieje`);
+  }
+
+  const passwordHash = await bcrypt.hash(input.admin.password, 10);
+
+  const result = await prisma.$transaction(async (tx) => {
+    const tenant = await tx.tenant.create({
+      data: {
+        name: input.tenant.name,
+        slug: input.tenant.slug,
+        status: 'ACTIVE',
+        plan: input.tenant.plan || 'FREE',
+        limitsJson: input.tenant.limits || {},
+      },
+      include: {
+        _count: {
+          select: {
+            users: true,
+            shops: true,
+          },
+        },
+      },
+    });
+
+    await ensureDefaultCatalog(tenant.id, tx);
+
+    const admin = await tx.user.create({
+      data: {
+        tenantId: tenant.id,
+        email: input.admin.email,
+        passwordHash,
+        name: input.admin.name,
+        role: 'ADMIN',
+        isActive: true,
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        tenantId: true,
+        isActive: true,
+        createdAt: true,
+      },
+    });
+
+    const shop = input.shop
+      ? await tx.shop.create({
+          data: {
+            tenantId: tenant.id,
+            name: input.shop.name || 'Kreatywne Papierki - PrestaShop',
+            platform: 'PRESTASHOP',
+            baseUrl: input.shop.baseUrl.replace(/\/+$/, ''),
+            apiKey: input.shop.apiKey ? encrypt(input.shop.apiKey) : '',
+            status: 'ACTIVE',
+            configJson: {
+              authType: input.shop.authType || 'WEB_SERVICE',
+            },
+          },
+          select: {
+            id: true,
+            name: true,
+            platform: true,
+            baseUrl: true,
+            status: true,
+            tenantId: true,
+          },
+        })
+      : undefined;
+
+    return { tenant, admin, shop };
+  });
+
+  return {
+    tenant: mapTenant(result.tenant),
+    admin: result.admin as SetupTenantResult['admin'],
+    shop: result.shop,
+  };
 }
 
 /**

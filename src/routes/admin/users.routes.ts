@@ -4,7 +4,7 @@ import * as usersService from '../../services/admin/users.service';
 import type { CreateUserInput, UpdateUserInput } from '../../services/admin/users.service';
 
 export async function usersRoutes(fastify: FastifyInstance) {
-  // All routes require at least ADMIN role
+  // All routes require ADMIN or SUPER_ADMIN role
   const adminOrSuper = [authMiddleware(fastify), requireRole('ADMIN', 'SUPER_ADMIN')];
 
   // GET /admin/users - list users
@@ -19,7 +19,7 @@ export async function usersRoutes(fastify: FastifyInstance) {
         querystring: {
           type: 'object',
           properties: {
-            tenantId: { type: 'string', description: 'Filtr po tenancie (tylko SUPER_ADMIN)' },
+            tenantId: { type: 'string', description: 'Filtr po firmie (tylko SUPER_ADMIN)' },
           },
         },
         response: { 200: { type: 'array', items: { type: 'object' } } },
@@ -70,12 +70,14 @@ export async function usersRoutes(fastify: FastifyInstance) {
         summary: 'Utwórz nowego użytkownika',
         body: {
           type: 'object',
-          required: ['email', 'password', 'role'],
+          required: ['email', 'password', 'name', 'role'],
           properties: {
             email: { type: 'string', format: 'email' },
             password: { type: 'string', minLength: 8 },
-            role: { type: 'string', enum: ['ADMIN', 'SUPER_ADMIN'] },
+            name: { type: 'string', minLength: 1 },
+            role: { type: 'string', enum: ['ADMIN', 'SUPER_ADMIN', 'OPERATOR'] },
             tenantId: { type: 'string' },
+            isActive: { type: 'boolean' },
           },
         },
         response: { 201: { type: 'object' }, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },

@@ -120,37 +120,37 @@ export async function seed() {
   });
   console.log('✅ Admin user created:', admin.email);
 
-  // 4. Utwórz użytkownika seller (tenant 1)
-  const sellerPassword = await bcrypt.hash('seller123', 10);
-  const seller = await prisma.user.upsert({
-    where: { email: 'seller@kreatywne-papierki.pl' },
+  // 4. Utwórz użytkownika operator (tenant 1)
+  const operatorPassword = await bcrypt.hash('operator123', 10);
+  const operator = await prisma.user.upsert({
+    where: { email: 'operator@kreatywne-papierki.pl' },
     update: {},
     create: {
       tenantId: tenant.id,
-      email: 'seller@kreatywne-papierki.pl',
-      passwordHash: sellerPassword,
-      name: 'Sprzedawca',
-      role: 'ADMIN',
+      email: 'operator@kreatywne-papierki.pl',
+      passwordHash: operatorPassword,
+      name: 'Operator',
+      role: 'OPERATOR',
       isActive: true,
     },
   });
-  console.log('✅ Seller user created:', seller.email);
+  console.log('✅ Operator user created:', operator.email);
 
-  // 4b. Utwórz użytkownika seller (tenant 2)
-  const seller2Password = await bcrypt.hash('seller456', 10);
-  const seller2 = await prisma.user.upsert({
-    where: { email: 'seller2@tenant2.pl' },
+  // 4b. Utwórz użytkownika operator (tenant 2)
+  const operator2Password = await bcrypt.hash('operator456', 10);
+  const operator2 = await prisma.user.upsert({
+    where: { email: 'operator2@tenant2.pl' },
     update: {},
     create: {
       tenantId: tenant2.id,
-      email: 'seller2@tenant2.pl',
-      passwordHash: seller2Password,
-      name: 'Sprzedawca Tenant 2',
-      role: 'ADMIN',
+      email: 'operator2@tenant2.pl',
+      passwordHash: operator2Password,
+      name: 'Operator Tenant 2',
+      role: 'OPERATOR',
       isActive: true,
     },
   });
-  console.log('✅ Seller2 user created:', seller2.email);
+  console.log('✅ Operator2 user created:', operator2.email);
 
   // 4c. Utwórz użytkownika SUPER_ADMIN
   const superAdminPassword = await bcrypt.hash('SuperAdmin2024!', 10);
@@ -403,7 +403,7 @@ export async function seed() {
   console.log('🎉 Seeding completed successfully!');
   console.log('\n📋 Test credentials:');
   console.log('   Admin: admin@kreatywne-papierki.pl / admin123');
-  console.log('   Seller: seller@kreatywne-papierki.pl / seller123');
+  console.log('   Operator: operator@kreatywne-papierki.pl / operator123');
   console.log('   Super Admin: msierpien@rexbit.pl / SuperAdmin2024!');
 }
 

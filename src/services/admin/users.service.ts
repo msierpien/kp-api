@@ -1,13 +1,16 @@
-import prisma from '../../lib/prisma';
-import { isSuperAdmin, getTenantContext } from '../../lib/tenant-context';
 import bcrypt from 'bcrypt';
+import prisma from '../../lib/prisma';
+import { getTenantContext, isSuperAdmin } from '../../lib/tenant-context';
+import type { UserRole } from '../../types';
 import { ensureDefaultCatalog } from './warehouse-catalogs.service';
+
+const USER_ROLES: UserRole[] = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR'];
 
 export interface UserListItem {
   id: string;
   email: string;
   name: string;
-  role: string;
+  role: UserRole;
   isActive: boolean;
   tenantId: string;
   tenant: {
@@ -23,8 +26,8 @@ export interface CreateUserInput {
   email: string;
   password: string;
   name: string;
-  role: string;
-  tenantId: string; // SUPER_ADMIN can set any tenant
+  role: UserRole;
+  tenantId?: string;
   isActive?: boolean;
 }
 
@@ -32,53 +35,98 @@ export interface UpdateUserInput {
   email?: string;
   password?: string;
   name?: string;
-  role?: string;
-  tenantId?: string; // SUPER_ADMIN can change tenant
+  role?: UserRole;
+  tenantId?: string;
   isActive?: boolean;
+}
+
+const userSelect = {
+  id: true,
+  email: true,
+  name: true,
+  role: true,
+  isActive: true,
+  tenantId: true,
+  tenant: {
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+    },
+  },
+  lastLoginAt: true,
+  createdAt: true,
+} as const;
+
+function assertUserRole(role: string | undefined): UserRole {
+  if (!role || !USER_ROLES.includes(role as UserRole)) {
+    throw new Error('Nieprawidłowa rola użytkownika');
+  }
+
+  return role as UserRole;
+}
+
+function assertContext() {
+  const context = getTenantContext();
+  if (!context) {
+    throw new Error('Brak kontekstu użytkownika');
+  }
+
+  return context;
+}
+
+async function assertTenantExists(tenantId: string) {
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { id: true, status: true },
+  });
+
+  if (!tenant || tenant.status !== 'ACTIVE') {
+    throw new Error('Firma nie została znaleziona lub jest nieaktywna');
+  }
+}
+
+async function assertCanDeactivateUser(targetUser: UserListItem) {
+  const context = assertContext();
+
+  if (targetUser.id === context.userId) {
+    throw new Error('Nie możesz dezaktywować własnego konta');
+  }
+
+  if (targetUser.role !== 'ADMIN') return;
+
+  const remainingActiveAdmins = await prisma.user.count({
+    where: {
+      tenantId: targetUser.tenantId,
+      role: 'ADMIN',
+      isActive: true,
+      NOT: { id: targetUser.id },
+    },
+  });
+
+  if (remainingActiveAdmins === 0) {
+    throw new Error('Nie można dezaktywować ostatniego aktywnego administratora firmy');
+  }
 }
 
 /**
  * Get all users (with optional tenant filter for SUPER_ADMIN)
  */
 export async function getAllUsers(tenantIdFilter?: string): Promise<UserListItem[]> {
-  const context = getTenantContext();
-  
-  if (!context) {
-    throw new Error('Brak kontekstu użytkownika');
-  }
-
-  // SUPER_ADMIN can see all users or filter by tenant
-  // Regular users see only users from their tenant
+  const context = assertContext();
   const where: any = {};
-  
+
   if (isSuperAdmin()) {
     if (tenantIdFilter) {
       where.tenantId = tenantIdFilter;
     }
-    // else - no filter, see all
   } else {
     where.tenantId = context.tenantId;
   }
 
   const users = await prisma.user.findMany({
     where,
-    select: {
-      id: true,
-      email: true,
-      name: true,
-      role: true,
-      isActive: true,
-      tenantId: true,
-      tenant: {
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-        },
-      },
-      lastLoginAt: true,
-      createdAt: true,
-    },
+    select: userSelect,
     orderBy: { createdAt: 'desc' },
   });
 
@@ -89,38 +137,16 @@ export async function getAllUsers(tenantIdFilter?: string): Promise<UserListItem
  * Get single user by ID
  */
 export async function getUserById(id: string): Promise<UserListItem> {
-  const context = getTenantContext();
-  
-  if (!context) {
-    throw new Error('Brak kontekstu użytkownika');
-  }
-
+  const context = assertContext();
   const where: any = { id };
-  
-  // Regular users can only see users from their tenant
+
   if (!isSuperAdmin()) {
     where.tenantId = context.tenantId;
   }
 
   const user = await prisma.user.findFirst({
     where,
-    select: {
-      id: true,
-      email: true,
-      name: true,
-      role: true,
-      isActive: true,
-      tenantId: true,
-      tenant: {
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-        },
-      },
-      lastLoginAt: true,
-      createdAt: true,
-    },
+    select: userSelect,
   });
 
   if (!user) {
@@ -134,33 +160,28 @@ export async function getUserById(id: string): Promise<UserListItem> {
  * Create new user
  */
 export async function createUser(input: CreateUserInput): Promise<UserListItem> {
-  const context = getTenantContext();
-  
-  if (!context) {
-    throw new Error('Brak kontekstu użytkownika');
+  const context = assertContext();
+  const role = assertUserRole(input.role);
+
+  if (!isSuperAdmin() && role === 'SUPER_ADMIN') {
+    throw new Error('Tylko SUPER_ADMIN może tworzyć konta SUPER_ADMIN');
   }
 
-  // Validate tenantId assignment
   let targetTenantId = input.tenantId;
-  
+
   if (!isSuperAdmin()) {
-    // Regular admins can only create users in their own tenant
     targetTenantId = context.tenantId;
-  } else {
-    // SUPER_ADMIN must specify tenantId
-    if (!input.tenantId) {
-      throw new Error('SUPER_ADMIN musi określić tenantId dla nowego użytkownika');
-    }
+  } else if (!targetTenantId) {
+    throw new Error('SUPER_ADMIN musi określić firmę dla nowego użytkownika');
   }
 
-  const tenant = await prisma.tenant.findUnique({
-    where: { id: targetTenantId },
-    select: { id: true },
-  });
-  if (!tenant) throw new Error('Tenant nie został znaleziony');
+  if (!targetTenantId) {
+    throw new Error('Brak firmy dla nowego użytkownika');
+  }
 
-  // Check if email already exists
-  const existing = await prisma.user.findUnique({
+  await assertTenantExists(targetTenantId);
+
+  const existing = await prisma.user.findFirst({
     where: { email: input.email },
   });
 
@@ -168,7 +189,6 @@ export async function createUser(input: CreateUserInput): Promise<UserListItem> 
     throw new Error(`Użytkownik o email "${input.email}" już istnieje`);
   }
 
-  // Hash password
   const passwordHash = await bcrypt.hash(input.password, 10);
 
   const user = await prisma.$transaction(async (tx) => {
@@ -179,27 +199,11 @@ export async function createUser(input: CreateUserInput): Promise<UserListItem> 
         email: input.email,
         passwordHash,
         name: input.name,
-        role: input.role,
+        role,
         tenantId: targetTenantId,
         isActive: input.isActive ?? true,
-      } as any, // tenantId added by middleware but we override it
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        isActive: true,
-        tenantId: true,
-        tenant: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-          },
-        },
-        lastLoginAt: true,
-        createdAt: true,
       },
+      select: userSelect,
     });
   });
 
@@ -210,52 +214,51 @@ export async function createUser(input: CreateUserInput): Promise<UserListItem> 
  * Update user
  */
 export async function updateUser(id: string, input: UpdateUserInput): Promise<UserListItem> {
-  const context = getTenantContext();
-  
-  if (!context) {
-    throw new Error('Brak kontekstu użytkownika');
-  }
-
-  // Check if user exists and belongs to tenant (for non-SUPER_ADMIN)
   const existingUser = await getUserById(id);
-
-  // Build update data
   const updateData: any = {};
-  
+
   if (input.email !== undefined) {
-    // Check email uniqueness
     const emailExists = await prisma.user.findFirst({
       where: {
         email: input.email,
         NOT: { id },
       },
     });
-    
+
     if (emailExists) {
       throw new Error(`Użytkownik o email "${input.email}" już istnieje`);
     }
-    
+
     updateData.email = input.email;
   }
-  
-  if (input.password !== undefined) {
+
+  if (input.password !== undefined && input.password !== '') {
     updateData.passwordHash = await bcrypt.hash(input.password, 10);
   }
-  
+
   if (input.name !== undefined) updateData.name = input.name;
-  if (input.role !== undefined) updateData.role = input.role;
-  if (input.isActive !== undefined) updateData.isActive = input.isActive;
-  
-  // Only SUPER_ADMIN can change tenantId
+
+  if (input.role !== undefined) {
+    const role = assertUserRole(input.role);
+    if (!isSuperAdmin() && role === 'SUPER_ADMIN') {
+      throw new Error('Tylko SUPER_ADMIN może nadawać rolę SUPER_ADMIN');
+    }
+    updateData.role = role;
+  }
+
+  if (input.isActive !== undefined) {
+    if (!input.isActive && existingUser.isActive) {
+      await assertCanDeactivateUser(existingUser);
+    }
+    updateData.isActive = input.isActive;
+  }
+
   if (input.tenantId !== undefined) {
     if (!isSuperAdmin()) {
-      throw new Error('Tylko SUPER_ADMIN może zmieniać tenantId użytkownika');
+      throw new Error('Tylko SUPER_ADMIN może zmieniać firmę użytkownika');
     }
-    const tenant = await prisma.tenant.findUnique({
-      where: { id: input.tenantId },
-      select: { id: true },
-    });
-    if (!tenant) throw new Error('Tenant nie został znaleziony');
+
+    await assertTenantExists(input.tenantId);
     await ensureDefaultCatalog(input.tenantId);
     updateData.tenantId = input.tenantId;
   }
@@ -263,23 +266,7 @@ export async function updateUser(id: string, input: UpdateUserInput): Promise<Us
   const user = await prisma.user.update({
     where: { id },
     data: updateData,
-    select: {
-      id: true,
-      email: true,
-      name: true,
-      role: true,
-      isActive: true,
-      tenantId: true,
-      tenant: {
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-        },
-      },
-      lastLoginAt: true,
-      createdAt: true,
-    },
+    select: userSelect,
   });
 
   return user as UserListItem;
@@ -289,14 +276,8 @@ export async function updateUser(id: string, input: UpdateUserInput): Promise<Us
  * Deactivate user (soft delete)
  */
 export async function deleteUser(id: string): Promise<void> {
-  const context = getTenantContext();
-  
-  if (!context) {
-    throw new Error('Brak kontekstu użytkownika');
-  }
-
-  // Check if user exists and belongs to tenant (for non-SUPER_ADMIN)
-  await getUserById(id);
+  const user = await getUserById(id);
+  await assertCanDeactivateUser(user);
 
   await prisma.user.update({
     where: { id },

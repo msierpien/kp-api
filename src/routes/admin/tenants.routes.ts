@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { authMiddleware, requireRole } from '../../middleware/auth.middleware';
 import * as tenantsService from '../../services/admin/tenants.service';
-import type { CreateTenantInput, UpdateTenantInput } from '../../services/admin/tenants.service';
+import type { CreateTenantInput, SetupTenantInput, UpdateTenantInput } from '../../services/admin/tenants.service';
 
 const tenantResponseSchema = {
   type: 'object',
@@ -46,6 +46,63 @@ export async function tenantsRoutes(fastify: FastifyInstance) {
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Błąd pobierania tenantów';
         return reply.status(500).send({ error: 'Internal Server Error', message });
+      }
+    }
+  );
+
+  // POST /admin/tenants/setup - create tenant with first admin and optional shop
+  fastify.post<{ Body: SetupTenantInput }>(
+    '/setup',
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['tenants'],
+        summary: 'Utwórz firmę z pierwszym administratorem',
+        body: {
+          type: 'object',
+          required: ['tenant', 'admin'],
+          properties: {
+            tenant: {
+              type: 'object',
+              required: ['name', 'slug'],
+              properties: {
+                name: { type: 'string' },
+                slug: { type: 'string' },
+                plan: { type: 'string' },
+                limits: { type: 'object', additionalProperties: true },
+              },
+            },
+            admin: {
+              type: 'object',
+              required: ['email', 'name', 'password'],
+              properties: {
+                email: { type: 'string', format: 'email' },
+                name: { type: 'string' },
+                password: { type: 'string', minLength: 8 },
+              },
+            },
+            shop: {
+              type: 'object',
+              properties: {
+                name: { type: 'string' },
+                platform: { type: 'string', enum: ['PRESTASHOP'] },
+                baseUrl: { type: 'string' },
+                apiKey: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+                authType: { type: 'string', enum: ['WEB_SERVICE'] },
+              },
+            },
+          },
+        },
+        response: { 201: { type: 'object' }, 400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+      },
+    },
+    async (request: FastifyRequest<{ Body: SetupTenantInput }>, reply: FastifyReply) => {
+      try {
+        const result = await tenantsService.setupTenant(request.body);
+        return reply.status(201).send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Błąd tworzenia firmy';
+        return reply.status(400).send({ error: 'Bad Request', message });
       }
     }
   );

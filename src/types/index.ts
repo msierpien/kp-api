@@ -1,9 +1,11 @@
 import { FastifyRequest } from 'fastify';
 
+export type UserRole = 'SUPER_ADMIN' | 'ADMIN' | 'OPERATOR';
+
 export interface JwtPayload {
   userId: string;
   email: string;
-  role: 'ADMIN' | 'SUPER_ADMIN';
+  role: UserRole;
   tenantId: string;
 }
 
@@ -27,7 +29,13 @@ export interface TokenResponse {
     id: string;
     email: string;
     name: string;
-    role: string;
+    role: UserRole;
+    tenantId: string;
+    tenant: {
+      id: string;
+      name: string;
+      slug: string;
+    };
   };
 }
 

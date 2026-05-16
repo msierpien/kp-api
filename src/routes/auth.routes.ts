@@ -1,6 +1,8 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { AuthService } from '../services/auth.service';
 import { loginSchema, refreshSchema, LoginInput, RefreshInput } from '../schemas/auth.schema';
+import prisma from '../lib/prisma';
+import { authMiddleware } from '../middleware/auth.middleware';
 
 export async function authRoutes(fastify: FastifyInstance) {
   const authService = new AuthService({
@@ -35,7 +37,10 @@ export async function authRoutes(fastify: FastifyInstance) {
                 properties: {
                   id: { type: 'string' },
                   email: { type: 'string' },
+                  name: { type: 'string' },
                   role: { type: 'string' },
+                  tenantId: { type: 'string' },
+                  tenant: { type: 'object' },
                 },
               },
             },
@@ -154,8 +159,10 @@ export async function authRoutes(fastify: FastifyInstance) {
                 properties: {
                   id: { type: 'string' },
                   email: { type: 'string' },
+                  name: { type: 'string' },
                   role: { type: 'string' },
                   tenantId: { type: 'string' },
+                  tenant: { type: 'object' },
                 },
               },
             },
@@ -163,27 +170,36 @@ export async function authRoutes(fastify: FastifyInstance) {
           401: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
       },
-      preHandler: [async (request, reply) => {
-        try {
-          const authHeader = request.headers.authorization;
-          if (!authHeader || !authHeader.startsWith('Bearer ')) {
-            return reply.status(401).send({
-              error: 'Unauthorized',
-              message: 'Brak tokenu autoryzacji',
-            });
-          }
-          const token = authHeader.substring(7);
-          request.user = await fastify.jwt.verify(token);
-        } catch {
-          return reply.status(401).send({
-            error: 'Unauthorized',
-            message: 'Nieprawidłowy lub wygasły token',
-          });
-        }
-      }],
+      preHandler: [authMiddleware(fastify)],
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      return reply.send({ user: request.user });
+      const jwtUser = request.user as any;
+      const user = await prisma.user.findUnique({
+        where: { id: jwtUser.userId },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          tenantId: true,
+          tenant: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+            },
+          },
+        },
+      });
+
+      if (!user || !user.tenant) {
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Użytkownik nie został znaleziony',
+        });
+      }
+
+      return reply.send({ user });
     }
   );
 }

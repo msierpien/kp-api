@@ -3,6 +3,7 @@ import * as warehouseService from '../../services/admin/warehouse.service';
 import * as barcodeService from '../../services/admin/warehouse-barcodes.service';
 import * as scannerService from '../../services/admin/warehouse-scanner.service';
 import * as diagnosticsService from '../../services/admin/warehouse-diagnostics.service';
+import * as sourceMappingService from '../../services/admin/warehouse-product-source-mapping.service';
 import * as priceSyncService from '../../services/price/price-sync.service';
 import * as prestaReconciliationService from '../../services/prestashop/prestashop-reconciliation.service';
 import { getStock, getProductStock, recalculateStockCache } from '../../services/admin/warehouse-stock.service';
@@ -234,6 +235,39 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd masowego usuwania produktów';
       const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/products/bulk/auto-map-sources', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Masowo powiąż produkty magazynowe z mapowaniami sklepu i hurtowni',
+      body: {
+        type: 'object',
+        required: ['productIds'],
+        properties: {
+          productIds: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 500,
+            items: { type: 'string' },
+          },
+          sources: {
+            type: 'array',
+            items: { type: 'string', enum: ['SHOP', 'WHOLESALE'] },
+          },
+          activeOnly: { type: 'boolean', default: true },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: sourceMappingService.BulkAutoMapProductSourcesInput }>, reply: FastifyReply) => {
+    try {
+      const result = await sourceMappingService.bulkAutoMapProductSources(request.body);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd masowego mapowania produktów';
+      const status = message.includes('Brak kontekstu') ? 400 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }
   });

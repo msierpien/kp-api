@@ -114,21 +114,27 @@ export async function importProductsFromShop(
       skippedNoSku: 0,
     };
 
+    const productIdsWithSku = products
+      .filter((product) => product.sku)
+      .map((product) => product.id);
+    const existingMappings = productIdsWithSku.length
+      ? await prisma.shopProductMapping.findMany({
+          where: {
+            tenantId,
+            shopId,
+            externalProductId: { in: productIdsWithSku },
+          },
+          select: { externalProductId: true },
+        })
+      : [];
+    const existingProductIds = new Set(existingMappings.map((mapping) => mapping.externalProductId));
+
     for (const product of products) {
       if (!product.sku) {
         result.skipped++;
         result.skippedNoSku++;
         continue;
       }
-
-      const existing = await prisma.shopProductMapping.findUnique({
-        where: {
-          shopId_externalProductId: {
-            shopId,
-            externalProductId: product.id,
-          },
-        },
-      });
 
       await prisma.shopProductMapping.upsert({
         where: {
@@ -158,7 +164,7 @@ export async function importProductsFromShop(
         },
       });
 
-      if (existing) result.updated++;
+      if (existingProductIds.has(product.id)) result.updated++;
       else result.created++;
     }
 
@@ -210,6 +216,46 @@ export async function previewProductsImport(
     sample: [],
   };
 
+  const productIds = products.map((product) => product.id);
+  const skus = uniqueNonEmpty(products.map((product) => product.sku));
+  const eans = uniqueNonEmpty(products.map((product) => product.ean));
+
+  const [existingMappings, skuProducts, eanBarcodes] = await Promise.all([
+    productIds.length
+      ? prisma.shopProductMapping.findMany({
+          where: {
+            tenantId,
+            shopId,
+            externalProductId: { in: productIds },
+          },
+          select: { externalProductId: true },
+        })
+      : Promise.resolve([]),
+    skus.length
+      ? prisma.warehouseProduct.findMany({
+          where: {
+            tenantId,
+            sku: { in: skus },
+          },
+          select: { sku: true },
+        })
+      : Promise.resolve([]),
+    eans.length
+      ? prisma.warehouseProductBarcode.findMany({
+          where: {
+            tenantId,
+            ean: { in: eans },
+            isActive: true,
+          },
+          select: { ean: true },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const existingProductIds = new Set(existingMappings.map((mapping) => mapping.externalProductId));
+  const warehouseSkus = new Set(skuProducts.map((product) => product.sku));
+  const warehouseEans = new Set(eanBarcodes.map((barcode) => barcode.ean));
+
   for (const product of products) {
     if (product.ean) result.withEan++;
 
@@ -230,27 +276,15 @@ export async function previewProductsImport(
       continue;
     }
 
-    const [existingMapping, skuProduct, eanBarcode] = await Promise.all([
-      prisma.shopProductMapping.findUnique({
-        where: { shopId_externalProductId: { shopId, externalProductId: product.id } },
-        select: { id: true },
-      }),
-      prisma.warehouseProduct.findUnique({
-        where: { tenantId_sku: { tenantId, sku: product.sku } },
-        select: { id: true },
-      }),
-      product.ean
-        ? prisma.warehouseProductBarcode.findFirst({
-            where: { tenantId, ean: product.ean, isActive: true },
-            select: { warehouseProductId: true },
-          })
-        : Promise.resolve(null),
-    ]);
-
-    if (existingMapping) result.willUpdate++;
+    const hasExistingMapping = existingProductIds.has(product.id);
+    if (hasExistingMapping) result.willUpdate++;
     else result.willCreate++;
 
-    const autoMapCandidate = skuProduct ? 'SKU' : eanBarcode ? 'EAN' : undefined;
+    const autoMapCandidate = warehouseSkus.has(product.sku)
+      ? 'SKU'
+      : product.ean && warehouseEans.has(product.ean)
+        ? 'EAN'
+        : undefined;
     if (autoMapCandidate === 'SKU') result.possibleAutoMapBySku++;
     if (autoMapCandidate === 'EAN') result.possibleAutoMapByEan++;
 
@@ -262,7 +296,7 @@ export async function previewProductsImport(
         externalName: product.name,
         externalPrice: product.price,
         active: product.active,
-        action: existingMapping ? 'UPDATE' : 'CREATE',
+        action: hasExistingMapping ? 'UPDATE' : 'CREATE',
         autoMapCandidate,
       });
     }
@@ -493,22 +527,34 @@ async function fetchShopProducts(shop: Shop, options: ImportProductsOptions) {
     adminApiConfig: config.authType === 'ADMIN_API' ? config.adminApi : undefined,
   });
 
-  const limit = options.limit ?? config.productImport?.limit ?? 500;
-  const pageSize = Math.min(100, limit);
+  const limit = normalizeImportLimit(options.limit);
+  const pageSize = Math.min(100, limit ?? 100);
   const products: PrestaShopProductDetails[] = [];
 
-  for (let offset = 0; products.length < limit; offset += pageSize) {
+  for (let offset = 0; limit === undefined || products.length < limit; offset += pageSize) {
+    const remaining = limit === undefined ? pageSize : limit - products.length;
+    const batchLimit = Math.min(pageSize, remaining);
     const batch = await client.fetchProducts({
-      limit: Math.min(pageSize, limit - products.length),
+      limit: batchLimit,
       offset,
       activeOnly: options.activeOnly ?? true,
     });
 
     products.push(...batch);
-    if (batch.length < pageSize) break;
+    if (batch.length < batchLimit) break;
   }
 
   return products;
+}
+
+function normalizeImportLimit(limit?: number) {
+  if (limit === undefined || limit === null) return undefined;
+  if (!Number.isFinite(limit) || limit <= 0) return undefined;
+  return Math.floor(limit);
+}
+
+function uniqueNonEmpty(values: Array<string | undefined>) {
+  return Array.from(new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))));
 }
 
 async function createWarehouseProductFromMappingInTx(

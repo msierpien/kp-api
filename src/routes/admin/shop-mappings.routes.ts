@@ -110,7 +110,7 @@ export async function shopMappingsRoutes(fastify: FastifyInstance) {
       body: {
         type: 'object',
         properties: {
-          limit: { type: 'integer', minimum: 1, maximum: 5000 },
+          limit: { type: 'integer', minimum: 1, maximum: 50000 },
           activeOnly: { type: 'boolean', default: true },
         },
       },
@@ -141,7 +141,7 @@ export async function shopMappingsRoutes(fastify: FastifyInstance) {
       body: {
         type: 'object',
         properties: {
-          limit: { type: 'integer', minimum: 1, maximum: 5000 },
+          limit: { type: 'integer', minimum: 1, maximum: 50000 },
           activeOnly: { type: 'boolean', default: true },
         },
       },

@@ -1,6 +1,7 @@
 import { Worker, Job } from 'bullmq';
 import prisma from '../../lib/prisma';
 import { createShopStockClient } from '../shops/shop-client.factory';
+import { getInventoryPublicationDecision } from '../stock/stock-sync.service';
 import { getRedisConnection } from './render.queue';
 import { STOCK_SYNC_QUEUE_NAME, type StockSyncJobData } from './stock-sync.queue';
 
@@ -20,7 +21,9 @@ async function processStockSyncJob(job: Job<StockSyncJobData>) {
   if (!shop) throw new Error(`Shop not found: ${shopId}`);
   if (!log) throw new Error(`Stock sync log not found: ${logId}`);
 
-  const currentStock = Number(product.currentStock);
+  const decision = await getInventoryPublicationDecision(warehouseProductId, {
+    warningMessage: log.warningMessage ?? undefined,
+  });
 
   await prisma.stockSyncLog.update({
     where: { id: logId },
@@ -28,23 +31,38 @@ async function processStockSyncJob(job: Job<StockSyncJobData>) {
       status: 'PROCESSING',
       attemptCount: { increment: 1 },
       stockAfter: product.currentStock,
+      publishedQuantity: decision.publishedQuantity,
+      availabilityPolicy: decision.availabilityPolicy,
+      outOfStockBehavior: decision.outOfStockBehavior,
+      warningMessage: decision.warningMessage,
     },
   });
 
   const client = createShopStockClient(shop);
-  await client.updateStockQuantity(externalProductId, currentStock);
+  await client.updateStockQuantity(externalProductId, Number(decision.publishedQuantity), {
+    outOfStockBehavior: decision.outOfStockBehavior,
+  });
 
   await prisma.stockSyncLog.update({
     where: { id: logId },
     data: {
       status: 'SUCCESS',
       stockAfter: product.currentStock,
+      publishedQuantity: decision.publishedQuantity,
+      availabilityPolicy: decision.availabilityPolicy,
+      outOfStockBehavior: decision.outOfStockBehavior,
+      warningMessage: decision.warningMessage,
       errorMessage: null,
       syncedAt: new Date(),
     },
   });
 
-  return { success: true, stock: currentStock };
+  return {
+    success: true,
+    stock: Number(product.currentStock),
+    publishedQuantity: Number(decision.publishedQuantity),
+    availabilityPolicy: decision.availabilityPolicy,
+  };
 }
 
 export function startStockSyncWorker() {

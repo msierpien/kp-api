@@ -5,6 +5,7 @@ import { syncShopOrders, type SyncResult } from '../sync/sync-orders.service';
 import { cleanupStorage } from '../storage/cleanup-storage.service';
 import { syncWholesaleProviderForTenant } from '../admin/wholesale.service';
 import { reconcilePrestaShopForTenant } from '../prestashop/prestashop-reconciliation.service';
+import { syncStockForShop } from '../stock/stock-sync.service';
 // BullMQ Worker automatycznie przetwarza RenderJobs - nie potrzebujemy crona
 
 /**
@@ -18,6 +19,9 @@ const scheduledTasks = new Map<string, ScheduledTask>();
  * Key: providerId, Value: ScheduledTask
  */
 const scheduledWholesaleTasks = new Map<string, ScheduledTask>();
+const ACTIVE_WHOLESALE_SYNC_STATUSES = ['PENDING', 'PROCESSING'] as const;
+const DAILY_INVENTORY_WARNING =
+  'Synchronizacja hurtowni była jeszcze w toku; opublikowano najnowsze zakończone dane hurtowni.';
 
 /**
  * Konwersja interwału (w minutach) na cron expression
@@ -233,6 +237,7 @@ export async function initializeScheduler() {
     // Scheduleuj storage cleanup - codziennie o 3:00
     scheduleStorageCleanup();
     schedulePrestaShopReconciliation();
+    scheduleDailyInventoryPublication();
     
     console.log('[Scheduler] ℹ️  RenderJobs processing handled by BullMQ Worker');
   } catch (error) {
@@ -330,6 +335,106 @@ function schedulePrestaShopReconciliation() {
   );
 
   console.log('[Scheduler] 📅 Scheduled PrestaShop reconciliation: daily at 2:15 AM');
+}
+
+async function runDailyInventoryPublication() {
+  const startTime = new Date();
+  console.log('[Scheduler] 📦 Starting daily inventory publication...');
+
+  try {
+    const providers = await prisma.wholesaleProvider.findMany({
+      where: {
+        isActive: true,
+        syncEnabled: true,
+        platform: 'CSV_FEED',
+      },
+      select: {
+        id: true,
+        tenantId: true,
+        name: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    let providerSyncErrors = 0;
+    for (const provider of providers) {
+      try {
+        await syncWholesaleProviderForTenant(provider.id, provider.tenantId);
+      } catch (error) {
+        providerSyncErrors += 1;
+        console.error(`[Scheduler] ❌ Failed to enqueue wholesale sync for ${provider.name}:`, error);
+      }
+    }
+
+    const activeWholesaleSyncs = await prisma.wholesaleSyncLog.count({
+      where: {
+        status: { in: [...ACTIVE_WHOLESALE_SYNC_STATUSES] },
+        provider: {
+          isActive: true,
+          syncEnabled: true,
+          platform: 'CSV_FEED',
+        },
+      },
+    });
+
+    const warningMessage = activeWholesaleSyncs > 0 ? DAILY_INVENTORY_WARNING : undefined;
+    if (warningMessage) {
+      console.warn(`[Scheduler] ⚠️ ${warningMessage} Aktywne logi hurtowni: ${activeWholesaleSyncs}`);
+    }
+
+    const shops = await prisma.shop.findMany({
+      where: {
+        status: 'ACTIVE',
+        platform: 'PRESTASHOP',
+        productMappings: {
+          some: {
+            isActive: true,
+            warehouseProductId: { not: null },
+          },
+        },
+      },
+      select: {
+        id: true,
+        name: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    let enqueued = 0;
+    let shopErrors = 0;
+    for (const shop of shops) {
+      try {
+        const result = await syncStockForShop(shop.id, 'SCHEDULED', { warningMessage });
+        enqueued += result.enqueued;
+        console.log(`[Scheduler] 📤 Inventory publication queued for ${shop.name}: ${result.enqueued} jobs`);
+      } catch (error) {
+        shopErrors += 1;
+        console.error(`[Scheduler] ❌ Inventory publication failed for ${shop.name}:`, error);
+      }
+    }
+
+    const duration = Date.now() - startTime.getTime();
+    console.log(
+      `[Scheduler] ✅ Daily inventory publication completed: ` +
+      `${providers.length} providers requested (${providerSyncErrors} errors), ` +
+      `${shops.length} shops, ${enqueued} stock jobs (${shopErrors} errors), ` +
+      `${duration}ms`
+    );
+  } catch (error) {
+    console.error('[Scheduler] ❌ Daily inventory publication failed:', error);
+  }
+}
+
+function scheduleDailyInventoryPublication() {
+  cron.schedule(
+    '30 5 * * *',
+    () => {
+      runDailyInventoryPublication();
+    },
+    { timezone: 'Europe/Warsaw' },
+  );
+
+  console.log('[Scheduler] 📅 Scheduled inventory publication: daily at 5:30 AM');
 }
 
 /**

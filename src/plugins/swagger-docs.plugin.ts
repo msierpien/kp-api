@@ -42,6 +42,7 @@ export default fp(async (fastify) => {
         { name: 'warehouse-catalogs', description: 'Katalogi produktów magazynowych' },
         { name: 'warehouse-diagnostics', description: 'Diagnostyka magazynu: logi synchronizacji, ruchy i rozbieżności stanów' },
         { name: 'wholesale', description: 'Hurtownie: providery CSV, mapowania produktów i logi sync' },
+        { name: 'stock-sync', description: 'Publikacja stanów i dostępności produktów magazynowych do sklepów' },
         { name: 'price-sync', description: 'Synchronizacja cen sprzedaży produktów magazynowych do sklepów' },
         { name: 'shop-mappings', description: 'Mapowanie produktów sklepów do produktów magazynowych' },
         { name: 'email', description: 'Email — wysyłka i ustawienia SMTP' },

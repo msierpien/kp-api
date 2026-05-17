@@ -59,6 +59,7 @@ export interface ProductsQuery {
   limit?: number;
   search?: string;
   catalogId?: string;
+  shopId?: string;
   isActive?: boolean;
   stockStatus?: 'available' | 'zero' | 'negative' | 'low';
   missingPrice?: 'purchase' | 'retail';
@@ -84,6 +85,7 @@ export async function getProducts(query: ProductsQuery = {}) {
     limit = 50,
     search,
     catalogId,
+    shopId,
     isActive,
     stockStatus,
     missingPrice,
@@ -111,9 +113,13 @@ export async function getProducts(query: ProductsQuery = {}) {
       : { none: { isActive: true } };
   }
   if (hasShopMapping !== undefined) {
+    const shopMappingFilter = {
+      isActive: true,
+      ...(shopId ? { shopId } : {}),
+    };
     where.shopProductMappings = hasShopMapping
-      ? { some: { isActive: true } }
-      : { none: { isActive: true } };
+      ? { some: shopMappingFilter }
+      : { none: shopMappingFilter };
   }
   if (hasWholesaleOffer !== undefined) {
     where.wholesaleMappings = hasWholesaleOffer
@@ -141,6 +147,24 @@ export async function getProducts(query: ProductsQuery = {}) {
             shopProductMappings: { where: { isActive: true } },
             wholesaleMappings: { where: { isActive: true } },
           },
+        },
+        shopProductMappings: {
+          where: {
+            isActive: true,
+            ...(shopId ? { shopId } : {}),
+          },
+          include: {
+            shop: {
+              select: {
+                id: true,
+                name: true,
+                platform: true,
+                status: true,
+              },
+            },
+          },
+          orderBy: { updatedAt: 'desc' },
+          take: shopId ? 10 : 5,
         },
       },
     }),

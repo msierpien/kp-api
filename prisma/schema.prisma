@@ -735,6 +735,10 @@ model StockSyncLog {
   documentId         String?   @map("document_id")
   stockBefore        Decimal?  @map("stock_before") @db.Decimal(10, 3)
   stockAfter         Decimal   @map("stock_after") @db.Decimal(10, 3)
+  publishedQuantity  Decimal?  @map("published_quantity") @db.Decimal(10, 3)
+  availabilityPolicy String?   @map("availability_policy")
+  outOfStockBehavior Int?      @map("out_of_stock_behavior")
+  warningMessage     String?   @map("warning_message") @db.Text
   status             String    @default("PENDING")
   errorMessage       String?   @map("error_message") @db.Text
   attemptCount       Int       @default(0) @map("attempt_count")

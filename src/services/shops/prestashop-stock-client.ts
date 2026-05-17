@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 import { Buffer } from 'node:buffer';
-import type { ShopProductInventorySnapshot, ShopStockClient } from './shop-stock-client.interface';
+import type { ShopProductInventorySnapshot, ShopStockClient, ShopStockUpdateOptions } from './shop-stock-client.interface';
 
 export class PrestaShopStockClient implements ShopStockClient {
   private baseUrl: string;
@@ -11,7 +11,11 @@ export class PrestaShopStockClient implements ShopStockClient {
     this.apiKey = config.apiKey;
   }
 
-  async updateStockQuantity(externalProductId: string, quantity: number): Promise<void> {
+  async updateStockQuantity(
+    externalProductId: string,
+    quantity: number,
+    options: ShopStockUpdateOptions = {},
+  ): Promise<void> {
     const stockAvailable = await this.findStockAvailable(externalProductId);
     if (!stockAvailable) {
       throw new Error(`PrestaShop stock_available not found for product ${externalProductId}`);
@@ -25,7 +29,7 @@ export class PrestaShopStockClient implements ShopStockClient {
       idShopGroup: stockAvailable.idShopGroup,
       quantity: Math.max(0, Math.floor(quantity)),
       dependsOnStock: stockAvailable.dependsOnStock ?? '0',
-      outOfStock: stockAvailable.outOfStock ?? '2',
+      outOfStock: String(options.outOfStockBehavior ?? stockAvailable.outOfStock ?? '2'),
     });
 
     await this.fetchWebService(`stock_availables/${stockAvailable.id}`, {

@@ -5,6 +5,7 @@ import * as scannerService from '../../services/admin/warehouse-scanner.service'
 import * as diagnosticsService from '../../services/admin/warehouse-diagnostics.service';
 import * as sourceMappingService from '../../services/admin/warehouse-product-source-mapping.service';
 import * as priceSyncService from '../../services/price/price-sync.service';
+import * as stockSyncService from '../../services/stock/stock-sync.service';
 import * as prestaReconciliationService from '../../services/prestashop/prestashop-reconciliation.service';
 import { getStock, getProductStock, recalculateStockCache } from '../../services/admin/warehouse-stock.service';
 
@@ -130,6 +131,7 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
           limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
           search: { type: 'string' },
           catalogId: { type: 'string' },
+          shopId: { type: 'string' },
           isActive: { type: 'boolean' },
           stockStatus: { type: 'string', enum: ['available', 'zero', 'negative', 'low'] },
           missingPrice: { type: 'string', enum: ['purchase', 'retail'] },
@@ -268,6 +270,75 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd masowego mapowania produktów';
       const status = message.includes('Brak kontekstu') ? 400 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/products/bulk/sync-stock', {
+    schema: {
+      tags: ['stock-sync'],
+      summary: 'Ręcznie wyślij stany zaznaczonych produktów do aktywnych sklepów',
+      body: {
+        type: 'object',
+        required: ['productIds'],
+        properties: {
+          productIds: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 500,
+            items: { type: 'string' },
+          },
+        },
+      },
+      response: {
+        202: {
+          type: 'object',
+          properties: {
+            enqueued: { type: 'integer' },
+            scannedMappings: { type: 'integer' },
+            affectedProducts: { type: 'integer' },
+          },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: { productIds: string[] } }>, reply: FastifyReply) => {
+    try {
+      const result = await stockSyncService.syncStockForProducts(request.body.productIds, 'MANUAL');
+      return reply.status(202).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd ręcznej synchronizacji stanów';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/shops/:shopId/sync-stock', {
+    schema: {
+      tags: ['stock-sync'],
+      summary: 'Ręcznie wyślij stany wszystkich zmapowanych produktów wskazanego sklepu',
+      params: {
+        type: 'object',
+        required: ['shopId'],
+        properties: { shopId: { type: 'string' } },
+      },
+      response: {
+        202: {
+          type: 'object',
+          properties: {
+            enqueued: { type: 'integer' },
+            scannedMappings: { type: 'integer' },
+            affectedProducts: { type: 'integer' },
+          },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { shopId: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await stockSyncService.syncStockForShop(request.params.shopId, 'MANUAL');
+      return reply.status(202).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd ręcznej synchronizacji sklepu';
+      const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }
   });
@@ -416,6 +487,37 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
       return reply.status(202).send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd synchronizacji ceny';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/products/:id/sync-stock', {
+    schema: {
+      tags: ['stock-sync'],
+      summary: 'Ręcznie wyślij stan produktu do aktywnych sklepów',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      response: {
+        202: {
+          type: 'object',
+          properties: {
+            enqueued: { type: 'integer' },
+            scannedMappings: { type: 'integer' },
+            affectedProducts: { type: 'integer' },
+          },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await stockSyncService.syncStockToAllShops(request.params.id, 'MANUAL');
+      return reply.status(202).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd synchronizacji stanu';
       const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }

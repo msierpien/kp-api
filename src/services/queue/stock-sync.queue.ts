@@ -3,7 +3,7 @@ import { getRedisConnection } from './render.queue';
 
 export const STOCK_SYNC_QUEUE_NAME = 'stock-sync';
 
-export type StockSyncTriggeredBy = 'DOCUMENT_CONFIRM' | 'DOCUMENT_CANCEL' | 'MANUAL' | 'WHOLESALE_SYNC';
+export type StockSyncTriggeredBy = 'DOCUMENT_CONFIRM' | 'DOCUMENT_CANCEL' | 'MANUAL' | 'WHOLESALE_SYNC' | 'SCHEDULED';
 
 export interface StockSyncJobData {
   logId: string;

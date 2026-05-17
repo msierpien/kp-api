@@ -21,6 +21,7 @@ import {
   disableShopSync,
   updateShopSyncInterval,
 } from '../../services/scheduler/scheduler.service';
+import * as shopWebhookService from '../../services/webhooks/prestashop-order-webhook.service';
 
 const shopResponseSchema = {
   type: 'object',
@@ -62,6 +63,40 @@ const testConnectionResponseSchema = {
     latencyMs: { type: 'number' },
     message: { type: 'string' },
   },
+};
+
+const webhookSettingsResponseSchema = {
+  type: 'object',
+  properties: {
+    enabled: { type: 'boolean' },
+    webhookUrl: { type: 'string' },
+    secret: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    timestampToleranceSeconds: { type: 'number' },
+    paidStatusIds: { type: 'array', items: { type: 'string' } },
+    releaseStatusIds: { type: 'array', items: { type: 'string' } },
+    signaturePayload: { type: 'string' },
+    eventTypes: { type: 'array', items: { type: 'string' } },
+  },
+};
+
+const webhookEventSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    shopId: { type: 'string' },
+    eventKey: { type: 'string' },
+    eventType: { type: 'string' },
+    externalOrderId: { type: 'string' },
+    prestashopShopId: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    orderStatusId: { type: 'string' },
+    orderStatusName: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    status: { type: 'string' },
+    errorMessage: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    receivedAt: { type: 'string' },
+    processedAt: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    failedAt: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+  },
+  additionalProperties: true,
 };
 
 export async function shopsRoutes(fastify: FastifyInstance) {
@@ -250,6 +285,206 @@ export async function shopsRoutes(fastify: FastifyInstance) {
         const message = error instanceof Error ? error.message : 'Nie udało się sprawdzić gotowości importu';
         const status = message.includes('nie znalezion') ? 404 : 400;
         return reply.status(status).send({ error: 'Error', message });
+      }
+    }
+  );
+
+  fastify.get<{ Params: ShopIdParamsInput }>(
+    '/:id/webhook',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Pobierz konfigurację webhooka PrestaShop dla sklepu',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: { 200: webhookSettingsResponseSchema },
+      },
+    },
+    async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
+      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: paramsParsed.error.errors[0].message,
+        });
+      }
+
+      try {
+        const result = await shopWebhookService.getShopWebhookSettings(paramsParsed.data.id);
+        return reply.send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Nie udało się pobrać konfiguracji webhooka';
+        return reply.status(message === 'Shop not found' ? 404 : 500).send({
+          error: message === 'Shop not found' ? 'Not Found' : 'Internal Server Error',
+          message,
+        });
+      }
+    }
+  );
+
+  fastify.put<{ Params: ShopIdParamsInput; Body: { enabled?: boolean } }>(
+    '/:id/webhook',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Zaktualizuj ustawienia webhooka PrestaShop',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        body: {
+          type: 'object',
+          properties: {
+            enabled: { type: 'boolean' },
+          },
+        },
+        response: { 200: webhookSettingsResponseSchema },
+      },
+    },
+    async (
+      request: FastifyRequest<{ Params: ShopIdParamsInput; Body: { enabled?: boolean } }>,
+      reply: FastifyReply
+    ) => {
+      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: paramsParsed.error.errors[0].message,
+        });
+      }
+
+      try {
+        const result = await shopWebhookService.updateShopWebhookSettings(paramsParsed.data.id, request.body || {});
+        return reply.send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Nie udało się zapisać konfiguracji webhooka';
+        return reply.status(message === 'Shop not found' ? 404 : 500).send({
+          error: message === 'Shop not found' ? 'Not Found' : 'Internal Server Error',
+          message,
+        });
+      }
+    }
+  );
+
+  fastify.post<{ Params: ShopIdParamsInput }>(
+    '/:id/webhook-secret/rotate',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Wygeneruj nowy sekret webhooka PrestaShop',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: { 200: webhookSettingsResponseSchema },
+      },
+    },
+    async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
+      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: paramsParsed.error.errors[0].message,
+        });
+      }
+
+      try {
+        const result = await shopWebhookService.rotateShopWebhookSecret(paramsParsed.data.id);
+        return reply.send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Nie udało się wygenerować sekretu webhooka';
+        return reply.status(message === 'Shop not found' ? 404 : 500).send({
+          error: message === 'Shop not found' ? 'Not Found' : 'Internal Server Error',
+          message,
+        });
+      }
+    }
+  );
+
+  fastify.get<{ Params: ShopIdParamsInput; Querystring: shopWebhookService.ShopWebhookEventsQuery }>(
+    '/:id/webhook-events',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Lista zdarzeń webhooka PrestaShop dla sklepu',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        querystring: {
+          type: 'object',
+          properties: {
+            page: { type: 'integer', minimum: 1 },
+            limit: { type: 'integer', minimum: 1, maximum: 100 },
+            status: { type: 'string', enum: ['PENDING', 'PROCESSED', 'FAILED'] },
+          },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              data: { type: 'array', items: webhookEventSchema },
+              total: { type: 'number' },
+              page: { type: 'number' },
+              limit: { type: 'number' },
+              totalPages: { type: 'number' },
+            },
+          },
+        },
+      },
+    },
+    async (
+      request: FastifyRequest<{ Params: ShopIdParamsInput; Querystring: shopWebhookService.ShopWebhookEventsQuery }>,
+      reply: FastifyReply
+    ) => {
+      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: paramsParsed.error.errors[0].message,
+        });
+      }
+
+      try {
+        const result = await shopWebhookService.listShopWebhookEvents(paramsParsed.data.id, request.query);
+        return reply.send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Nie udało się pobrać zdarzeń webhooka';
+        return reply.status(message === 'Shop not found' ? 404 : 500).send({
+          error: message === 'Shop not found' ? 'Not Found' : 'Internal Server Error',
+          message,
+        });
+      }
+    }
+  );
+
+  fastify.post<{ Params: ShopIdParamsInput & { eventId: string } }>(
+    '/:id/webhook-events/:eventId/reprocess',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Ponownie przetwórz zdarzenie webhooka PrestaShop',
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            eventId: { type: 'string' },
+          },
+        },
+        response: { 200: { type: 'object', additionalProperties: true } },
+      },
+    },
+    async (
+      request: FastifyRequest<{ Params: ShopIdParamsInput & { eventId: string } }>,
+      reply: FastifyReply
+    ) => {
+      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
+      if (!paramsParsed.success || !request.params.eventId) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: paramsParsed.success ? 'eventId is required' : paramsParsed.error.errors[0].message,
+        });
+      }
+
+      try {
+        const result = await shopWebhookService.reprocessShopWebhookEvent(paramsParsed.data.id, request.params.eventId);
+        return reply.send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Nie udało się ponowić zdarzenia webhooka';
+        return reply.status(message.includes('not found') ? 404 : 500).send({
+          error: message.includes('not found') ? 'Not Found' : 'Internal Server Error',
+          message,
+        });
       }
     }
   );

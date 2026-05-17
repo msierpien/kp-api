@@ -33,6 +33,7 @@ export default fp(async (fastify) => {
       tags: [
         { name: 'auth', description: 'Autentykacja i autoryzacja' },
         { name: 'personalization', description: 'Portal klienta — personalizacja produktów (publiczne)' },
+        { name: 'webhooks', description: 'Publiczne webhooki integracji sklepów' },
         { name: 'cases', description: 'Zarządzanie case\'ami personalizacji' },
         { name: 'orders', description: 'Zamówienia' },
         { name: 'shops', description: 'Integracje z platformami e-commerce' },

@@ -96,6 +96,7 @@ model Shop {
   stockSyncLogs        StockSyncLog[]
   priceSyncLogs        PriceSyncLog[]
   productImportLogs    ShopProductImportLog[]
+  webhookEvents        ShopWebhookEvent[]
 
   @@index([tenantId])
   @@index([status])
@@ -208,6 +209,34 @@ model SyncLog {
   @@index([startedAt])
   @@index([status])
   @@map("sync_logs")
+}
+
+model ShopWebhookEvent {
+  id                String    @id @default(cuid())
+  shopId            String    @map("shop_id")
+  eventKey          String    @unique @map("event_key")
+  eventType         String    @map("event_type")
+  externalOrderId   String    @map("external_order_id")
+  prestashopShopId  String?   @map("prestashop_shop_id")
+  orderStatusId     String    @map("order_status_id")
+  orderStatusName   String?   @map("order_status_name")
+  status            String    @default("PENDING")
+  payloadHash       String    @map("payload_hash")
+  payloadJson       Json      @map("payload_json")
+  errorMessage      String?   @map("error_message") @db.Text
+  receivedAt        DateTime  @default(now()) @map("received_at")
+  processedAt       DateTime? @map("processed_at")
+  failedAt          DateTime? @map("failed_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, receivedAt])
+  @@index([shopId, status])
+  @@index([eventType])
+  @@index([externalOrderId])
+  @@map("shop_webhook_events")
 }
 
 // ============================================

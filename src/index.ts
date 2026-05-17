@@ -13,6 +13,7 @@ import requestContext from '@fastify/request-context';
 import { authRoutes } from './routes/auth.routes';
 import { adminRoutes } from './routes/admin';
 import { personalizationRoutes } from './routes/public/personalization.routes';
+import { prestashopWebhooksRoutes } from './routes/public/prestashop-webhooks.routes';
 import { reloadEmailService } from './services/admin/email-settings.service';
 import { initializeEmailService } from './services/email/email.service';
 import { initializeScheduler } from './services/scheduler/scheduler.service';
@@ -197,6 +198,7 @@ if (process.env.DOCS_ENABLED !== 'false') {
 server.register(authRoutes, { prefix: '/auth' });
 server.register(adminRoutes, { prefix: '/admin' });
 server.register(personalizationRoutes, { prefix: '/personalization' });
+server.register(prestashopWebhooksRoutes, { prefix: '/webhooks/prestashop' });
 
 // Bull Board Dashboard (tylko w development lub z flagą)
 if (config.app.isDevelopment) {

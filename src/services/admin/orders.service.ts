@@ -6,6 +6,7 @@ import { config } from '../../config';
 import { emailService } from '../email/email.service';
 import { queuePersonalizationEmail } from '../queue/email.queue';
 import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
+import { releaseOrderReservations, reserveOrder } from './warehouse-reservations.service';
 
 function normalizeSku(value: string): string {
   return value.trim();
@@ -124,6 +125,7 @@ export async function createManualOrder(data: CreateManualOrderInput): Promise<M
           productNameSnapshot: item.productName.trim(),
           quantity: item.quantity,
           personalizedProductId: personalizedProduct?.id || null,
+          warehouseProductId: shopMapping?.warehouseProductId || null,
         },
       });
 
@@ -163,6 +165,8 @@ export async function createManualOrder(data: CreateManualOrderInput): Promise<M
   // Trigger automations for created cases (after transaction commits)
   const { triggerAutomations, AutomationTrigger } = await import('./automation.service');
   const { createWzForOrder, shouldAutoCreateWzForTenant } = await import('./warehouse.service');
+
+  await reserveOrder(order.id);
 
   if (await shouldAutoCreateWzForTenant(shop.tenantId)) {
     await createWzForOrder(order.id);
@@ -219,6 +223,8 @@ export async function deleteOrder(orderId: string): Promise<void> {
   }
 
   // Usuń w transakcji
+  await releaseOrderReservations(orderId);
+
   await prisma.$transaction(async (tx) => {
     // Usuń wszystkie case'y powiązane z zamówieniem
     await tx.personalizationCase.deleteMany({

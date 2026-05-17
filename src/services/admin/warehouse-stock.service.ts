@@ -27,12 +27,16 @@ export async function getStock(): Promise<StockEntry[]> {
         include: { document: true },
         where: { document: { status: 'CONFIRMED' } },
       },
+      warehouseReservations: {
+        where: { status: 'ACTIVE' },
+        select: { quantity: true },
+      },
     },
     orderBy: { name: 'asc' },
   });
 
   return products.map((product) => {
-    const quantity = calculateQuantity(product.items);
+    const quantity = calculateQuantity(product.items, product.warehouseReservations);
     return { productId: product.id, sku: product.sku, name: product.name, unit: product.unit, quantity };
   });
 }
@@ -49,12 +53,16 @@ export async function getProductStock(productId: string): Promise<StockEntry | n
         include: { document: true },
         where: { document: { status: 'CONFIRMED' } },
       },
+      warehouseReservations: {
+        where: { status: 'ACTIVE' },
+        select: { quantity: true },
+      },
     },
   });
 
   if (!product) return null;
 
-  const quantity = calculateQuantity(product.items);
+  const quantity = calculateQuantity(product.items, product.warehouseReservations);
 
   return { productId: product.id, sku: product.sku, name: product.name, unit: product.unit, quantity };
 }
@@ -70,6 +78,10 @@ export async function recalculateStockCache() {
         include: { document: true },
         where: { document: { status: 'CONFIRMED' } },
       },
+      warehouseReservations: {
+        where: { status: 'ACTIVE' },
+        select: { quantity: true },
+      },
     },
   });
 
@@ -77,7 +89,7 @@ export async function recalculateStockCache() {
     products.map((product) =>
       prisma.warehouseProduct.update({
         where: { id: product.id },
-        data: { currentStock: new Prisma.Decimal(calculateQuantity(product.items)) },
+        data: { currentStock: new Prisma.Decimal(calculateQuantity(product.items, product.warehouseReservations)) },
       }),
     ),
   );
@@ -85,7 +97,10 @@ export async function recalculateStockCache() {
   return { updated: products.length };
 }
 
-function calculateQuantity(items: Array<{ quantity: Prisma.Decimal; document: { type: string } }>) {
+function calculateQuantity(
+  items: Array<{ quantity: Prisma.Decimal; document: { type: string } }>,
+  reservations: Array<{ quantity: Prisma.Decimal }> = [],
+) {
   let quantity = 0;
   for (const item of items) {
     const type = item.document.type;
@@ -95,6 +110,9 @@ function calculateQuantity(items: Array<{ quantity: Prisma.Decimal; document: { 
     } else if (OUTGOING_TYPES.includes(type)) {
       quantity -= qty;
     }
+  }
+  for (const reservation of reservations) {
+    quantity -= Number(reservation.quantity);
   }
   return quantity;
 }

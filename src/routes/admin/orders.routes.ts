@@ -49,6 +49,15 @@ export async function ordersRoutes(fastify: FastifyInstance) {
                   updatedAt: true,
                 },
               },
+              warehouseProduct: {
+                select: {
+                  id: true,
+                  sku: true,
+                  name: true,
+                  unit: true,
+                  currentStock: true,
+                },
+              },
             },
           },
         },
@@ -120,6 +129,15 @@ export async function ordersRoutes(fastify: FastifyInstance) {
                     updatedAt: true,
                   },
                 },
+                warehouseProduct: {
+                  select: {
+                    id: true,
+                    sku: true,
+                    name: true,
+                    unit: true,
+                    currentStock: true,
+                  },
+                },
               },
             },
           },
@@ -169,6 +187,48 @@ export async function ordersRoutes(fastify: FastifyInstance) {
         return reply.send(result);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Błąd pobierania rezerwacji zamówienia';
+        const status = message.includes('nie znalezion') ? 404 : 400;
+        return reply.status(status).send({ error: 'Error', message });
+      }
+    }
+  );
+
+  fastify.post<{ Params: OrderParams }>(
+    '/:id/reserve',
+    {
+      schema: {
+        tags: ['warehouse-reservations'],
+        summary: 'Utwórz lub uzupełnij rezerwacje magazynowe zamówienia',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      },
+    },
+    async (request: FastifyRequest<{ Params: OrderParams }>, reply: FastifyReply) => {
+      try {
+        const result = await reservationService.reserveOrder(request.params.id);
+        return reply.send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Błąd rezerwacji zamówienia';
+        const status = message.includes('nie znalezion') ? 404 : 400;
+        return reply.status(status).send({ error: 'Error', message });
+      }
+    }
+  );
+
+  fastify.post<{ Params: OrderParams }>(
+    '/:id/release-reservations',
+    {
+      schema: {
+        tags: ['warehouse-reservations'],
+        summary: 'Zwolnij aktywne rezerwacje magazynowe zamówienia',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      },
+    },
+    async (request: FastifyRequest<{ Params: OrderParams }>, reply: FastifyReply) => {
+      try {
+        const result = await reservationService.releaseOrderReservations(request.params.id);
+        return reply.send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Błąd zwalniania rezerwacji zamówienia';
         const status = message.includes('nie znalezion') ? 404 : 400;
         return reply.status(status).send({ error: 'Error', message });
       }

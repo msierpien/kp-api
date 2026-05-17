@@ -168,17 +168,20 @@ model OrderItem {
   productNameSnapshot   String   @map("product_name_snapshot")
   quantity              Int
   personalizedProductId String?  @map("personalized_product_id")
+  warehouseProductId    String?  @map("warehouse_product_id")
   createdAt             DateTime @default(now()) @map("created_at")
   updatedAt             DateTime @updatedAt @map("updated_at")
 
   order                 Order                  @relation(fields: [orderId], references: [id], onDelete: Cascade)
   personalizedProduct   PersonalizedProduct?   @relation(fields: [personalizedProductId], references: [id], onDelete: SetNull)
+  warehouseProduct      WarehouseProduct?      @relation(fields: [warehouseProductId], references: [id], onDelete: SetNull)
   personalizationCase   PersonalizationCase?
   warehouseReservations WarehouseReservation[]
 
   @@index([orderId])
   @@index([sku])
   @@index([personalizedProductId])
+  @@index([warehouseProductId])
   @@map("order_items")
 }
 
@@ -567,6 +570,7 @@ model WarehouseProduct {
   priceSyncLogs         PriceSyncLog[]
   wholesaleMappings     WholesaleProductMapping[]
   warehouseReservations WarehouseReservation[]
+  orderItems            OrderItem[]
 
   @@unique([tenantId, sku])
   @@index([tenantId])
@@ -693,10 +697,11 @@ model WarehouseReservation {
   createdAt          DateTime                   @default(now()) @map("created_at")
   updatedAt          DateTime                   @updatedAt @map("updated_at")
 
-  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  warehouseProduct WarehouseProduct @relation(fields: [warehouseProductId], references: [id], onDelete: Restrict)
-  order            Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  orderItem        OrderItem?       @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+  tenant           Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseProduct WarehouseProduct        @relation(fields: [warehouseProductId], references: [id], onDelete: Restrict)
+  order            Order                   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderItem        OrderItem?              @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+  documentItems    WarehouseDocumentItem[]
 
   @@index([tenantId])
   @@index([warehouseProductId])
@@ -757,14 +762,17 @@ model WarehouseDocumentItem {
   baseQuantity       Decimal? @map("base_quantity") @db.Decimal(10, 3)
   quantityMultiplier Decimal? @map("quantity_multiplier") @db.Decimal(10, 3)
   notes              String?
+  reservationId      String?  @map("reservation_id")
 
-  document WarehouseDocument        @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  product  WarehouseProduct         @relation(fields: [productId], references: [id])
-  barcode  WarehouseProductBarcode? @relation(fields: [barcodeId], references: [id], onDelete: SetNull)
+  document    WarehouseDocument        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  product     WarehouseProduct         @relation(fields: [productId], references: [id])
+  barcode     WarehouseProductBarcode? @relation(fields: [barcodeId], references: [id], onDelete: SetNull)
+  reservation WarehouseReservation?    @relation(fields: [reservationId], references: [id], onDelete: SetNull)
 
   @@index([documentId])
   @@index([productId])
   @@index([barcodeId])
+  @@index([reservationId])
   @@map("warehouse_document_items")
 }
 

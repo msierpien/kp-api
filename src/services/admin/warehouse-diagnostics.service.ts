@@ -381,6 +381,10 @@ export async function getStockDiscrepancies(query: StockDiscrepanciesQuery = {})
         where: { document: { status: 'CONFIRMED' } },
         include: { document: { select: { type: true } } },
       },
+      warehouseReservations: {
+        where: { status: 'ACTIVE' },
+        select: { quantity: true },
+      },
     },
     orderBy: { name: 'asc' },
   });
@@ -390,8 +394,12 @@ export async function getStockDiscrepancies(query: StockDiscrepanciesQuery = {})
       const calculatedStock = product.items.reduce((stock, item) => {
         return stock + Number(item.quantity) * getDocumentDirection(item.document.type);
       }, 0);
+      const activeReservedQuantity = product.warehouseReservations.reduce((sum, reservation) => {
+        return sum + Number(reservation.quantity);
+      }, 0);
       const currentStock = Number(product.currentStock);
-      const difference = currentStock - calculatedStock;
+      const calculatedAvailableStock = calculatedStock - activeReservedQuantity;
+      const difference = currentStock - calculatedAvailableStock;
 
       return {
         product: {
@@ -402,7 +410,7 @@ export async function getStockDiscrepancies(query: StockDiscrepanciesQuery = {})
           catalog: product.catalog,
         },
         currentStock,
-        calculatedStock,
+        calculatedStock: calculatedAvailableStock,
         difference,
       };
     })

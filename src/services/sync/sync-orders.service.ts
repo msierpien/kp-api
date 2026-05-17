@@ -4,6 +4,7 @@ import { decrypt } from '../../lib/encryption';
 import { emailService } from '../email/email.service';
 import { generateAccessToken } from '../../lib/token';
 import { createWzForOrder, shouldAutoCreateWzForTenant } from '../admin/warehouse.service';
+import { reserveOrder } from '../admin/warehouse-reservations.service';
 import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
 
 const DEBUG_SHOP_SYNC = process.env.DEBUG_SHOP_SYNC === 'true';
@@ -130,6 +131,15 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
         });
 
         if (existingOrder) {
+          try {
+            await reserveOrder(existingOrder.id);
+            if (await shouldAutoCreateWzForTenant(shop.tenantId)) {
+              await createWzForOrder(existingOrder.id);
+            }
+          } catch (reservationError) {
+            const message = reservationError instanceof Error ? reservationError.message : 'Unknown reservation error';
+            result.errors.push(`Order ${orderData.id}: reservation not updated: ${message}`);
+          }
           result.ordersSkipped++;
           continue;
         }
@@ -253,6 +263,7 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
               productNameSnapshot: item.product_name,
               quantity: item.quantity,
               personalizedProductId: personalizedProduct?.id ?? null,
+              warehouseProductId: shopMapping?.warehouseProductId ?? null,
             },
           });
 
@@ -302,6 +313,16 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
             quantity: item.quantity,
             token: customerToken, // Oryginalny token dla klienta (nie hash!)
           });
+        }
+
+        try {
+          const reservationResult = await reserveOrder(order.id);
+          if (DEBUG_SHOP_SYNC) {
+            console.log(`[Sync] Order ${orderData.id} reservations:`, reservationResult);
+          }
+        } catch (reservationError) {
+          const message = reservationError instanceof Error ? reservationError.message : 'Unknown reservation error';
+          result.errors.push(`Order ${orderData.id}: reservation not created: ${message}`);
         }
 
         if (await shouldAutoCreateWzForTenant(shop.tenantId)) {

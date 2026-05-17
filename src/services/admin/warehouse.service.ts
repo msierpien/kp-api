@@ -4,6 +4,7 @@ import { getTenantContext, getTenantId } from '../../lib/tenant-context';
 import { syncStockForProducts } from '../stock/stock-sync.service';
 import { syncProductPrice } from '../price/price-sync.service';
 import { resolveCatalogForProduct } from './warehouse-catalogs.service';
+import { consumeDocumentReservations, releaseDocumentReservations, reserveOrder } from './warehouse-reservations.service';
 
 // ─── Products ────────────────────────────────────────────────────────────────
 
@@ -463,6 +464,7 @@ export interface DocumentItemInput {
   quantityMultiplier?: number;
   unitPrice?: number;
   notes?: string;
+  reservationId?: string | null;
 }
 
 export interface CreateDocumentInput {
@@ -518,6 +520,7 @@ interface PreparedDocumentItem {
   quantityMultiplier?: number;
   unitPrice?: number;
   notes?: string;
+  reservationId?: string | null;
 }
 
 export async function getDocuments(query: DocumentsQuery = {}) {
@@ -592,6 +595,7 @@ export async function createDocument(input: CreateDocumentInput) {
             quantityMultiplier: item.quantityMultiplier,
             unitPrice: item.unitPrice,
             notes: item.notes,
+            reservationId: item.reservationId,
           })),
         },
       },
@@ -633,80 +637,49 @@ export async function createWzForOrder(orderId: string): Promise<CreateWzForOrde
     return { document: null, created: false, skippedReason: 'Zamówienie nie ma pozycji' };
   }
 
-  const mappings = await prisma.shopProductMapping.findMany({
+  let activeReservations = await prisma.warehouseReservation.findMany({
     where: {
       tenantId: order.shop.tenantId,
-      shopId: order.shopId,
-      isActive: true,
-      warehouseProductId: { not: null },
+      orderId: order.id,
+      status: 'ACTIVE',
     },
-    include: { warehouseProduct: true },
+    include: {
+      warehouseProduct: true,
+      orderItem: true,
+    },
+    orderBy: { createdAt: 'asc' },
   });
 
-  const mappingBySku = new Map(
-    mappings.map((mapping) => [normalizeSku(mapping.externalSku), mapping]),
-  );
-
-  const itemsByProduct = new Map<string, {
-    productId: string;
-    quantity: number;
-    productName: string;
-    currentStock: number;
-  }>();
-
-  for (const item of order.items) {
-    const mapping = mappingBySku.get(normalizeSku(item.sku));
-    if (!mapping?.warehouseProduct) continue;
-
-    const existing = itemsByProduct.get(mapping.warehouseProduct.id);
-    if (existing) {
-      existing.quantity += item.quantity;
-      continue;
-    }
-
-    itemsByProduct.set(mapping.warehouseProduct.id, {
-      productId: mapping.warehouseProduct.id,
-      quantity: item.quantity,
-      productName: mapping.warehouseProduct.name,
-      currentStock: Number(mapping.warehouseProduct.currentStock),
+  let reservationResult: Awaited<ReturnType<typeof reserveOrder>> | null = null;
+  if (activeReservations.length === 0) {
+    reservationResult = await reserveOrder(order.id);
+    activeReservations = await prisma.warehouseReservation.findMany({
+      where: {
+        tenantId: order.shop.tenantId,
+        orderId: order.id,
+        status: 'ACTIVE',
+      },
+      include: {
+        warehouseProduct: true,
+        orderItem: true,
+      },
+      orderBy: { createdAt: 'asc' },
     });
   }
 
-  const items = Array.from(itemsByProduct.values());
-  if (items.length === 0) {
-    return { document: null, created: false, skippedReason: 'Brak pozycji zamówienia powiązanych z magazynem' };
+  if (activeReservations.length === 0) {
+    return { document: null, created: false, skippedReason: 'Brak aktywnych rezerwacji do wydania WZ' };
   }
 
-  const stockWarning = items.some((item) => item.currentStock - item.quantity < 0);
+  const stockWarning = Boolean(
+    reservationResult && (reservationResult.partial > 0 || reservationResult.missingMapping > 0 || reservationResult.missingStock > 0),
+  );
   const settings = await getWarehouseSettings(order.shop.tenantId);
-
-  if (settings.autoConfirmWzOnOrder) {
-    await assertCanConfirmWithoutNegativeStock(
-      order.shop.tenantId,
-      'WZ',
-      items.map((item) => ({
-        productId: item.productId,
-        quantity: new Prisma.Decimal(item.quantity),
-        product: { name: item.productName, unit: 'szt' },
-      })),
-    );
-  }
 
   const document = await prisma.$transaction(async (tx) => {
     const number = await generateDocumentNumber(tx, order.shop.tenantId, 'WZ');
 
-    if (settings.autoConfirmWzOnOrder) {
-      await applyStockDeltas(
-        tx,
-        'WZ',
-        items.map((item) => ({
-          productId: item.productId,
-          quantity: new Prisma.Decimal(item.quantity),
-        })),
-      );
-    }
-
-    return tx.warehouseDocument.create({
+    const createdDocument = await tx.warehouseDocument.create({
       data: {
         tenantId: order.shop.tenantId,
         number,
@@ -716,18 +689,27 @@ export async function createWzForOrder(orderId: string): Promise<CreateWzForOrde
         description: `WZ automatyczne dla zamówienia ${order.orderReference}`,
         orderId: order.id,
         isAutoGenerated: true,
-        metadataJson: stockWarning ? { stockWarning: true } : undefined,
+        metadataJson: stockWarning
+          ? { stockWarning: true, reservationIssues: JSON.parse(JSON.stringify(reservationResult?.issues ?? [])) }
+          : undefined,
         confirmedAt: settings.autoConfirmWzOnOrder ? new Date() : undefined,
         items: {
-          create: items.map((item) => ({
-            productId: item.productId,
-            quantity: item.quantity,
+          create: activeReservations.map((reservation) => ({
+            productId: reservation.warehouseProductId,
+            quantity: reservation.quantity,
+            reservationId: reservation.id,
             notes: `Zamówienie ${order.orderReference}`,
           })),
         },
       },
       include: { items: { include: { product: true, barcode: true } }, order: true },
     });
+
+    if (settings.autoConfirmWzOnOrder) {
+      await consumeDocumentReservations(tx, createdDocument.items);
+    }
+
+    return createdDocument;
   });
 
   return { document, created: true };
@@ -758,12 +740,13 @@ export async function updateDocument(id: string, input: UpdateDocumentInput) {
         barcodeId: item.barcodeId,
         scannedEan: item.scannedEan,
         baseQuantity: item.baseQuantity,
-        quantityMultiplier: item.quantityMultiplier,
-        unitPrice: item.unitPrice,
-        notes: item.notes,
-      })),
-    };
-  }
+            quantityMultiplier: item.quantityMultiplier,
+            unitPrice: item.unitPrice,
+            notes: item.notes,
+            reservationId: item.reservationId,
+          })),
+        };
+      }
 
   return prisma.warehouseDocument.update({
     where: { id },
@@ -820,6 +803,7 @@ export async function mergeDocumentItem(documentId: string, input: DocumentItemI
           quantityMultiplier: preparedItem.quantityMultiplier,
           unitPrice: preparedItem.unitPrice,
           notes: preparedItem.notes,
+          reservationId: preparedItem.reservationId,
         },
       });
     }
@@ -914,6 +898,7 @@ export async function confirmDocument(id: string) {
 
   const confirmedDocument = await prisma.$transaction(async (tx) => {
     await applyStockDeltas(tx, doc.type, doc.items);
+    await consumeDocumentReservations(tx, doc.items);
 
     return tx.warehouseDocument.update({
       where: { id },
@@ -938,7 +923,7 @@ export async function confirmDocument(id: string) {
 async function assertCanConfirmWithoutNegativeStock(
   tenantId: string,
   type: DocumentType,
-  items: Array<{ productId: string; quantity: Prisma.Decimal; product: { name: string; unit: string } }>,
+  items: Array<{ productId: string; quantity: Prisma.Decimal; reservationId?: string | null; product: { name: string; unit: string } }>,
 ) {
   if (!['WZ', 'RW'].includes(type)) return;
 
@@ -948,6 +933,8 @@ async function assertCanConfirmWithoutNegativeStock(
   const requestedByProduct = new Map<string, { quantity: number; name: string; unit: string }>();
 
   for (const item of items) {
+    if (type === 'WZ' && item.reservationId) continue;
+
     const existing = requestedByProduct.get(item.productId);
     const quantity = Number(item.quantity);
 
@@ -994,35 +981,43 @@ export async function shouldAutoCreateWzForTenant(tenantId: string) {
   return settings.autoCreateWzOnOrder;
 }
 
-function normalizeSku(value: string) {
-  return value.trim().toLowerCase();
-}
-
 function pricesEqual(currentPrice: Prisma.Decimal | null, nextPrice: number) {
   if (currentPrice === null) return false;
   return Math.abs(Number(currentPrice) - nextPrice) < 0.005;
 }
 
 async function calculateProductStock(tenantId: string, productId: string) {
-  const items = await prisma.warehouseDocumentItem.findMany({
-    where: {
-      productId,
-      document: {
-        tenantId,
-        status: 'CONFIRMED',
+  const [items, activeReservations] = await Promise.all([
+    prisma.warehouseDocumentItem.findMany({
+      where: {
+        productId,
+        document: {
+          tenantId,
+          status: 'CONFIRMED',
+        },
       },
-    },
-    include: {
-      document: true,
-    },
-  });
+      include: {
+        document: true,
+      },
+    }),
+    prisma.warehouseReservation.findMany({
+      where: {
+        tenantId,
+        warehouseProductId: productId,
+        status: 'ACTIVE',
+      },
+      select: { quantity: true },
+    }),
+  ]);
 
-  return items.reduce((stock, item) => {
+  const documentStock = items.reduce((stock, item) => {
     const quantity = Number(item.quantity);
     if (['PZ', 'PW'].includes(item.document.type)) return stock + quantity;
     if (['WZ', 'RW'].includes(item.document.type)) return stock - quantity;
     return stock;
   }, 0);
+  const reservedStock = activeReservations.reduce((sum, reservation) => sum + Number(reservation.quantity), 0);
+  return documentStock - reservedStock;
 }
 
 export async function cancelDocument(id: string, input: CancelDocumentInput = {}) {
@@ -1041,6 +1036,7 @@ export async function cancelDocument(id: string, input: CancelDocumentInput = {}
   const cancelledDocument = await prisma.$transaction(async (tx) => {
     if (doc.status === 'CONFIRMED') {
       await applyStockDeltas(tx, doc.type, doc.items, true);
+      await releaseDocumentReservations(tx, doc.items);
     }
 
     return tx.warehouseDocument.update({
@@ -1147,6 +1143,7 @@ async function prepareDocumentItems(
       quantityMultiplier,
       unitPrice: item.unitPrice,
       notes: item.notes,
+      reservationId: item.reservationId ?? null,
     });
   }
 
@@ -1156,7 +1153,7 @@ async function prepareDocumentItems(
 async function applyStockDeltas(
   tx: Prisma.TransactionClient,
   type: DocumentType,
-  items: Array<{ productId: string; quantity: Prisma.Decimal }>,
+  items: Array<{ productId: string; quantity: Prisma.Decimal; reservationId?: string | null }>,
   reverse = false,
 ) {
   const baseSign = getStockDeltaSign(type);
@@ -1166,6 +1163,8 @@ async function applyStockDeltas(
   const deltas = new Map<string, Prisma.Decimal>();
 
   for (const item of items) {
+    if (type === 'WZ' && item.reservationId) continue;
+
     const current = deltas.get(item.productId) ?? new Prisma.Decimal(0);
     deltas.set(item.productId, current.plus(item.quantity.mul(sign)));
   }

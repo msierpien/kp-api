@@ -19,32 +19,33 @@ enum TenantStatus {
 }
 
 model Tenant {
-  id         String       @id @default(cuid())
-  name       String // np. "Kreatywne Papierki"
-  slug       String       @unique // np. "kreatywne-papierki"
-  status     TenantStatus @default(ACTIVE)
-  plan       String       @default("FREE") // FREE, BASIC, PRO, ENTERPRISE
-  limitsJson Json?        @map("limits_json") // { max_shops: 5, max_users: 10, max_cases_per_month: 1000 }
-  featuresJson Json?      @map("features_json") // { personalization_editor: true }
-  createdAt  DateTime     @default(now()) @map("created_at")
-  updatedAt  DateTime     @updatedAt @map("updated_at")
+  id           String       @id @default(cuid())
+  name         String // np. "Kreatywne Papierki"
+  slug         String       @unique // np. "kreatywne-papierki"
+  status       TenantStatus @default(ACTIVE)
+  plan         String       @default("FREE") // FREE, BASIC, PRO, ENTERPRISE
+  limitsJson   Json?        @map("limits_json") // { max_shops: 5, max_users: 10, max_cases_per_month: 1000 }
+  featuresJson Json?        @map("features_json") // { personalization_editor: true }
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
 
   // Relations
-  users               User[]
-  shops               Shop[]
-  templates           PersonalizationTemplate[]
-  emailSettings       EmailSettings[]
-  warehouseProducts   WarehouseProduct[]
-  warehouseCatalogs   WarehouseCatalog[]
-  warehouseDocuments  WarehouseDocument[]
-  warehouseBarcodes   WarehouseProductBarcode[]
-  shopProductMappings ShopProductMapping[]
-  stockSyncLogs       StockSyncLog[]
-  priceSyncLogs       PriceSyncLog[]
+  users                 User[]
+  shops                 Shop[]
+  templates             PersonalizationTemplate[]
+  emailSettings         EmailSettings[]
+  warehouseProducts     WarehouseProduct[]
+  warehouseCatalogs     WarehouseCatalog[]
+  warehouseDocuments    WarehouseDocument[]
+  warehouseBarcodes     WarehouseProductBarcode[]
+  shopProductMappings   ShopProductMapping[]
+  stockSyncLogs         StockSyncLog[]
+  priceSyncLogs         PriceSyncLog[]
   shopProductImportLogs ShopProductImportLog[]
-  wholesaleProviders  WholesaleProvider[]
-  wholesaleMappings   WholesaleProductMapping[]
-  wholesaleSyncLogs   WholesaleSyncLog[]
+  wholesaleProviders    WholesaleProvider[]
+  wholesaleMappings     WholesaleProductMapping[]
+  wholesaleSyncLogs     WholesaleSyncLog[]
+  warehouseReservations WarehouseReservation[]
 
   @@index([status])
   @@index([slug])
@@ -87,7 +88,7 @@ model Shop {
   createdAt    DateTime     @default(now()) @map("created_at")
   updatedAt    DateTime     @updatedAt @map("updated_at")
 
-  tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant               Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   orders               Order[]
   syncLogs             SyncLog[]
   personalizedProducts PersonalizedProduct[]
@@ -146,11 +147,12 @@ model Order {
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  shop                 Shop                  @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  items                OrderItem[]
-  personalizationCases PersonalizationCase[]
-  accessPins           OrderAccessPin[]
-  warehouseDocuments   WarehouseDocument[]
+  shop                  Shop                   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  items                 OrderItem[]
+  personalizationCases  PersonalizationCase[]
+  accessPins            OrderAccessPin[]
+  warehouseDocuments    WarehouseDocument[]
+  warehouseReservations WarehouseReservation[]
 
   @@unique([shopId, externalOrderId])
   @@index([shopId, orderReference])
@@ -169,9 +171,10 @@ model OrderItem {
   createdAt             DateTime @default(now()) @map("created_at")
   updatedAt             DateTime @updatedAt @map("updated_at")
 
-  order               Order                @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  personalizedProduct PersonalizedProduct? @relation(fields: [personalizedProductId], references: [id], onDelete: SetNull)
-  personalizationCase PersonalizationCase?
+  order                 Order                  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  personalizedProduct   PersonalizedProduct?   @relation(fields: [personalizedProductId], references: [id], onDelete: SetNull)
+  personalizationCase   PersonalizationCase?
+  warehouseReservations WarehouseReservation[]
 
   @@index([orderId])
   @@index([sku])
@@ -527,6 +530,13 @@ enum WarehouseDocumentStatus {
   CANCELLED // Anulowany
 }
 
+enum WarehouseReservationStatus {
+  ACTIVE
+  CONSUMED
+  RELEASED
+  CANCELLED
+}
+
 enum WholesalePlatform {
   CSV_FEED
   XML_FEED
@@ -534,28 +544,29 @@ enum WholesalePlatform {
 }
 
 model WarehouseProduct {
-  id           String   @id @default(cuid())
-  tenantId     String   @map("tenant_id")
-  catalogId    String   @map("catalog_id")
-  sku          String
-  name         String
-  unit         String   @default("szt")
-  description  String?
+  id            String   @id @default(cuid())
+  tenantId      String   @map("tenant_id")
+  catalogId     String   @map("catalog_id")
+  sku           String
+  name          String
+  unit          String   @default("szt")
+  description   String?
   purchasePrice Decimal? @map("purchase_price") @db.Decimal(10, 2)
   retailPrice   Decimal? @map("retail_price") @db.Decimal(10, 2)
-  currentStock Decimal  @default(0) @map("current_stock") @db.Decimal(10, 3)
-  isActive     Boolean  @default(true) @map("is_active")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  currentStock  Decimal  @default(0) @map("current_stock") @db.Decimal(10, 3)
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
 
-  tenant              Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  catalog             WarehouseCatalog          @relation(fields: [catalogId], references: [id], onDelete: Restrict)
-  items               WarehouseDocumentItem[]
-  barcodes            WarehouseProductBarcode[]
-  shopProductMappings ShopProductMapping[]
-  stockSyncLogs       StockSyncLog[]
-  priceSyncLogs       PriceSyncLog[]
-  wholesaleMappings   WholesaleProductMapping[]
+  tenant                Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  catalog               WarehouseCatalog          @relation(fields: [catalogId], references: [id], onDelete: Restrict)
+  items                 WarehouseDocumentItem[]
+  barcodes              WarehouseProductBarcode[]
+  shopProductMappings   ShopProductMapping[]
+  stockSyncLogs         StockSyncLog[]
+  priceSyncLogs         PriceSyncLog[]
+  wholesaleMappings     WholesaleProductMapping[]
+  warehouseReservations WarehouseReservation[]
 
   @@unique([tenantId, sku])
   @@index([tenantId])
@@ -585,27 +596,27 @@ model WarehouseCatalog {
 }
 
 model ShopProductMapping {
-  id                 String    @id @default(cuid())
-  tenantId           String    @map("tenant_id")
-  shopId             String    @map("shop_id")
-  externalProductId  String    @map("external_product_id")
-  externalSku        String    @map("external_sku")
-  externalEan        String?   @map("external_ean")
-  externalName       String?   @map("external_name")
-  externalPrice      Decimal?  @map("external_price") @db.Decimal(10, 2)
-  warehouseProductId String?   @map("warehouse_product_id")
-  personalizationEnabled Boolean @default(false) @map("personalization_enabled")
-  personalizationTemplateId String? @map("personalization_template_id")
-  isActive           Boolean   @default(true) @map("is_active")
-  lastSyncAt         DateTime? @map("last_sync_at")
-  createdAt          DateTime  @default(now()) @map("created_at")
-  updatedAt          DateTime  @updatedAt @map("updated_at")
+  id                        String    @id @default(cuid())
+  tenantId                  String    @map("tenant_id")
+  shopId                    String    @map("shop_id")
+  externalProductId         String    @map("external_product_id")
+  externalSku               String    @map("external_sku")
+  externalEan               String?   @map("external_ean")
+  externalName              String?   @map("external_name")
+  externalPrice             Decimal?  @map("external_price") @db.Decimal(10, 2)
+  warehouseProductId        String?   @map("warehouse_product_id")
+  personalizationEnabled    Boolean   @default(false) @map("personalization_enabled")
+  personalizationTemplateId String?   @map("personalization_template_id")
+  isActive                  Boolean   @default(true) @map("is_active")
+  lastSyncAt                DateTime? @map("last_sync_at")
+  createdAt                 DateTime  @default(now()) @map("created_at")
+  updatedAt                 DateTime  @updatedAt @map("updated_at")
 
-  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  shop             Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  warehouseProduct WarehouseProduct? @relation(fields: [warehouseProductId], references: [id], onDelete: SetNull)
+  tenant                  Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shop                    Shop                     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  warehouseProduct        WarehouseProduct?        @relation(fields: [warehouseProductId], references: [id], onDelete: SetNull)
   personalizationTemplate PersonalizationTemplate? @relation(fields: [personalizationTemplateId], references: [id], onDelete: SetNull)
-  priceSyncLogs    PriceSyncLog[]
+  priceSyncLogs           PriceSyncLog[]
 
   @@unique([shopId, externalProductId])
   @@index([tenantId])
@@ -667,6 +678,37 @@ model WarehouseProductBarcode {
   @@map("warehouse_product_barcodes")
 }
 
+model WarehouseReservation {
+  id                 String                     @id @default(cuid())
+  tenantId           String                     @map("tenant_id")
+  warehouseProductId String                     @map("warehouse_product_id")
+  orderId            String                     @map("order_id")
+  orderItemId        String?                    @map("order_item_id")
+  quantity           Decimal                    @db.Decimal(10, 3)
+  status             WarehouseReservationStatus @default(ACTIVE)
+  reason             String?                    @db.Text
+  releasedAt         DateTime?                  @map("released_at")
+  consumedAt         DateTime?                  @map("consumed_at")
+  cancelledAt        DateTime?                  @map("cancelled_at")
+  createdAt          DateTime                   @default(now()) @map("created_at")
+  updatedAt          DateTime                   @updatedAt @map("updated_at")
+
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseProduct WarehouseProduct @relation(fields: [warehouseProductId], references: [id], onDelete: Restrict)
+  order            Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderItem        OrderItem?       @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([warehouseProductId])
+  @@index([orderId])
+  @@index([orderItemId])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+  @@index([warehouseProductId, status])
+  @@index([orderId, status])
+  @@map("warehouse_reservations")
+}
+
 model WarehouseDocument {
   id                String                  @id @default(cuid())
   tenantId          String                  @map("tenant_id")
@@ -687,9 +729,9 @@ model WarehouseDocument {
   createdAt         DateTime                @default(now()) @map("created_at")
   updatedAt         DateTime                @updatedAt @map("updated_at")
 
-  tenant Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  order  Order?                  @relation(fields: [orderId], references: [id])
-  items  WarehouseDocumentItem[]
+  tenant        Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  order         Order?                  @relation(fields: [orderId], references: [id])
+  items         WarehouseDocumentItem[]
   stockSyncLogs StockSyncLog[]
 
   @@unique([tenantId, number])
@@ -790,18 +832,18 @@ model PriceSyncLog {
 }
 
 model WholesaleProvider {
-  id          String            @id @default(cuid())
-  tenantId    String            @map("tenant_id")
-  name        String
-  platform    WholesalePlatform @default(CSV_FEED)
-  feedUrl     String            @map("feed_url") @db.Text
-  configJson  Json?             @map("config_json")
-  syncEnabled Boolean           @default(true) @map("sync_enabled")
+  id           String            @id @default(cuid())
+  tenantId     String            @map("tenant_id")
+  name         String
+  platform     WholesalePlatform @default(CSV_FEED)
+  feedUrl      String            @map("feed_url") @db.Text
+  configJson   Json?             @map("config_json")
+  syncEnabled  Boolean           @default(true) @map("sync_enabled")
   syncInterval Int               @default(1440) @map("sync_interval")
-  isActive    Boolean           @default(true) @map("is_active")
-  lastSyncAt  DateTime?         @map("last_sync_at")
-  createdAt   DateTime          @default(now()) @map("created_at")
-  updatedAt   DateTime          @updatedAt @map("updated_at")
+  isActive     Boolean           @default(true) @map("is_active")
+  lastSyncAt   DateTime?         @map("last_sync_at")
+  createdAt    DateTime          @default(now()) @map("created_at")
+  updatedAt    DateTime          @updatedAt @map("updated_at")
 
   tenant   Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   mappings WholesaleProductMapping[]
@@ -830,9 +872,9 @@ model WholesaleProductMapping {
   createdAt          DateTime  @default(now()) @map("created_at")
   updatedAt          DateTime  @updatedAt @map("updated_at")
 
-  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  provider         WholesaleProvider  @relation(fields: [providerId], references: [id], onDelete: Cascade)
-  warehouseProduct WarehouseProduct?  @relation(fields: [warehouseProductId], references: [id], onDelete: SetNull)
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider         WholesaleProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  warehouseProduct WarehouseProduct? @relation(fields: [warehouseProductId], references: [id], onDelete: SetNull)
 
   @@unique([providerId, externalSku])
   @@index([tenantId])

@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import prisma from '../../lib/prisma';
 import { createManualOrder, deleteOrder } from '../../services/admin/orders.service';
+import * as reservationService from '../../services/admin/warehouse-reservations.service';
 import { createManualOrderSchema, type CreateManualOrderInput } from '../../schemas/admin.schema';
 
 interface OrderParams {
@@ -138,6 +139,38 @@ export async function ordersRoutes(fastify: FastifyInstance) {
           error: 'Internal Server Error',
           message: 'Nie udało się pobrać zamówienia',
         });
+      }
+    }
+  );
+
+  fastify.get<{ Params: OrderParams; Querystring: reservationService.ReservationsQuery }>(
+    '/:id/reservations',
+    {
+      schema: {
+        tags: ['warehouse-reservations'],
+        summary: 'Lista rezerwacji zamówienia',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        querystring: {
+          type: 'object',
+          properties: {
+            page: { type: 'integer', minimum: 1, default: 1 },
+            limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+            status: { type: 'string', enum: ['ACTIVE', 'CONSUMED', 'RELEASED', 'CANCELLED'] },
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest<{
+      Params: OrderParams;
+      Querystring: reservationService.ReservationsQuery;
+    }>, reply: FastifyReply) => {
+      try {
+        const result = await reservationService.getOrderReservations(request.params.id, request.query);
+        return reply.send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Błąd pobierania rezerwacji zamówienia';
+        const status = message.includes('nie znalezion') ? 404 : 400;
+        return reply.status(status).send({ error: 'Error', message });
       }
     }
   );

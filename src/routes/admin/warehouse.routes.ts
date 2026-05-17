@@ -4,6 +4,7 @@ import * as barcodeService from '../../services/admin/warehouse-barcodes.service
 import * as scannerService from '../../services/admin/warehouse-scanner.service';
 import * as diagnosticsService from '../../services/admin/warehouse-diagnostics.service';
 import * as sourceMappingService from '../../services/admin/warehouse-product-source-mapping.service';
+import * as reservationService from '../../services/admin/warehouse-reservations.service';
 import * as priceSyncService from '../../services/price/price-sync.service';
 import * as stockSyncService from '../../services/stock/stock-sync.service';
 import * as prestaReconciliationService from '../../services/prestashop/prestashop-reconciliation.service';
@@ -355,6 +356,38 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({ error: 'Internal Server Error', message: 'Błąd pobierania produktu' });
+    }
+  });
+
+  fastify.get('/products/:id/reservations', {
+    schema: {
+      tags: ['warehouse-reservations'],
+      summary: 'Lista rezerwacji produktu magazynowego',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      querystring: {
+        type: 'object',
+        properties: {
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+          status: { type: 'string', enum: ['ACTIVE', 'CONSUMED', 'RELEASED', 'CANCELLED'] },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Querystring: reservationService.ReservationsQuery;
+  }>, reply: FastifyReply) => {
+    try {
+      const result = await reservationService.getProductReservations(request.params.id, request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania rezerwacji produktu';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
     }
   });
 

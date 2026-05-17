@@ -134,6 +134,7 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
           shopId: { type: 'string' },
           isActive: { type: 'boolean' },
           stockStatus: { type: 'string', enum: ['available', 'zero', 'negative', 'low'] },
+          wholesaleStockStatus: { type: 'string', enum: ['available', 'unavailable', 'missingOffer'] },
           missingPrice: { type: 'string', enum: ['purchase', 'retail'] },
           stockBelow: { type: 'number' },
           hasBarcode: { type: 'boolean' },

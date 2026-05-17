@@ -62,6 +62,7 @@ export interface ProductsQuery {
   shopId?: string;
   isActive?: boolean;
   stockStatus?: 'available' | 'zero' | 'negative' | 'low';
+  wholesaleStockStatus?: 'available' | 'unavailable' | 'missingOffer';
   missingPrice?: 'purchase' | 'retail';
   stockBelow?: number;
   hasBarcode?: boolean;
@@ -88,6 +89,7 @@ export async function getProducts(query: ProductsQuery = {}) {
     shopId,
     isActive,
     stockStatus,
+    wholesaleStockStatus,
     missingPrice,
     stockBelow,
     hasBarcode,
@@ -121,10 +123,28 @@ export async function getProducts(query: ProductsQuery = {}) {
       ? { some: shopMappingFilter }
       : { none: shopMappingFilter };
   }
-  if (hasWholesaleOffer !== undefined) {
+  const activeWholesaleMappingFilter = {
+    isActive: true,
+    provider: { isActive: true },
+  };
+  const availableWholesaleMappingFilter = {
+    ...activeWholesaleMappingFilter,
+    lastKnownStock: { gt: 0 },
+  };
+  if (wholesaleStockStatus === 'available') {
+    where.wholesaleMappings = { some: availableWholesaleMappingFilter };
+  } else if (wholesaleStockStatus === 'unavailable') {
+    where.AND = [
+      ...(where.AND ?? []),
+      { wholesaleMappings: { some: activeWholesaleMappingFilter } },
+      { wholesaleMappings: { none: availableWholesaleMappingFilter } },
+    ];
+  } else if (wholesaleStockStatus === 'missingOffer') {
+    where.wholesaleMappings = { none: activeWholesaleMappingFilter };
+  } else if (hasWholesaleOffer !== undefined) {
     where.wholesaleMappings = hasWholesaleOffer
-      ? { some: { isActive: true } }
-      : { none: { isActive: true } };
+      ? { some: activeWholesaleMappingFilter }
+      : { none: activeWholesaleMappingFilter };
   }
   if (search) {
     where.OR = [

@@ -8,13 +8,18 @@ interface OrderParams {
   id: string;
 }
 
+const looseObjectResponse = {
+  type: 'object',
+  additionalProperties: true,
+} as const;
+
 export async function ordersRoutes(fastify: FastifyInstance) {
   // GET /admin/orders - List all orders
   fastify.get('/', {
     schema: {
       tags: ['orders'],
       summary: 'Lista zamówień z pozycjami',
-      response: { 200: { type: 'array', items: { type: 'object' } } },
+      response: { 200: { type: 'array', items: looseObjectResponse } },
     },
   }, async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
@@ -85,7 +90,7 @@ export async function ordersRoutes(fastify: FastifyInstance) {
         summary: 'Szczegóły zamówienia',
         params: { type: 'object', properties: { id: { type: 'string' } } },
         response: {
-          200: { type: 'object' },
+          200: looseObjectResponse,
           404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
       },

@@ -200,17 +200,35 @@ export async function deleteJob(
 }
 
 /**
- * Clean old jobs from queue
+ * Clean old completed/failed jobs from queue
  */
 export async function cleanQueue(
   queueName: string,
-  grace: number = 3600000, // 1 hour in ms
+  grace: number = 3600000,
   limit: number = 1000,
   type: 'completed' | 'failed' = 'completed'
 ): Promise<string[]> {
   const queue = getQueue(queueName);
-
   return await queue.clean(grace, limit, type);
+}
+
+/**
+ * Drain (remove all waiting jobs) from a queue and return count of removed jobs.
+ * Active jobs are left to finish.
+ */
+export async function drainQueue(queueName: string): Promise<number> {
+  const queue = getQueue(queueName);
+  const waiting = await queue.getWaiting();
+  let removed = 0;
+  for (const job of waiting) {
+    try {
+      await job.remove();
+      removed++;
+    } catch {
+      // job may have been picked up by worker between getWaiting and remove
+    }
+  }
+  return removed;
 }
 
 /**

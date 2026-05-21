@@ -8,6 +8,8 @@ export interface BulkStockItem {
   productId: number;
   quantity: number;
   idProductAttribute?: number;
+  idShop?: number;
+  outOfStockBehavior?: 0 | 1 | 2;
 }
 
 export interface BulkStockResult {
@@ -21,12 +23,20 @@ export class PrestaShopStockClient implements ShopStockClient {
   private apiKey: string;
   private bulkStockUrl: string | null;
   private bulkStockApiKey: string | null;
+  private prestashopShopId: string | null;
 
-  constructor(config: { baseUrl: string; apiKey: string; bulkStockUrl?: string | null; bulkStockApiKey?: string | null }) {
+  constructor(config: {
+    baseUrl: string;
+    apiKey: string;
+    bulkStockUrl?: string | null;
+    bulkStockApiKey?: string | null;
+    prestashopShopId?: string | number | null;
+  }) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '').replace(/\/api$/, '');
     this.apiKey = config.apiKey;
-    this.bulkStockUrl = config.bulkStockUrl ?? null;
-    this.bulkStockApiKey = config.bulkStockApiKey ?? null;
+    this.bulkStockUrl = normalizeNullableString(config.bulkStockUrl);
+    this.bulkStockApiKey = normalizeNullableString(config.bulkStockApiKey);
+    this.prestashopShopId = normalizeNullableString(config.prestashopShopId);
   }
 
   get hasBulkModule(): boolean {
@@ -42,10 +52,19 @@ export class PrestaShopStockClient implements ShopStockClient {
 
     for (let i = 0; i < items.length; i += BULK_BATCH_SIZE) {
       const batch = items.slice(i, i + BULK_BATCH_SIZE);
+      const payloadItems = batch.map((item) => ({
+        ...item,
+        idShop: item.idShop ?? parseOptionalPositiveInt(this.prestashopShopId) ?? undefined,
+      }));
       const res = await fetch(this.bulkStockUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Api-Key': this.bulkStockApiKey },
-        body: JSON.stringify({ items: batch }),
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'X-Api-Key': this.bulkStockApiKey,
+          Authorization: `Bearer ${this.bulkStockApiKey}`,
+        },
+        body: JSON.stringify({ items: payloadItems }),
       });
 
       if (!res.ok) {
@@ -62,6 +81,14 @@ export class PrestaShopStockClient implements ShopStockClient {
       combined.updated += result.updated;
       combined.errors.push(...result.errors);
       combined.results.push(...result.results);
+    }
+
+    const failedItems = combined.results.filter((item) => item.status === 'error');
+    if (combined.errors.length > 0 || failedItems.length > 0) {
+      const itemMessages = failedItems
+        .map((item) => `product ${item.productId}: ${item.message ?? 'unknown error'}`)
+        .slice(0, 5);
+      throw new Error(`kp_bulkstock partial failure: ${[...combined.errors, ...itemMessages].join('; ')}`);
     }
 
     console.log(`[PrestaShopStockClient] bulk update: ${combined.updated} updated, ${combined.errors.length} errors`);
@@ -162,8 +189,7 @@ export class PrestaShopStockClient implements ShopStockClient {
 
     if (entries.length === 0) return null;
 
-    // Dla produktów z kombinacjami PS tworzy wiele wpisów — bierzemy ten z id_product_attribute=0 (sam produkt)
-    const entry = entries.find((e) => String(e.id_product_attribute) === '0') ?? entries[0];
+    const entry = selectStockAvailableEntry(entries, this.prestashopShopId);
 
     const dependsOnStock = entry.depends_on_stock === undefined ? undefined : String(entry.depends_on_stock);
 
@@ -250,6 +276,35 @@ export class PrestaShopStockClient implements ShopStockClient {
 
     return text;
   }
+}
+
+function selectStockAvailableEntry(entries: any[], prestashopShopId: string | null) {
+  const shopId = normalizeNullableString(prestashopShopId);
+  const simpleEntries = entries.filter((entry) => String(entry.id_product_attribute ?? '0') === '0');
+  const candidates = simpleEntries.length > 0 ? simpleEntries : entries;
+
+  if (shopId) {
+    const exactShop = candidates.find((entry) => String(entry.id_shop ?? '') === shopId);
+    if (exactShop) return exactShop;
+
+    const exactGroup = candidates.find((entry) => String(entry.id_shop_group ?? '') === shopId);
+    if (exactGroup) return exactGroup;
+  }
+
+  return candidates.find((entry) => String(entry.id_shop ?? '0') !== '0') ?? candidates[0];
+}
+
+function normalizeNullableString(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function parseOptionalPositiveInt(value: string | null) {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function buildStockAvailableXml(input: {

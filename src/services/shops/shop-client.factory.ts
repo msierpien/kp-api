@@ -20,8 +20,31 @@ export function createShopStockClient(shop: Shop): ShopStockClient {
       apiKey: decrypt(shop.apiKey),
       bulkStockUrl: typeof config.bulkStockUrl === 'string' ? config.bulkStockUrl : null,
       bulkStockApiKey,
+      prestashopShopId: getPrestaShopShopId(config),
     });
   }
 
   throw new Error(`Stock sync is not implemented for platform ${shop.platform}`);
+}
+
+function getPrestaShopShopId(config: Record<string, unknown>) {
+  const defaults = config.prestashopProductDefaults;
+  const productCreate = config.productCreate;
+
+  if (typeof config.idShopDefault === 'string' || typeof config.idShopDefault === 'number') {
+    return config.idShopDefault;
+  }
+  if (typeof config.prestashopShopId === 'string' || typeof config.prestashopShopId === 'number') {
+    return config.prestashopShopId;
+  }
+  if (defaults && typeof defaults === 'object' && !Array.isArray(defaults)) {
+    const id = (defaults as Record<string, unknown>).idShopDefault;
+    if (typeof id === 'string' || typeof id === 'number') return id;
+  }
+  if (productCreate && typeof productCreate === 'object' && !Array.isArray(productCreate)) {
+    const id = (productCreate as Record<string, unknown>).idShopDefault;
+    if (typeof id === 'string' || typeof id === 'number') return id;
+  }
+
+  return null;
 }

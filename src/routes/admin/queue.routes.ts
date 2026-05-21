@@ -9,6 +9,7 @@ import {
   retryAllFailed,
   deleteJob,
   cleanQueue,
+  drainQueue,
   getQueueNames,
 } from '../../services/queue/queue-stats.service';
 
@@ -372,6 +373,31 @@ export async function queueRoutes(fastify: FastifyInstance) {
         return reply.code(500).send({
           success: false,
           message: error instanceof Error ? error.message : 'Failed to delete job',
+        });
+      }
+    }
+  );
+
+  // POST /admin/queues/:name/drain - Remove all waiting jobs
+  fastify.post<{ Params: { name: string } }>(
+    '/:name/drain',
+    {
+      preHandler: superAdminOnly,
+      schema: {
+        tags: ['queues'],
+        summary: 'Usuń wszystkie oczekujące zadania z kolejki (waiting)',
+        params: { type: 'object', properties: { name: { type: 'string' } } },
+        response: { 200: { type: 'object' } },
+      },
+    },
+    async (request: FastifyRequest<{ Params: { name: string } }>, reply: FastifyReply) => {
+      try {
+        const removed = await drainQueue(request.params.name);
+        return reply.send({ success: true, removed });
+      } catch (error) {
+        return reply.code(500).send({
+          success: false,
+          message: error instanceof Error ? error.message : 'Failed to drain queue',
         });
       }
     }

@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
-import { addStockSyncJob } from '../queue/stock-sync.queue';
+import { addStockSyncJob, getStockSyncQueue } from '../queue/stock-sync.queue';
 
 type StockSyncStatus = 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'FAILED';
 type DocumentType = 'PZ' | 'PW' | 'WZ' | 'RW';
@@ -56,7 +56,13 @@ export async function getStockSyncLogs(query: StockSyncLogsQuery = {}) {
     if (dateTo) where.createdAt.lte = new Date(dateTo);
   }
 
-  const [data, total] = await Promise.all([
+  // where bez filtra statusu — do liczenia per-status dla całego zakresu (shopId, product, daty)
+  const whereForCounts: Prisma.StockSyncLogWhereInput = { tenantId };
+  if (shopId) whereForCounts.shopId = shopId;
+  if (warehouseProductId) whereForCounts.warehouseProductId = warehouseProductId;
+  if (dateFrom || dateTo) whereForCounts.createdAt = where.createdAt;
+
+  const [data, total, statusGroups] = await Promise.all([
     prisma.stockSyncLog.findMany({
       where,
       skip,
@@ -69,9 +75,19 @@ export async function getStockSyncLogs(query: StockSyncLogsQuery = {}) {
       },
     }),
     prisma.stockSyncLog.count({ where }),
+    prisma.stockSyncLog.groupBy({
+      by: ['status'],
+      where: whereForCounts,
+      _count: { status: true },
+    }),
   ]);
 
-  return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+  const statusCounts: Record<string, number> = {};
+  for (const row of statusGroups) {
+    statusCounts[row.status] = row._count.status;
+  }
+
+  return { data, total, page, limit, totalPages: Math.ceil(total / limit), statusCounts };
 }
 
 export async function retryStockSyncLog(id: string) {
@@ -158,6 +174,13 @@ export async function requeuePendingStockSyncLogs(shopId?: string) {
       });
 
       if (!mapping) { skipped++; continue; }
+
+      // Usuń stary job z Redis jeśli istnieje — ten sam jobId blokuje dodanie nowego
+      const queue = getStockSyncQueue();
+      const existingJob = await queue.getJob(`stock-${log.id}`);
+      if (existingJob) {
+        await existingJob.remove().catch(() => undefined);
+      }
 
       await addStockSyncJob({
         logId: log.id,

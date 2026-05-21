@@ -68,6 +68,12 @@ const testConnectionResponseSchema = {
   },
 };
 
+function normalizeOptionalString(value: unknown) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
 const webhookSettingsResponseSchema = {
   type: 'object',
   properties: {
@@ -273,10 +279,21 @@ export async function shopsRoutes(fastify: FastifyInstance) {
           ? shop.configJson as Record<string, unknown>
           : {};
 
+        const nextBulkStockUrl = normalizeOptionalString(bulkStockUrl);
+        const providedBulkStockApiKey = normalizeOptionalString(bulkStockApiKey);
+        const existingBulkStockApiKey = typeof existing.bulkStockApiKey === 'string'
+          ? existing.bulkStockApiKey
+          : null;
+        const nextBulkStockApiKey = bulkStockApiKey === undefined
+          ? existingBulkStockApiKey
+          : providedBulkStockApiKey
+            ? encrypt(providedBulkStockApiKey)
+            : null;
+
         const updated = {
           ...existing,
-          bulkStockUrl: bulkStockUrl ?? null,
-          bulkStockApiKey: bulkStockApiKey ? encrypt(bulkStockApiKey) : null,
+          bulkStockUrl: nextBulkStockUrl,
+          bulkStockApiKey: nextBulkStockUrl ? nextBulkStockApiKey : null,
         };
 
         await prisma.shop.update({ where: { id: shopId }, data: { configJson: updated } });

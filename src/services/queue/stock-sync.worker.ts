@@ -54,17 +54,30 @@ async function processStockSyncJob(job: Job<StockSyncJobData>) {
 
   const client = createShopStockClient(shop);
 
-  const useBulk = client instanceof PrestaShopStockClient && client.hasBulkModule;
+  const externalNumericProductId = Number(externalProductId);
+  const useBulk = client instanceof PrestaShopStockClient &&
+    client.hasBulkModule &&
+    Number.isInteger(externalNumericProductId) &&
+    externalNumericProductId > 0;
   console.log(
     `[StockSyncWorker] product=${externalProductId} qty=${decision.publishedQuantity} ` +
     `mode=${useBulk ? 'BULK' : 'WEBSERVICE'}`,
   );
 
   if (useBulk) {
-    await client.bulkUpdateStock([{
-      productId: Number(externalProductId),
-      quantity: Math.max(0, Math.floor(Number(decision.publishedQuantity))),
-    }]);
+    try {
+      await client.bulkUpdateStock([{
+        productId: externalNumericProductId,
+        quantity: Math.max(0, Math.floor(Number(decision.publishedQuantity))),
+        outOfStockBehavior: decision.outOfStockBehavior,
+      }]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown bulk stock error';
+      console.warn(`[StockSyncWorker] bulk stock failed for product=${externalProductId}, falling back to WEBSERVICE: ${message}`);
+      await client.updateStockQuantity(externalProductId, Number(decision.publishedQuantity), {
+        outOfStockBehavior: decision.outOfStockBehavior,
+      });
+    }
   } else {
     await client.updateStockQuantity(externalProductId, Number(decision.publishedQuantity), {
       outOfStockBehavior: decision.outOfStockBehavior,

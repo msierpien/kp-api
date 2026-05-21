@@ -123,6 +123,61 @@ export async function retryStockSyncLog(id: string) {
   return retryLog;
 }
 
+export async function requeuePendingStockSyncLogs(shopId?: string) {
+  const tenantId = requireTenantId();
+
+  const pendingLogs = await prisma.stockSyncLog.findMany({
+    where: {
+      tenantId,
+      status: 'PENDING',
+      ...(shopId ? { shopId } : {}),
+    },
+    include: {
+      warehouseProduct: { select: { id: true, isActive: true } },
+    },
+    orderBy: { createdAt: 'asc' },
+    take: 500,
+  });
+
+  let requeued = 0;
+  let skipped = 0;
+  const errors: Array<{ logId: string; message: string }> = [];
+
+  for (const log of pendingLogs) {
+    try {
+      if (!log.warehouseProduct?.isActive) { skipped++; continue; }
+
+      const mapping = await prisma.shopProductMapping.findFirst({
+        where: {
+          tenantId,
+          shopId: log.shopId,
+          warehouseProductId: log.warehouseProductId,
+          isActive: true,
+        },
+        select: { externalProductId: true },
+      });
+
+      if (!mapping) { skipped++; continue; }
+
+      await addStockSyncJob({
+        logId: log.id,
+        tenantId,
+        warehouseProductId: log.warehouseProductId,
+        shopId: log.shopId,
+        externalProductId: mapping.externalProductId,
+        triggeredBy: log.triggeredBy as import('../queue/stock-sync.queue').StockSyncTriggeredBy,
+        documentId: log.documentId ?? undefined,
+      });
+
+      requeued++;
+    } catch (error) {
+      errors.push({ logId: log.id, message: error instanceof Error ? error.message : 'Błąd' });
+    }
+  }
+
+  return { total: pendingLogs.length, requeued, skipped, errors };
+}
+
 export async function getProductMovements(productId: string, query: ProductMovementsQuery = {}) {
   const tenantId = requireTenantId();
   const product = await prisma.warehouseProduct.findFirst({

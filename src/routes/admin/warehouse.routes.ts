@@ -1257,6 +1257,26 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.post('/stock-sync-logs/requeue-pending', {
+    schema: {
+      tags: ['warehouse-diagnostics'],
+      summary: 'Ponów oczekujące zadania synchronizacji stanu (PENDING) - przywraca je do kolejki BullMQ',
+      querystring: {
+        type: 'object',
+        properties: { shopId: { type: 'string' } },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: { shopId?: string } }>, reply: FastifyReply) => {
+    try {
+      const { shopId } = request.query;
+      const result = await diagnosticsService.requeuePendingStockSyncLogs(shopId);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd ponowienia oczekujących zadań';
+      return reply.status(400).send({ error: 'Error', message });
+    }
+  });
+
   // ─── Price sync diagnostics ───────────────────────────────────────────────
 
   fastify.get('/price-sync-logs', {

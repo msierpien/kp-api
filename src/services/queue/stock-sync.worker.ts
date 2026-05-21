@@ -1,6 +1,7 @@
 import { Worker, Job, UnrecoverableError } from 'bullmq';
 import prisma from '../../lib/prisma';
 import { createShopStockClient } from '../shops/shop-client.factory';
+import { PrestaShopStockClient } from '../shops/prestashop-stock-client';
 import { getInventoryPublicationDecision } from '../stock/stock-sync.service';
 import { getRedisConnection } from './render.queue';
 import { STOCK_SYNC_QUEUE_NAME, type StockSyncJobData } from './stock-sync.queue';
@@ -53,9 +54,14 @@ async function processStockSyncJob(job: Job<StockSyncJobData>) {
 
   const client = createShopStockClient(shop);
 
-  // Użyj bulk modułu jeśli skonfigurowany — jeden request zamiast GET+PUT przez Webservice
-  if ('hasBulkModule' in client && (client as any).hasBulkModule) {
-    await (client as any).bulkUpdateStock([{
+  const useBulk = client instanceof PrestaShopStockClient && client.hasBulkModule;
+  console.log(
+    `[StockSyncWorker] product=${externalProductId} qty=${decision.publishedQuantity} ` +
+    `mode=${useBulk ? 'BULK' : 'WEBSERVICE'}`,
+  );
+
+  if (useBulk) {
+    await client.bulkUpdateStock([{
       productId: Number(externalProductId),
       quantity: Math.max(0, Math.floor(Number(decision.publishedQuantity))),
     }]);

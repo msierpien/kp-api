@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
 import { createShopStockClient } from '../shops/shop-client.factory';
@@ -190,6 +190,85 @@ export async function reconcilePrestaShopForTenant(
     priceTolerance,
     data,
   };
+}
+
+export interface ImportStockFromPrestaShopResult {
+  scanned: number;
+  imported: number;
+  skippedInSync: number;
+  skippedZeroRemote: number;
+  errors: Array<{ warehouseProductId: string; sku: string; message: string }>;
+}
+
+export async function importStockFromPrestaShop(shopId?: string): Promise<ImportStockFromPrestaShopResult> {
+  const tenantId = requireTenantId();
+
+  const where: Prisma.ShopProductMappingWhereInput = {
+    tenantId,
+    isActive: true,
+    warehouseProductId: { not: null },
+    shop: { status: 'ACTIVE', platform: 'PRESTASHOP' },
+  };
+  if (shopId) where.shopId = shopId;
+
+  const mappings = await prisma.shopProductMapping.findMany({
+    where,
+    include: { shop: true, warehouseProduct: true },
+    orderBy: [{ shopId: 'asc' }, { externalSku: 'asc' }],
+  });
+
+  const clientByShop = new Map<string, ReturnType<typeof createShopStockClient>>();
+  let imported = 0;
+  let skippedInSync = 0;
+  let skippedZeroRemote = 0;
+  const errors: ImportStockFromPrestaShopResult['errors'] = [];
+
+  for (const mapping of mappings) {
+    if (!mapping.warehouseProduct) continue;
+
+    try {
+      let client = clientByShop.get(mapping.shopId);
+      if (!client) {
+        client = createShopStockClient(mapping.shop);
+        clientByShop.set(mapping.shopId, client);
+      }
+
+      const remote = await client.getProductInventorySnapshot(mapping.externalProductId);
+      const remoteStock = remote.stock;
+
+      if (remoteStock === undefined || remoteStock === null) {
+        errors.push({ warehouseProductId: mapping.warehouseProduct.id, sku: mapping.warehouseProduct.sku, message: 'Brak danych o stanie z PrestaShop' });
+        continue;
+      }
+
+      const localStock = Number(mapping.warehouseProduct.currentStock);
+
+      if (localStock === remoteStock) {
+        skippedInSync++;
+        continue;
+      }
+
+      if (remoteStock === 0) {
+        skippedZeroRemote++;
+        continue;
+      }
+
+      await prisma.warehouseProduct.update({
+        where: { id: mapping.warehouseProduct.id },
+        data: { currentStock: new Prisma.Decimal(remoteStock) },
+      });
+
+      imported++;
+    } catch (error) {
+      errors.push({
+        warehouseProductId: mapping.warehouseProduct.id,
+        sku: mapping.warehouseProduct.sku,
+        message: error instanceof Error ? error.message : 'Nieznany błąd',
+      });
+    }
+  }
+
+  return { scanned: mappings.length, imported, skippedInSync, skippedZeroRemote, errors };
 }
 
 function comparePrice(localPrice: number | null, remotePrice?: number) {

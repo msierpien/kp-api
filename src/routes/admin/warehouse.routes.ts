@@ -1193,6 +1193,25 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.post('/import-stock-from-prestashop', {
+    schema: {
+      tags: ['warehouse-diagnostics'],
+      summary: 'Jednorazowy import stanów magazynowych z PrestaShop do bazy magazynowej',
+      querystring: {
+        type: 'object',
+        properties: { shopId: { type: 'string' } },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: { shopId?: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await prestaReconciliationService.importStockFromPrestaShop(request.query.shopId);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd importu stanów z PrestaShop';
+      return reply.status(500).send({ error: 'Error', message });
+    }
+  });
+
   fastify.post('/recalculate-stock', {
     schema: { tags: ['warehouse'], summary: 'Przelicz cache currentStock z dokumentów CONFIRMED' },
   }, async (_request: FastifyRequest, reply: FastifyReply) => {

@@ -141,6 +141,88 @@ export async function updateBarcode(id: string, input: UpdateBarcodeInput) {
   });
 }
 
+export interface BulkFillEanFromMappingsResult {
+  scanned: number;
+  filled: number;
+  skippedNoEanInMapping: number;
+  skippedAlreadyHasEan: number;
+  skippedEanTaken: number;
+  errors: Array<{ productId: string; message: string }>;
+}
+
+/**
+ * Dla listy produktów magazynowych: szuka ich mapowań sklepowych z externalEan
+ * i jeśli produkt nie ma jeszcze żadnego EAN — dodaje go automatycznie.
+ */
+export async function bulkFillEanFromShopMappings(
+  productIds: string[],
+  shopId?: string,
+): Promise<BulkFillEanFromMappingsResult> {
+  const tenantId = requireTenantId();
+  const result: BulkFillEanFromMappingsResult = {
+    scanned: productIds.length,
+    filled: 0,
+    skippedNoEanInMapping: 0,
+    skippedAlreadyHasEan: 0,
+    skippedEanTaken: 0,
+    errors: [],
+  };
+
+  for (const productId of productIds) {
+    try {
+      const product = await prisma.warehouseProduct.findFirst({
+        where: { id: productId, tenantId },
+        select: { id: true },
+      });
+
+      if (!product) { result.errors.push({ productId, message: 'Produkt nie znaleziony' }); continue; }
+
+      const existingBarcode = await prisma.warehouseProductBarcode.findFirst({
+        where: { tenantId, warehouseProductId: productId, isActive: true },
+        select: { id: true },
+      });
+      if (existingBarcode) { result.skippedAlreadyHasEan++; continue; }
+
+      const mapping = await prisma.shopProductMapping.findFirst({
+        where: {
+          tenantId,
+          warehouseProductId: productId,
+          isActive: true,
+          externalEan: { not: null },
+          ...(shopId ? { shopId } : {}),
+        },
+        select: { externalEan: true },
+        orderBy: { lastSyncAt: 'desc' },
+      });
+
+      const ean = mapping?.externalEan?.trim();
+      if (!ean) { result.skippedNoEanInMapping++; continue; }
+
+      const taken = await prisma.warehouseProductBarcode.findFirst({
+        where: { tenantId, ean },
+        select: { id: true },
+      });
+      if (taken) { result.skippedEanTaken++; continue; }
+
+      await prisma.warehouseProductBarcode.create({
+        data: {
+          tenantId,
+          warehouseProductId: productId,
+          ean,
+          isPrimary: true,
+          isActive: true,
+        },
+      });
+
+      result.filled++;
+    } catch (error) {
+      result.errors.push({ productId, message: error instanceof Error ? error.message : 'Błąd' });
+    }
+  }
+
+  return result;
+}
+
 export async function deleteBarcode(id: string) {
   const tenantId = requireTenantId();
 

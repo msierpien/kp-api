@@ -594,6 +594,28 @@ async function createWarehouseProductFromMappingInTx(
     },
   });
 
+  // Jeśli EAN ze sklepu istnieje i nie jest jeszcze w bazie — dodaj go
+  if (!existingProduct && mapping.externalEan) {
+    const ean = mapping.externalEan.trim();
+    if (ean) {
+      const alreadyExists = await tx.warehouseProductBarcode.findFirst({
+        where: { tenantId, ean },
+        select: { id: true },
+      });
+      if (!alreadyExists) {
+        await tx.warehouseProductBarcode.create({
+          data: {
+            tenantId,
+            warehouseProductId: warehouseProduct.id,
+            ean,
+            isPrimary: true,
+            isActive: true,
+          },
+        });
+      }
+    }
+  }
+
   const updatedMapping = await tx.shopProductMapping.update({
     where: { id: mapping.id },
     data: { warehouseProductId: warehouseProduct.id },

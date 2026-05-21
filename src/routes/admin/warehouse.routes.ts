@@ -277,6 +277,35 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.post('/products/bulk/fill-ean-from-mappings', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Uzupełnij EAN produktów ze zmapowanych ofert sklepowych',
+      body: {
+        type: 'object',
+        required: ['productIds'],
+        properties: {
+          productIds: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 500,
+            items: { type: 'string' },
+          },
+          shopId: { type: 'string', description: 'Opcjonalnie: ogranicz do EAN-ów z konkretnego sklepu' },
+        },
+      },
+      response: { 200: { type: 'object', additionalProperties: true } },
+    },
+  }, async (request: FastifyRequest<{ Body: { productIds: string[]; shopId?: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await barcodeService.bulkFillEanFromShopMappings(request.body.productIds, request.body.shopId);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd uzupełniania EAN';
+      return reply.status(400).send({ error: 'Error', message });
+    }
+  });
+
   fastify.post('/products/bulk/sync-stock', {
     schema: {
       tags: ['stock-sync'],

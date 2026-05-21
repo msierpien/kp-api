@@ -48,7 +48,13 @@ type ShopSyncContext = {
   personalizationEnabledForTenant: boolean;
 };
 
-export async function syncShopOrders(shopId: string): Promise<SyncResult> {
+export interface SyncShopOrdersOptions {
+  fromDate?: string;
+  fromOrderId?: string;
+  limit?: number;
+}
+
+export async function syncShopOrders(shopId: string, options: SyncShopOrdersOptions = {}): Promise<SyncResult> {
   const startTime = new Date();
   const result: SyncResult = {
     success: false,
@@ -63,15 +69,17 @@ export async function syncShopOrders(shopId: string): Promise<SyncResult> {
     const context = await createShopSyncContext(shopId);
     const autoCreateWz = await shouldAutoCreateWzForTenant(context.shop.tenantId);
 
-    const dateFrom = context.shop.lastSyncAt
-      ? context.shop.lastSyncAt.toISOString().split('T')[0]
-      : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const dateFrom = options.fromDate
+      ?? (context.shop.lastSyncAt
+        ? context.shop.lastSyncAt.toISOString().split('T')[0]
+        : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
 
-    const syncLimit = context.config.orderSync?.limit || 50;
+    const syncLimit = options.limit ?? context.config.orderSync?.limit ?? 50;
 
     const orders = await context.client.fetchOrders({
       limit: syncLimit,
       dateFrom,
+      idFrom: options.fromOrderId,
       currentState: context.config.orderSync?.orderStatus === 'PAID' ? 2 : undefined,
     });
 

@@ -576,7 +576,12 @@ export function getSchedulerStatus() {
 /**
  * Wymusza natychmiastową synchronizację dla sklepu (poza harmonogramem)
  */
-export async function triggerManualSync(shopId: string, options: { wait?: boolean } = {}): Promise<SyncResult | {
+export async function triggerManualSync(shopId: string, options: {
+  wait?: boolean;
+  fromDate?: string;
+  fromOrderId?: string;
+  limit?: number;
+} = {}): Promise<SyncResult | {
   message: string;
   shopId: string;
 }> {
@@ -587,22 +592,32 @@ export async function triggerManualSync(shopId: string, options: { wait?: boolea
       status: true,
     },
   });
-  
+
   if (!shop) {
     throw new Error('Shop not found');
   }
-  
+
   if (shop.status !== 'ACTIVE') {
     throw new Error('Shop is not active');
   }
 
+  const syncOptions = {
+    fromDate: options.fromDate,
+    fromOrderId: options.fromOrderId,
+    limit: options.limit,
+  };
+
   if (options.wait) {
-    return syncShopOrders(shopId);
+    return syncShopOrders(shopId, syncOptions);
   }
-  
+
   // Uruchom sync w tle (nie czekamy na zakończenie)
-  runShopSync(shopId, shop.name);
-  
+  void syncShopOrders(shopId, syncOptions).then((result) => {
+    console.log(`[Scheduler] ✅ Background sync completed for ${shop.name}:`, result);
+  }).catch((error) => {
+    console.error(`[Scheduler] ❌ Background sync failed for ${shop.name}:`, error);
+  });
+
   return {
     message: `Manual sync triggered for ${shop.name}`,
     shopId,

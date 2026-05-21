@@ -169,11 +169,15 @@ export class PrestaShopClient {
   async fetchOrders(params: {
     limit?: number;
     dateFrom?: string;
+    idFrom?: string;
     currentState?: number;
   }): Promise<PrestaShopOrder[]> {
     const queryParams: string[] = [`limit=${params.limit || 50}`];
     if (params.dateFrom) {
       queryParams.push(`date_add>[${params.dateFrom}]`);
+    }
+    if (params.idFrom) {
+      queryParams.push(`id>=${params.idFrom}`);
     }
     if (params.currentState) {
       queryParams.push(`current_state=${params.currentState}`);

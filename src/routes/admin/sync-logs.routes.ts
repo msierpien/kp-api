@@ -14,6 +14,7 @@ export async function syncLogsRoutes(fastify: FastifyInstance) {
           type: 'object',
           properties: {
             limit: { type: 'integer', default: 50, description: 'Maksymalna liczba logów' },
+            shopId: { type: 'string', description: 'Filtruj po ID sklepu' },
           },
         },
         response: { 200: { type: 'array', items: { type: 'object' } } },
@@ -30,7 +31,7 @@ export async function syncLogsRoutes(fastify: FastifyInstance) {
           });
         }
 
-        const logs = await getSyncLogs(parsed.data.limit);
+        const logs = await getSyncLogs(parsed.data.limit, parsed.data.shopId);
         return reply.send(logs);
       } catch (error) {
         fastify.log.error(error);

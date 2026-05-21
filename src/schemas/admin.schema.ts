@@ -14,7 +14,8 @@ export const casesQuerySchema = paginationSchema.extend({
 });
 
 export const syncLogsQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(50).default(5),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  shopId: z.string().optional(),
 });
 
 // Shops / integrations

@@ -556,7 +556,11 @@ export async function shopsRoutes(fastify: FastifyInstance) {
   );
 
   // POST /admin/shops/:id/sync - Manual sync trigger
-  fastify.post<{ Params: ShopIdParamsInput; Querystring: { wait?: string | boolean } }>(
+  fastify.post<{
+    Params: ShopIdParamsInput;
+    Querystring: { wait?: string | boolean };
+    Body: { fromDate?: string; fromOrderId?: string; limit?: number };
+  }>(
     '/:id/sync',
     {
       schema: {
@@ -569,11 +573,23 @@ export async function shopsRoutes(fastify: FastifyInstance) {
             wait: { anyOf: [{ type: 'boolean' }, { type: 'string', enum: ['true', 'false'] }] },
           },
         },
+        body: {
+          type: 'object',
+          properties: {
+            fromDate: { type: 'string', description: 'Data od której synchronizować (YYYY-MM-DD)' },
+            fromOrderId: { type: 'string', description: 'ID zamówienia od którego synchronizować (włącznie)' },
+            limit: { type: 'integer', minimum: 1, maximum: 500, description: 'Maks. liczba zamówień do pobrania' },
+          },
+        },
         response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
     async (
-      request: FastifyRequest<{ Params: ShopIdParamsInput; Querystring: { wait?: string | boolean } }>,
+      request: FastifyRequest<{
+        Params: ShopIdParamsInput;
+        Querystring: { wait?: string | boolean };
+        Body: { fromDate?: string; fromOrderId?: string; limit?: number };
+      }>,
       reply: FastifyReply
     ) => {
       const paramsParsed = shopIdParamsSchema.safeParse(request.params);
@@ -586,8 +602,14 @@ export async function shopsRoutes(fastify: FastifyInstance) {
 
       try {
         const wait = request.query.wait === true || request.query.wait === 'true';
-        fastify.log.info({ shopId: paramsParsed.data.id, wait }, 'Manual sync triggered');
-        const result = await triggerManualSync(paramsParsed.data.id, { wait });
+        const body = request.body ?? {};
+        fastify.log.info({ shopId: paramsParsed.data.id, wait, ...body }, 'Manual sync triggered');
+        const result = await triggerManualSync(paramsParsed.data.id, {
+          wait,
+          fromDate: body.fromDate,
+          fromOrderId: body.fromOrderId,
+          limit: body.limit,
+        });
         return reply.send(result);
       } catch (error) {
         fastify.log.error(error);

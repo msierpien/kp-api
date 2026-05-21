@@ -1,9 +1,10 @@
 import prisma from '../../lib/prisma';
 import type { SyncLogItem } from '../../types';
 
-export async function getSyncLogs(limit: number): Promise<SyncLogItem[]> {
+export async function getSyncLogs(limit: number, shopId?: string): Promise<SyncLogItem[]> {
   const logs = await (prisma as any).syncLog.findMany({
     take: limit,
+    where: shopId ? { shopId } : undefined,
     orderBy: { startedAt: 'desc' },
     include: {
       shop: {

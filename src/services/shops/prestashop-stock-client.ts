@@ -32,7 +32,13 @@ export class PrestaShopStockClient implements ShopStockClient {
       outOfStock: String(options.outOfStockBehavior ?? stockAvailable.outOfStock ?? '2'),
     });
 
-    await this.fetchWebService(`stock_availables/${stockAvailable.id}`, {
+    console.log(
+      `[PrestaShopStockClient] Updating stock for product ${externalProductId}: ` +
+      `stock_available id=${stockAvailable.id}, qty=${Math.max(0, Math.floor(quantity))}, ` +
+      `depends_on_stock=${stockAvailable.dependsOnStock}, id_product_attribute=${stockAvailable.idProductAttribute ?? '0'}`,
+    );
+
+    const putResult = await this.fetchWebService<any>(`stock_availables/${stockAvailable.id}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/xml',
@@ -40,6 +46,12 @@ export class PrestaShopStockClient implements ShopStockClient {
       },
       body: payload,
     });
+
+    const confirmedQty = putResult?.stock_available?.quantity ?? putResult?.quantity;
+    console.log(
+      `[PrestaShopStockClient] PUT result for product ${externalProductId}: ` +
+      `confirmed qty=${confirmedQty ?? 'unknown'}`,
+    );
   }
 
   async updateProductPrice(externalProductId: string, price: number): Promise<void> {
@@ -87,19 +99,30 @@ export class PrestaShopStockClient implements ShopStockClient {
       `stock_availables?filter[id_product]=[${encodeURIComponent(externalProductId)}]&display=full`,
     );
 
-    const entries = data.stock_availables
+    const entries: any[] = data.stock_availables
       ? Array.isArray(data.stock_availables) ? data.stock_availables : [data.stock_availables]
       : [];
 
-    const entry = entries[0];
-    if (!entry) return null;
+    if (entries.length === 0) return null;
+
+    // Dla produktów z kombinacjami PS tworzy wiele wpisów — bierzemy ten z id_product_attribute=0 (sam produkt)
+    const entry = entries.find((e) => String(e.id_product_attribute) === '0') ?? entries[0];
+
+    const dependsOnStock = entry.depends_on_stock === undefined ? undefined : String(entry.depends_on_stock);
+
+    if (dependsOnStock === '1') {
+      console.warn(
+        `[PrestaShopStockClient] Product ${externalProductId} has depends_on_stock=1 (Advanced Stock Management). ` +
+        `Direct stock_available update may be ignored by PrestaShop. Proceeding anyway.`,
+      );
+    }
 
     return {
       id: String(entry.id),
       idProductAttribute: entry.id_product_attribute === undefined ? undefined : String(entry.id_product_attribute),
       idShop: entry.id_shop === undefined ? undefined : String(entry.id_shop),
       idShopGroup: entry.id_shop_group === undefined ? undefined : String(entry.id_shop_group),
-      dependsOnStock: entry.depends_on_stock === undefined ? undefined : String(entry.depends_on_stock),
+      dependsOnStock,
       outOfStock: entry.out_of_stock === undefined ? undefined : String(entry.out_of_stock),
       quantity: entry.quantity === undefined ? undefined : Number(entry.quantity),
     };

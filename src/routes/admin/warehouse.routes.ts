@@ -8,6 +8,7 @@ import * as reservationService from '../../services/admin/warehouse-reservations
 import * as priceSyncService from '../../services/price/price-sync.service';
 import * as stockSyncService from '../../services/stock/stock-sync.service';
 import * as prestaReconciliationService from '../../services/prestashop/prestashop-reconciliation.service';
+import * as shopProductPublicationService from '../../services/admin/shop-product-publication.service';
 import { getStock, getProductStock, recalculateStockCache } from '../../services/admin/warehouse-stock.service';
 
 export async function warehouseRoutes(fastify: FastifyInstance) {
@@ -314,6 +315,88 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.post('/products/shop-products/bulk-preview', {
+    schema: {
+      tags: ['warehouse-shop-products'],
+      summary: 'Podejrzyj masowe tworzenie szkiców produktów w sklepie',
+      body: {
+        type: 'object',
+        required: ['shopId'],
+        properties: {
+          shopId: { type: 'string' },
+          categoryId: { type: ['string', 'null'] },
+          imageLimit: { type: ['integer', 'null'], minimum: 0, maximum: 20, default: 10 },
+          productIds: {
+            type: 'array',
+            maxItems: 50,
+            items: { type: 'string' },
+          },
+          items: {
+            type: 'array',
+            maxItems: 50,
+            items: {
+              type: 'object',
+              required: ['warehouseProductId'],
+              properties: {
+                warehouseProductId: { type: 'string' },
+                price: { type: ['number', 'null'], minimum: 0 },
+                sourceWholesaleMappingId: { type: ['string', 'null'] },
+              },
+            },
+          },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: shopProductPublicationService.BulkShopProductPublicationPreviewInput }>, reply: FastifyReply) => {
+    try {
+      const result = await shopProductPublicationService.previewBulkShopProductPublication(request.body);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd podglądu tworzenia produktów sklepowych';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/products/shop-products/bulk', {
+    schema: {
+      tags: ['warehouse-shop-products'],
+      summary: 'Masowo utwórz nieaktywne szkice produktów w sklepie',
+      body: {
+        type: 'object',
+        required: ['shopId', 'categoryId', 'items'],
+        properties: {
+          shopId: { type: 'string' },
+          categoryId: { type: 'string', minLength: 1 },
+          imageLimit: { type: ['integer', 'null'], minimum: 0, maximum: 20, default: 10 },
+          items: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 50,
+            items: {
+              type: 'object',
+              required: ['warehouseProductId', 'price'],
+              properties: {
+                warehouseProductId: { type: 'string' },
+                price: { type: 'number', minimum: 0 },
+                sourceWholesaleMappingId: { type: ['string', 'null'] },
+              },
+            },
+          },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: shopProductPublicationService.BulkShopProductPublicationInput }>, reply: FastifyReply) => {
+    try {
+      const result = await shopProductPublicationService.createBulkShopProductsFromWarehouseProducts(request.body);
+      return reply.status(201).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd masowego tworzenia produktów sklepowych';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   fastify.post('/shops/:shopId/sync-stock', {
     schema: {
       tags: ['stock-sync'],
@@ -552,6 +635,77 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
       return reply.status(202).send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd synchronizacji stanu';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/products/:id/shop-products/preview', {
+    schema: {
+      tags: ['warehouse-shop-products'],
+      summary: 'Podejrzyj utworzenie szkicu produktu sklepowego z produktu magazynowego',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        required: ['shopId'],
+        properties: {
+          shopId: { type: 'string' },
+          categoryId: { type: ['string', 'null'] },
+          price: { type: ['number', 'null'], minimum: 0 },
+          sourceWholesaleMappingId: { type: ['string', 'null'] },
+          imageLimit: { type: ['integer', 'null'], minimum: 0, maximum: 20, default: 10 },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: shopProductPublicationService.ShopProductPublicationInput;
+  }>, reply: FastifyReply) => {
+    try {
+      const result = await shopProductPublicationService.previewShopProductPublication(request.params.id, request.body);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd podglądu tworzenia produktu sklepowego';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/products/:id/shop-products', {
+    schema: {
+      tags: ['warehouse-shop-products'],
+      summary: 'Utwórz nieaktywny szkic produktu sklepowego z produktu magazynowego',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        required: ['shopId', 'categoryId', 'price'],
+        properties: {
+          shopId: { type: 'string' },
+          categoryId: { type: 'string', minLength: 1 },
+          price: { type: 'number', minimum: 0 },
+          sourceWholesaleMappingId: { type: ['string', 'null'] },
+          imageLimit: { type: ['integer', 'null'], minimum: 0, maximum: 20, default: 10 },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: shopProductPublicationService.ShopProductPublicationInput & { categoryId: string };
+  }>, reply: FastifyReply) => {
+    try {
+      const result = await shopProductPublicationService.createShopProductFromWarehouseProduct(request.params.id, request.body);
+      const status = result.status === 'CREATED' ? 201 : result.status === 'SKIPPED' ? 409 : 400;
+      return reply.status(status).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd tworzenia produktu sklepowego';
       const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }

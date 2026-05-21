@@ -6,6 +6,7 @@ import type { CreateShopInput, UpdateShopInput } from '../../schemas/admin.schem
 import type { ShopItem } from '../../types';
 import { removeShopFromScheduler } from '../scheduler/scheduler.service';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
+import { PrestaShopClient } from '../prestashop/prestashop-client';
 
 const mapShop = (shop: any): ShopItem => ({
   id: shop.id,
@@ -302,4 +303,33 @@ export async function getShopImportReadiness(id: string) {
     },
     lastImportLog,
   };
+}
+
+export async function getPrestaShopCategories(id: string) {
+  const tenantId = getTenantId();
+  const context = getTenantContext();
+  if (!tenantId && context?.role !== 'SUPER_ADMIN') throw new Error('Brak kontekstu tenanta');
+
+  const shop = await prisma.shop.findFirst({
+    where: {
+      id,
+      ...(tenantId ? { tenantId } : {}),
+    },
+  });
+  if (!shop) throw new Error('Sklep nie znaleziony');
+  if (shop.status !== 'ACTIVE') throw new Error('Sklep jest nieaktywny');
+  if (shop.platform !== 'PRESTASHOP') throw new Error(`Kategorie PrestaShop nie obsługują platformy ${shop.platform}`);
+
+  const shopConfig = (shop.configJson || {}) as {
+    authType?: string;
+    adminApi?: { clientId: string; clientSecret: string; scopes: string[] };
+  };
+  const client = new PrestaShopClient({
+    baseUrl: shop.baseUrl,
+    apiKey: decrypt(shop.apiKey),
+    authType: shopConfig.authType === 'ADMIN_API' ? 'ADMIN_API' : 'WEB_SERVICE',
+    adminApiConfig: shopConfig.authType === 'ADMIN_API' ? shopConfig.adminApi : undefined,
+  });
+
+  return client.fetchCategories({ activeOnly: true });
 }

@@ -10,6 +10,7 @@ import {
 import {
   createShop,
   deleteShop,
+  getPrestaShopCategories,
   getShopImportReadiness,
   listShops,
   testShopConnection,
@@ -119,6 +120,36 @@ export async function shopsRoutes(fastify: FastifyInstance) {
         error: 'Internal Server Error',
         message: 'Nie udało się pobrać listy integracji',
       });
+    }
+  });
+
+  fastify.get('/:id/prestashop-categories', {
+    schema: {
+      tags: ['shops'],
+      summary: 'Lista aktywnych kategorii PrestaShop dla integracji',
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      response: {
+        200: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              name: { type: 'string' },
+              active: { type: 'boolean' },
+            },
+          },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const categories = await getPrestaShopCategories(request.params.id);
+      return reply.send(categories);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się pobrać kategorii PrestaShop';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
     }
   });
 

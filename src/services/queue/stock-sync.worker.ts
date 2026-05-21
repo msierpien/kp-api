@@ -1,4 +1,4 @@
-import { Worker, Job } from 'bullmq';
+import { Worker, Job, UnrecoverableError } from 'bullmq';
 import prisma from '../../lib/prisma';
 import { createShopStockClient } from '../shops/shop-client.factory';
 import { getInventoryPublicationDecision } from '../stock/stock-sync.service';
@@ -17,9 +17,22 @@ async function processStockSyncJob(job: Job<StockSyncJobData>) {
     prisma.stockSyncLog.findUnique({ where: { id: logId } }),
   ]);
 
-  if (!product) throw new Error(`Warehouse product not found: ${warehouseProductId}`);
-  if (!shop) throw new Error(`Shop not found: ${shopId}`);
-  if (!log) throw new Error(`Stock sync log not found: ${logId}`);
+  // UnrecoverableError = BullMQ nie będzie retry-ował, job od razu do failed
+  if (!product) {
+    await prisma.stockSyncLog.updateMany({
+      where: { id: logId },
+      data: { status: 'FAILED', errorMessage: `Warehouse product not found: ${warehouseProductId}` },
+    });
+    throw new UnrecoverableError(`Warehouse product not found: ${warehouseProductId}`);
+  }
+  if (!shop) {
+    await prisma.stockSyncLog.updateMany({
+      where: { id: logId },
+      data: { status: 'FAILED', errorMessage: `Shop not found: ${shopId}` },
+    });
+    throw new UnrecoverableError(`Shop not found: ${shopId}`);
+  }
+  if (!log) throw new UnrecoverableError(`Stock sync log not found: ${logId}`);
 
   const decision = await getInventoryPublicationDecision(warehouseProductId, {
     warningMessage: log.warningMessage ?? undefined,

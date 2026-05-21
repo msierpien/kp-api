@@ -52,9 +52,18 @@ async function processStockSyncJob(job: Job<StockSyncJobData>) {
   });
 
   const client = createShopStockClient(shop);
-  await client.updateStockQuantity(externalProductId, Number(decision.publishedQuantity), {
-    outOfStockBehavior: decision.outOfStockBehavior,
-  });
+
+  // Użyj bulk modułu jeśli skonfigurowany — jeden request zamiast GET+PUT przez Webservice
+  if ('hasBulkModule' in client && (client as any).hasBulkModule) {
+    await (client as any).bulkUpdateStock([{
+      productId: Number(externalProductId),
+      quantity: Math.max(0, Math.floor(Number(decision.publishedQuantity))),
+    }]);
+  } else {
+    await client.updateStockQuantity(externalProductId, Number(decision.publishedQuantity), {
+      outOfStockBehavior: decision.outOfStockBehavior,
+    });
+  }
 
   await prisma.stockSyncLog.update({
     where: { id: logId },

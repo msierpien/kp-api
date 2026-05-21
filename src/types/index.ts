@@ -106,8 +106,10 @@ export interface ShopItem {
   apiKey: string;
   apiSecret: string | null;
   authType?: 'WEB_SERVICE' | 'ADMIN_API' | 'REST_API' | 'OAUTH' | 'MANUAL';
-  config: any; // Elastyczna konfiguracja JSON per platforma
-  tenantId: string; // Multi-tenant isolation
+  config: any;
+  hasBulkStock?: boolean;
+  bulkStockUrl?: string | null;
+  tenantId: string;
 }
 
 export interface CreateShopDto {

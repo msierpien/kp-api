@@ -8,30 +8,35 @@ import { removeShopFromScheduler } from '../scheduler/scheduler.service';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
 import { PrestaShopClient } from '../prestashop/prestashop-client';
 
-const mapShop = (shop: any): ShopItem => ({
-  id: shop.id,
-  name: shop.name,
-  platform: shop.platform,
-  baseUrl: shop.baseUrl,
-  status: shop.status,
-  lastSyncAt: shop.lastSyncAt,
-  apiKey: decrypt(shop.apiKey), // Deszyfruj przed zwróceniem
-  apiSecret: shop.apiSecret ? decrypt(shop.apiSecret) : null, // Deszyfruj jeśli istnieje
-  authType: (shop.configJson as any)?.authType || 'WEB_SERVICE',
-  config: (shop.configJson as any) || {
-    orderSync: {
-      enabled: true,
-      intervalMinutes: 10,
-      orderStatus: 'PAID',
+const mapShop = (shop: any): ShopItem => {
+  const configJson = (shop.configJson as any) || {};
+  return {
+    id: shop.id,
+    name: shop.name,
+    platform: shop.platform,
+    baseUrl: shop.baseUrl,
+    status: shop.status,
+    lastSyncAt: shop.lastSyncAt,
+    apiKey: decrypt(shop.apiKey),
+    apiSecret: shop.apiSecret ? decrypt(shop.apiSecret) : null,
+    authType: configJson.authType || 'WEB_SERVICE',
+    config: configJson.orderSync ? configJson : {
+      orderSync: {
+        enabled: true,
+        intervalMinutes: 10,
+        orderStatus: 'PAID',
+      },
+      adminApi: {
+        clientId: null,
+        clientSecret: null,
+        scopes: [],
+      },
     },
-    adminApi: {
-      clientId: null,
-      clientSecret: null,
-      scopes: [],
-    },
-  },
-  tenantId: shop.tenantId, // Multi-tenant isolation
-});
+    hasBulkStock: Boolean(configJson.bulkStockUrl && configJson.bulkStockApiKey),
+    bulkStockUrl: typeof configJson.bulkStockUrl === 'string' ? configJson.bulkStockUrl : null,
+    tenantId: shop.tenantId,
+  };
+};
 
 export async function listShops(): Promise<ShopItem[]> {
   const shops = await prisma.shop.findMany({

@@ -2,13 +2,70 @@
 import { Buffer } from 'node:buffer';
 import type { ShopProductInventorySnapshot, ShopStockClient, ShopStockUpdateOptions } from './shop-stock-client.interface';
 
+const BULK_BATCH_SIZE = 500;
+
+export interface BulkStockItem {
+  productId: number;
+  quantity: number;
+  idProductAttribute?: number;
+}
+
+export interface BulkStockResult {
+  updated: number;
+  errors: string[];
+  results: Array<{ productId: number; quantity?: number; idProductAttribute?: number; status: 'ok' | 'error'; message?: string }>;
+}
+
 export class PrestaShopStockClient implements ShopStockClient {
   private baseUrl: string;
   private apiKey: string;
+  private bulkStockUrl: string | null;
+  private bulkStockApiKey: string | null;
 
-  constructor(config: { baseUrl: string; apiKey: string }) {
+  constructor(config: { baseUrl: string; apiKey: string; bulkStockUrl?: string | null; bulkStockApiKey?: string | null }) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '').replace(/\/api$/, '');
     this.apiKey = config.apiKey;
+    this.bulkStockUrl = config.bulkStockUrl ?? null;
+    this.bulkStockApiKey = config.bulkStockApiKey ?? null;
+  }
+
+  get hasBulkModule(): boolean {
+    return Boolean(this.bulkStockUrl && this.bulkStockApiKey);
+  }
+
+  async bulkUpdateStock(items: BulkStockItem[]): Promise<BulkStockResult> {
+    if (!this.bulkStockUrl || !this.bulkStockApiKey) {
+      throw new Error('Moduł kp_bulkstock nie jest skonfigurowany dla tego sklepu');
+    }
+
+    const combined: BulkStockResult = { updated: 0, errors: [], results: [] };
+
+    for (let i = 0; i < items.length; i += BULK_BATCH_SIZE) {
+      const batch = items.slice(i, i + BULK_BATCH_SIZE);
+      const res = await fetch(this.bulkStockUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Api-Key': this.bulkStockApiKey },
+        body: JSON.stringify({ items: batch }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`kp_bulkstock HTTP ${res.status}: ${text.slice(0, 200)}`);
+      }
+
+      const json = await res.json() as { success: boolean; data?: BulkStockResult; errors?: string[] };
+      if (!json.success) {
+        throw new Error(`kp_bulkstock error: ${json.errors?.join(', ') ?? 'Unknown error'}`);
+      }
+
+      const result = json.data!;
+      combined.updated += result.updated;
+      combined.errors.push(...result.errors);
+      combined.results.push(...result.results);
+    }
+
+    console.log(`[PrestaShopStockClient] bulk update: ${combined.updated} updated, ${combined.errors.length} errors`);
+    return combined;
   }
 
   async updateStockQuantity(

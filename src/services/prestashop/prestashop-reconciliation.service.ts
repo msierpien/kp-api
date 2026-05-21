@@ -233,6 +233,11 @@ export async function importStockFromPrestaShop(shopId?: string): Promise<Import
         clientByShop.set(mapping.shopId, client);
       }
 
+      if (!client.getProductInventorySnapshot) {
+        errors.push({ warehouseProductId: mapping.warehouseProduct.id, sku: mapping.warehouseProduct.sku, message: 'Klient nie obsługuje pobierania stanu' });
+        continue;
+      }
+
       const remote = await client.getProductInventorySnapshot(mapping.externalProductId);
       const remoteStock = remote.stock;
 

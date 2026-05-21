@@ -1,4 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import prisma from '../../lib/prisma';
+import { encrypt } from '../../lib/encryption';
 import {
   createShopSchema,
   updateShopSchema,
@@ -241,6 +243,49 @@ export async function shopsRoutes(fastify: FastifyInstance) {
         });
       }
     }
+  );
+
+  // PATCH /admin/shops/:id/bulk-stock-config
+  fastify.patch<{ Params: ShopIdParamsInput; Body: { bulkStockUrl?: string | null; bulkStockApiKey?: string | null } }>(
+    '/:id/bulk-stock-config',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Zapisz konfigurację modułu kp_bulkstock dla sklepu',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        body: {
+          type: 'object',
+          properties: {
+            bulkStockUrl: { type: 'string', nullable: true },
+            bulkStockApiKey: { type: 'string', nullable: true },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const shopId = request.params.id;
+      const { bulkStockUrl, bulkStockApiKey } = request.body ?? {};
+      try {
+        const shop = await prisma.shop.findUnique({ where: { id: shopId }, select: { id: true, configJson: true } });
+        if (!shop) return reply.status(404).send({ error: 'Not Found', message: 'Sklep nie znaleziony' });
+
+        const existing = (shop.configJson && typeof shop.configJson === 'object' && !Array.isArray(shop.configJson))
+          ? shop.configJson as Record<string, unknown>
+          : {};
+
+        const updated = {
+          ...existing,
+          bulkStockUrl: bulkStockUrl ?? null,
+          bulkStockApiKey: bulkStockApiKey ? encrypt(bulkStockApiKey) : null,
+        };
+
+        await prisma.shop.update({ where: { id: shopId }, data: { configJson: updated } });
+        return reply.send({ success: true, hasBulkStock: Boolean(updated.bulkStockUrl && updated.bulkStockApiKey) });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Błąd zapisu konfiguracji bulk';
+        return reply.status(500).send({ error: 'Error', message });
+      }
+    },
   );
 
   // DELETE /admin/shops/:id

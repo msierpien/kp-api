@@ -88,6 +88,41 @@ export async function wholesaleRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.patch('/providers/lead-times', {
+    schema: {
+      tags: ['wholesale'],
+      summary: 'Masowo zapisz czasy dostawy dostawców hurtowni',
+      body: {
+        type: 'object',
+        required: ['items'],
+        properties: {
+          items: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 200,
+            items: {
+              type: 'object',
+              required: ['providerId'],
+              properties: {
+                providerId: { type: 'string', minLength: 1 },
+                leadTimeDays: { type: ['integer', 'null'], minimum: 0, maximum: 365 },
+              },
+            },
+          },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: wholesaleService.BulkUpdateWholesaleProviderLeadTimesInput }>, reply: FastifyReply) => {
+    try {
+      const result = await wholesaleService.bulkUpdateWholesaleProviderLeadTimes(request.body);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd zapisu czasów dostawy dostawców';
+      const status = message.includes('Brak kontekstu') ? 400 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   fastify.get('/product-offers', {
     schema: {
       tags: ['wholesale'],

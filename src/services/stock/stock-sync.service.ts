@@ -121,7 +121,7 @@ export async function getInventoryPublicationDecisions(
     decisions.set(product.id, {
       stockAfter: product.currentStock,
       publishedQuantity: ZERO,
-      leadTimeDays: productLeadTimeDays,
+      leadTimeDays: null,
       availabilityPolicy: 'OUT_OF_STOCK',
       outOfStockBehavior: 0,
       warningMessage: options.warningMessage,
@@ -231,6 +231,8 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
       externalProductId: mapping.externalProductId,
       quantity: Math.max(0, Math.floor(Number(decision.publishedQuantity))),
       leadTimeDays: publishedLeadTimeDays,
+      outOfStockBehavior: decision.outOfStockBehavior,
+      availabilityPolicy: decision.availabilityPolicy,
     });
     batchItemsByShop.set(mapping.shopId, batch);
 
@@ -327,6 +329,7 @@ function resolveProductLeadTimeDays(product: ProductForPublication) {
 }
 
 function resolvePublishedLeadTimeDays(decision: InventoryPublicationDecision, shopConfigJson: unknown) {
+  if (decision.availabilityPolicy === 'OUT_OF_STOCK') return null;
   return normalizeOptionalLeadTimeDays(decision.leadTimeDays) ??
     getShopDefaultLeadTimeDays(shopConfigJson) ??
     0;

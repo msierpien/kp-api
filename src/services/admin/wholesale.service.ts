@@ -83,6 +83,21 @@ export interface UpdateWholesaleProviderInput {
   isActive?: boolean;
 }
 
+export interface BulkUpdateWholesaleProviderLeadTimesInput {
+  items: Array<{
+    providerId: string;
+    leadTimeDays?: number | null;
+  }>;
+}
+
+export interface BulkUpdateWholesaleProviderLeadTimesResult {
+  requested: number;
+  updated: number;
+  unchanged: number;
+  notFound: number;
+  errors: Array<{ providerId: string; message: string }>;
+}
+
 export interface SyncWholesaleProviderOptions {
   limit?: number;
   batchSize?: number;
@@ -290,6 +305,71 @@ export async function updateWholesaleProvider(id: string, input: UpdateWholesale
   }
 
   return updated;
+}
+
+export async function bulkUpdateWholesaleProviderLeadTimes(
+  input: BulkUpdateWholesaleProviderLeadTimesInput,
+): Promise<BulkUpdateWholesaleProviderLeadTimesResult> {
+  const tenantId = requireTenantId();
+  const itemsByProviderId = new Map<string, number | null>();
+
+  for (const item of input.items ?? []) {
+    const providerId = item.providerId?.trim();
+    if (!providerId) continue;
+    itemsByProviderId.set(providerId, normalizeOptionalLeadTimeDays(item.leadTimeDays));
+  }
+
+  if (itemsByProviderId.size === 0) {
+    throw new Error('Podaj przynajmniej jednego dostawcę do aktualizacji');
+  }
+
+  const providerIds = Array.from(itemsByProviderId.keys());
+  const providers = await prisma.wholesaleProvider.findMany({
+    where: { tenantId, id: { in: providerIds } },
+    select: { id: true, leadTimeDays: true },
+  });
+  const providersById = new Map(providers.map((provider) => [provider.id, provider]));
+  const errors = providerIds
+    .filter((providerId) => !providersById.has(providerId))
+    .map((providerId) => ({ providerId, message: 'Provider hurtowni nie znaleziony' }));
+
+  let updated = 0;
+  let unchanged = 0;
+  const changedProviderIds: string[] = [];
+  const updateOperations: Prisma.PrismaPromise<unknown>[] = [];
+
+  for (const provider of providers) {
+    const nextLeadTimeDays = itemsByProviderId.get(provider.id) ?? null;
+    if (nextLeadTimeDays === provider.leadTimeDays) {
+      unchanged++;
+      continue;
+    }
+    updated++;
+    changedProviderIds.push(provider.id);
+    updateOperations.push(prisma.wholesaleProvider.update({
+      where: { id: provider.id },
+      data: { leadTimeDays: nextLeadTimeDays },
+      select: { id: true },
+    }));
+  }
+
+  if (updateOperations.length > 0) {
+    await prisma.$transaction(updateOperations);
+  }
+
+  for (const providerId of changedProviderIds) {
+    enqueueWholesaleProviderLeadTimeStockSync(providerId, tenantId).catch((error) => {
+      console.error('[Wholesale] Failed to enqueue stock sync for provider lead time change:', error);
+    });
+  }
+
+  return {
+    requested: providerIds.length,
+    updated,
+    unchanged,
+    notFound: errors.length,
+    errors,
+  };
 }
 
 export async function updateWholesaleProviderSyncInterval(
@@ -887,15 +967,19 @@ async function processWholesaleSyncBatch(input: {
     select: {
       id: true,
       externalSku: true,
+      warehouseProductId: true,
+      lastKnownStock: true,
+      isActive: true,
     },
   });
-  const existingBySku = new Map(existingMappings.map((mapping) => [mapping.externalSku, mapping.id]));
+  const existingBySku = new Map(existingMappings.map((mapping) => [mapping.externalSku, mapping]));
   const now = new Date();
   const createData: Prisma.WholesaleProductMappingCreateManyInput[] = [];
   const updateOperations: Prisma.PrismaPromise<unknown>[] = [];
+  const availabilityChangedProductIds = new Set<string>();
 
   for (const mapped of mappedRecords) {
-    const existingId = existingBySku.get(mapped.externalSku);
+    const existing = existingBySku.get(mapped.externalSku);
     const data = {
       externalEan: mapped.externalEan,
       externalName: mapped.externalName,
@@ -907,9 +991,14 @@ async function processWholesaleSyncBatch(input: {
       lastSyncAt: now,
     };
 
-    if (existingId) {
+    if (existing) {
+      const wasAvailable = existing.isActive && isPositiveDecimal(existing.lastKnownStock);
+      const isAvailable = isPositiveDecimal(mapped.lastKnownStock);
+      if (existing.warehouseProductId && wasAvailable !== isAvailable) {
+        availabilityChangedProductIds.add(existing.warehouseProductId);
+      }
       updateOperations.push(prisma.wholesaleProductMapping.update({
-        where: { id: existingId },
+        where: { id: existing.id },
         data,
       }));
     } else {
@@ -927,6 +1016,8 @@ async function processWholesaleSyncBatch(input: {
     : [];
   const results = await prisma.$transaction([...createOperation, ...updateOperations]);
   const created = createData.length > 0 ? (results[0] as Prisma.BatchPayload).count : 0;
+
+  await enqueueWholesaleAvailabilityStockSync(Array.from(availabilityChangedProductIds), input.tenantId);
 
   return {
     created,
@@ -1078,6 +1169,34 @@ function normalizeOptionalLeadTimeDays(value: number | null | undefined) {
     throw new Error('Czas wysyłki dostawcy musi być liczbą całkowitą od 0 do 365 dni');
   }
   return days;
+}
+
+function isPositiveDecimal(value: Prisma.Decimal | number | string | null | undefined) {
+  if (value === undefined || value === null) return false;
+  return new Prisma.Decimal(value).gt(0);
+}
+
+async function enqueueWholesaleAvailabilityStockSync(warehouseProductIds: string[], tenantId: string) {
+  const productIds = Array.from(new Set(warehouseProductIds.filter(Boolean)));
+  if (productIds.length === 0) return;
+
+  const products = await prisma.warehouseProduct.findMany({
+    where: {
+      id: { in: productIds },
+      tenantId,
+      isActive: true,
+      currentStock: { lte: new Prisma.Decimal(0) },
+    },
+    select: { id: true },
+  });
+
+  for (let i = 0; i < products.length; i += 500) {
+    await publishInventoryToShops({
+      tenantId,
+      warehouseProductIds: products.slice(i, i + 500).map((product) => product.id),
+      triggeredBy: 'WHOLESALE_SYNC',
+    });
+  }
 }
 
 async function enqueueWholesaleProviderLeadTimeStockSync(providerId: string, tenantId: string) {

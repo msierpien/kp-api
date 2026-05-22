@@ -115,7 +115,7 @@ export async function retryStockSyncLog(id: string) {
   }
 
   const decision = await getInventoryPublicationDecision(log.warehouseProductId);
-  const publishedLeadTimeDays = resolvePublishedLeadTimeDays(decision.leadTimeDays, log.shop.configJson);
+  const publishedLeadTimeDays = resolvePublishedLeadTimeDays(decision, log.shop.configJson);
   const retryLog = await prisma.stockSyncLog.create({
     data: {
       tenantId,
@@ -209,7 +209,9 @@ export async function requeuePendingStockSyncLogs(shopId?: string) {
         warehouseProductId: log.warehouseProductId,
         externalProductId: mapping.externalProductId,
         quantity: Math.max(0, Math.floor(Number(log.publishedQuantity ?? log.stockAfter))),
-        leadTimeDays: log.publishedLeadTimeDays ?? 0,
+        leadTimeDays: log.publishedLeadTimeDays ?? null,
+        outOfStockBehavior: log.outOfStockBehavior === 1 ? 1 : 0,
+        availabilityPolicy: isStockSyncAvailabilityPolicy(log.availabilityPolicy) ? log.availabilityPolicy : undefined,
       });
       batchItemsByShop.set(log.shopId, batch);
 
@@ -226,10 +228,18 @@ export async function requeuePendingStockSyncLogs(shopId?: string) {
   return { total: pendingLogs.length, requeued, skipped, errors };
 }
 
-function resolvePublishedLeadTimeDays(value: unknown, shopConfigJson: unknown) {
-  return normalizeOptionalLeadTimeDays(value) ??
+function resolvePublishedLeadTimeDays(
+  decision: { leadTimeDays?: unknown; availabilityPolicy?: string | null },
+  shopConfigJson: unknown,
+) {
+  if (decision.availabilityPolicy === 'OUT_OF_STOCK') return null;
+  return normalizeOptionalLeadTimeDays(decision.leadTimeDays) ??
     getShopDefaultLeadTimeDays(shopConfigJson) ??
     0;
+}
+
+function isStockSyncAvailabilityPolicy(value: unknown): value is import('../queue/stock-sync.queue').StockSyncAvailabilityPolicy {
+  return value === 'IN_STOCK' || value === 'BACKORDER_FROM_WHOLESALE' || value === 'OUT_OF_STOCK';
 }
 
 function getShopDefaultLeadTimeDays(configJson: unknown) {

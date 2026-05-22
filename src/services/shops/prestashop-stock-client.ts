@@ -7,14 +7,25 @@ const BULK_BATCH_SIZE = 500;
 export interface BulkStockItem {
   productId: number;
   quantity?: number;
-  leadTimeDays?: number;
+  leadTimeDays?: number | null;
+  outOfStockBehavior?: 0 | 1;
+  availabilityPolicy?: 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
   idProductAttribute?: number;
 }
 
 export interface BulkStockResult {
   updated: number;
   errors: string[];
-  results: Array<{ productId: number; quantity?: number; leadTimeDays?: number; idProductAttribute?: number; status: 'ok' | 'error'; message?: string }>;
+  results: Array<{
+    productId: number;
+    quantity?: number;
+    leadTimeDays?: number | null;
+    outOfStockBehavior?: 0 | 1;
+    availabilityPolicy?: 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
+    idProductAttribute?: number;
+    status: 'ok' | 'error';
+    message?: string;
+  }>;
 }
 
 export class PrestaShopStockClient implements ShopStockClient {
@@ -59,6 +70,8 @@ export class PrestaShopStockClient implements ShopStockClient {
         productId: item.productId,
         ...(item.quantity === undefined ? {} : { quantity: item.quantity }),
         ...(item.leadTimeDays === undefined ? {} : { leadTimeDays: normalizeLeadTimeDays(item.leadTimeDays) }),
+        ...(item.outOfStockBehavior === undefined ? {} : { outOfStockBehavior: normalizeOutOfStockBehavior(item.outOfStockBehavior) }),
+        ...(item.availabilityPolicy === undefined ? {} : { availabilityPolicy: normalizeAvailabilityPolicy(item.availabilityPolicy) }),
         ...(item.idProductAttribute === undefined ? {} : { idProductAttribute: item.idProductAttribute }),
       }));
       for (const item of payloadItems) {
@@ -318,11 +331,27 @@ function normalizeNullableString(value: unknown) {
 }
 
 function normalizeLeadTimeDays(value: unknown) {
+  if (value === null) return null;
   const days = Number(value);
   if (!Number.isInteger(days) || days < 0 || days > 365) {
     throw new Error('leadTimeDays must be an integer between 0 and 365');
   }
   return days;
+}
+
+function normalizeOutOfStockBehavior(value: unknown) {
+  const behavior = Number(value);
+  if (behavior !== 0 && behavior !== 1) {
+    throw new Error('outOfStockBehavior must be 0 or 1');
+  }
+  return behavior as 0 | 1;
+}
+
+function normalizeAvailabilityPolicy(value: unknown) {
+  if (value === 'IN_STOCK' || value === 'BACKORDER_FROM_WHOLESALE' || value === 'OUT_OF_STOCK') {
+    return value;
+  }
+  throw new Error('availabilityPolicy must be IN_STOCK, BACKORDER_FROM_WHOLESALE or OUT_OF_STOCK');
 }
 
 export function buildBulkStockUrl(baseUrl: string) {

@@ -46,7 +46,7 @@ async function processLegacyStockSyncJob(data: StockSyncLegacyJobData) {
   const decision = await getInventoryPublicationDecision(warehouseProductId, {
     warningMessage: log.warningMessage ?? undefined,
   });
-  const publishedLeadTimeDays = resolvePublishedLeadTimeDays(decision.leadTimeDays, shop.configJson);
+  const publishedLeadTimeDays = resolvePublishedLeadTimeDays(decision, shop.configJson);
 
   await prisma.stockSyncLog.update({
     where: { id: logId },
@@ -71,6 +71,8 @@ async function processLegacyStockSyncJob(data: StockSyncLegacyJobData) {
       externalProductId,
       quantity: Math.max(0, Math.floor(Number(decision.publishedQuantity))),
       leadTimeDays: publishedLeadTimeDays,
+      outOfStockBehavior: decision.outOfStockBehavior,
+      availabilityPolicy: decision.availabilityPolicy,
     }],
   });
 }
@@ -140,6 +142,8 @@ async function processBulkBatch(
       productId: Number(item.externalProductId),
       quantity: item.quantity,
       leadTimeDays: item.leadTimeDays,
+      outOfStockBehavior: item.outOfStockBehavior,
+      availabilityPolicy: item.availabilityPolicy,
       ...(item.idProductAttribute === undefined ? {} : { idProductAttribute: item.idProductAttribute }),
     })));
 
@@ -204,7 +208,9 @@ async function processWebserviceBatch(
 
   for (const item of items) {
     try {
-      await client.updateStockQuantity(item.externalProductId, item.quantity);
+      await client.updateStockQuantity(item.externalProductId, item.quantity, {
+        outOfStockBehavior: item.outOfStockBehavior,
+      });
       const remote = await confirmRemoteStock({
         client,
         externalProductId: item.externalProductId,
@@ -273,8 +279,12 @@ function bulkResultKey(productId: number, idProductAttribute?: number) {
   return `${productId}:${idProductAttribute ?? 0}`;
 }
 
-function resolvePublishedLeadTimeDays(value: unknown, shopConfigJson: unknown) {
-  return normalizeOptionalLeadTimeDays(value) ??
+function resolvePublishedLeadTimeDays(
+  decision: { leadTimeDays?: unknown; availabilityPolicy?: string | null },
+  shopConfigJson: unknown,
+) {
+  if (decision.availabilityPolicy === 'OUT_OF_STOCK') return null;
+  return normalizeOptionalLeadTimeDays(decision.leadTimeDays) ??
     getShopDefaultLeadTimeDays(shopConfigJson) ??
     0;
 }

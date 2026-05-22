@@ -3,6 +3,8 @@ import { getRedisConnection } from './render.queue';
 
 export const STOCK_SYNC_QUEUE_NAME = 'stock-sync';
 
+export type StockSyncAvailabilityPolicy = 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
+
 export type StockSyncTriggeredBy =
   | 'DOCUMENT_CONFIRM'
   | 'DOCUMENT_CANCEL'
@@ -28,7 +30,9 @@ export interface StockSyncBatchItem {
   warehouseProductId: string;
   externalProductId: string;
   quantity: number;
-  leadTimeDays?: number;
+  leadTimeDays?: number | null;
+  outOfStockBehavior?: 0 | 1;
+  availabilityPolicy?: StockSyncAvailabilityPolicy;
   idProductAttribute?: number;
 }
 

@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
-import { addStockSyncJob, type StockSyncTriggeredBy } from '../queue/stock-sync.queue';
+import { addStockSyncBatchJobs, type StockSyncBatchItem, type StockSyncTriggeredBy } from '../queue/stock-sync.queue';
 
 export type InventoryAvailabilityPolicy = 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
 export type PrestaShopOutOfStockBehavior = 0 | 1;
@@ -167,7 +167,15 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
   );
 
   let enqueued = 0;
+  let batchJobs = 0;
   const logs = [];
+  const batchItemsByShop = new Map<string, {
+    tenantId: string;
+    shopId: string;
+    triggeredBy: StockSyncTriggeredBy;
+    documentId?: string;
+    items: StockSyncBatchItem[];
+  }>();
 
   for (const mapping of mappings) {
     const product = mapping.warehouseProduct;
@@ -193,22 +201,33 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
       },
     });
 
-    await addStockSyncJob({
-      logId: log.id,
+    const batch = batchItemsByShop.get(mapping.shopId) ?? {
       tenantId: product.tenantId,
-      warehouseProductId: product.id,
       shopId: mapping.shopId,
-      externalProductId: mapping.externalProductId,
       triggeredBy: options.triggeredBy,
       documentId: options.documentId,
+      items: [],
+    };
+    batch.items.push({
+      logId: log.id,
+      warehouseProductId: product.id,
+      externalProductId: mapping.externalProductId,
+      quantity: Math.max(0, Math.floor(Number(decision.publishedQuantity))),
     });
+    batchItemsByShop.set(mapping.shopId, batch);
 
     logs.push(log);
     enqueued += 1;
   }
 
+  for (const batch of batchItemsByShop.values()) {
+    const jobs = await addStockSyncBatchJobs(batch);
+    batchJobs += jobs.length;
+  }
+
   return {
     enqueued,
+    batchJobs,
     logs,
     scannedMappings: mappings.length,
     affectedProducts: productsById.size,
@@ -243,7 +262,7 @@ export async function syncStockForProducts(
   documentId?: string,
 ) {
   const productIds = normalizeProductIds(warehouseProductIds);
-  if (productIds.length === 0) return { enqueued: 0, logs: [] };
+  if (productIds.length === 0) return { enqueued: 0, batchJobs: 0, logs: [] };
 
   return publishInventoryToShops({
     tenantId: getTenantId() ?? undefined,

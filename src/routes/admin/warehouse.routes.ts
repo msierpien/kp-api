@@ -327,6 +327,7 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
           type: 'object',
           properties: {
             enqueued: { type: 'integer' },
+            batchJobs: { type: 'integer' },
             scannedMappings: { type: 'integer' },
             affectedProducts: { type: 'integer' },
           },
@@ -440,6 +441,7 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
           type: 'object',
           properties: {
             enqueued: { type: 'integer' },
+            batchJobs: { type: 'integer' },
             scannedMappings: { type: 'integer' },
             affectedProducts: { type: 'integer' },
           },
@@ -652,6 +654,7 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
           type: 'object',
           properties: {
             enqueued: { type: 'integer' },
+            batchJobs: { type: 'integer' },
             scannedMappings: { type: 'integer' },
             affectedProducts: { type: 'integer' },
           },

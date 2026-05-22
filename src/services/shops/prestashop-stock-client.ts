@@ -74,23 +74,18 @@ export class PrestaShopStockClient implements ShopStockClient {
         throw new Error(`kp_bulkstock HTTP ${res.status}: ${text.slice(0, 200)}`);
       }
 
-      const json = await res.json() as { success: boolean; data?: BulkStockResult; errors?: string[] };
+      const json = await res.json().catch(() => null) as { success: boolean; data?: Partial<BulkStockResult>; errors?: string[] } | null;
+      if (!json) {
+        throw new Error('kp_bulkstock returned non-JSON response');
+      }
       if (!json.success) {
         throw new Error(`kp_bulkstock error: ${json.errors?.join(', ') ?? 'Unknown error'}`);
       }
 
-      const result = json.data!;
-      combined.updated += result.updated;
-      combined.errors.push(...result.errors);
-      combined.results.push(...result.results);
-    }
-
-    const failedItems = combined.results.filter((item) => item.status === 'error');
-    if (combined.errors.length > 0 || failedItems.length > 0) {
-      const itemMessages = failedItems
-        .map((item) => `product ${item.productId}: ${item.message ?? 'unknown error'}`)
-        .slice(0, 5);
-      throw new Error(`kp_bulkstock partial failure: ${[...combined.errors, ...itemMessages].join('; ')}`);
+      const result = json.data ?? {};
+      combined.updated += Number(result.updated ?? 0);
+      combined.errors.push(...(Array.isArray(result.errors) ? result.errors : []));
+      combined.results.push(...(Array.isArray(result.results) ? result.results : []));
     }
 
     console.log(`[PrestaShopStockClient] bulk update: ${combined.updated} updated, ${combined.errors.length} errors`);
@@ -315,7 +310,7 @@ function normalizeNullableString(value: unknown) {
   return trimmed || null;
 }
 
-function buildBulkStockUrl(baseUrl: string) {
+export function buildBulkStockUrl(baseUrl: string) {
   return `${baseUrl}/index.php?fc=module&module=kp_bulkstock&controller=bulkupdate`;
 }
 

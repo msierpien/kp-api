@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import prisma from '../../lib/prisma';
-import { encrypt } from '../../lib/encryption';
+import { decrypt, encrypt } from '../../lib/encryption';
 import {
   createShopSchema,
   updateShopSchema,
@@ -24,6 +24,7 @@ import {
   disableShopSync,
   updateShopSyncInterval,
 } from '../../services/scheduler/scheduler.service';
+import { buildBulkStockUrl } from '../../services/shops/prestashop-stock-client';
 import * as shopWebhookService from '../../services/webhooks/prestashop-order-webhook.service';
 
 const shopResponseSchema = {
@@ -65,6 +66,20 @@ const testConnectionResponseSchema = {
     status: { type: 'number' },
     latencyMs: { type: 'number' },
     message: { type: 'string' },
+  },
+};
+
+const bulkStockDiagnosticsResponseSchema = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    expectedGet405: { type: 'boolean' },
+    status: { type: 'number' },
+    latencyMs: { type: 'number' },
+    contentType: { type: 'string' },
+    url: { type: 'string' },
+    message: { type: 'string' },
+    bodyPreview: { type: 'string' },
   },
 };
 
@@ -302,6 +317,93 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Błąd zapisu konfiguracji bulk';
         return reply.status(500).send({ error: 'Error', message });
+      }
+    },
+  );
+
+  // GET /admin/shops/:id/bulk-stock-diagnostics
+  fastify.get<{ Params: ShopIdParamsInput }>(
+    '/:id/bulk-stock-diagnostics',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Niemutujący test osiągalności endpointu kp_bulkstock',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        response: { 200: bulkStockDiagnosticsResponseSchema },
+      },
+    },
+    async (request, reply) => {
+      const shopId = request.params.id;
+      const shop = await prisma.shop.findUnique({
+        where: { id: shopId },
+        select: { id: true, baseUrl: true, configJson: true },
+      });
+      if (!shop) {
+        return reply.status(404).send({ error: 'Not Found', message: 'Sklep nie znaleziony' });
+      }
+
+      const config = (shop.configJson && typeof shop.configJson === 'object' && !Array.isArray(shop.configJson))
+        ? shop.configJson as Record<string, unknown>
+        : {};
+      const configuredUrl = normalizeOptionalString(config.bulkStockUrl);
+      const url = configuredUrl ?? buildBulkStockUrl(shop.baseUrl.replace(/\/+$/, '').replace(/\/api$/, ''));
+      const apiKey = typeof config.bulkStockApiKey === 'string' && config.bulkStockApiKey
+        ? decrypt(config.bulkStockApiKey)
+        : null;
+
+      const startedAt = Date.now();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+
+      try {
+        const headers: Record<string, string> = { Accept: 'application/json' };
+        if (apiKey) headers['X-Api-Key'] = apiKey;
+
+        const res = await fetch(url, {
+          method: 'GET',
+          headers,
+          signal: controller.signal,
+        });
+        const text = await res.text().catch(() => '');
+        const contentType = res.headers.get('content-type') ?? '';
+        const bodyPreview = text.slice(0, 400);
+        const looksJson = contentType.includes('application/json') || bodyPreview.trim().startsWith('{');
+        const expectedGet405 = res.status === 405 && looksJson;
+        const ok = looksJson && res.status !== 503;
+        const message = expectedGet405
+          ? 'Endpoint modułu jest osiągalny. GET zwrócił oczekiwane HTTP 405 JSON.'
+          : res.status === 503 && !looksJson
+            ? 'Endpoint zwraca HTML 503 przed kontrolerem modułu. Sprawdź maintenance/CDN/IP whitelist lub URL sklepu multistore.'
+            : ok
+              ? `Endpoint zwraca JSON HTTP ${res.status}; moduł prawdopodobnie odpowiada, ale oczekiwany test GET to HTTP 405.`
+              : `Endpoint nie zwrócił odpowiedzi JSON modułu. HTTP ${res.status}.`;
+
+        return reply.send({
+          ok,
+          expectedGet405,
+          status: res.status,
+          latencyMs: Date.now() - startedAt,
+          contentType,
+          url,
+          message,
+          bodyPreview,
+        });
+      } catch (error) {
+        const message = error instanceof Error
+          ? error.message
+          : 'Nie udało się połączyć z endpointem kp_bulkstock';
+        return reply.send({
+          ok: false,
+          expectedGet405: false,
+          status: 0,
+          latencyMs: Date.now() - startedAt,
+          contentType: '',
+          url,
+          message,
+          bodyPreview: '',
+        });
+      } finally {
+        clearTimeout(timeout);
       }
     },
   );

@@ -5,14 +5,21 @@ import { PrestaShopStockClient } from '../shops/prestashop-stock-client';
 import type { ShopProductInventorySnapshot } from '../shops/shop-stock-client.interface';
 import { getInventoryPublicationDecision } from '../stock/stock-sync.service';
 import { getRedisConnection } from './render.queue';
-import { STOCK_SYNC_QUEUE_NAME, type StockSyncJobData } from './stock-sync.queue';
+import { STOCK_SYNC_QUEUE_NAME, type StockSyncBatchJobData, type StockSyncJobData, type StockSyncLegacyJobData } from './stock-sync.queue';
 
 let stockSyncWorker: Worker<StockSyncJobData> | null = null;
 const PRESTASHOP_SYNC_RATE_LIMIT = { max: 60, duration: 60_000 };
 
 async function processStockSyncJob(job: Job<StockSyncJobData>) {
-  const { logId, warehouseProductId, shopId, externalProductId } = job.data;
+  if ('items' in job.data) {
+    return processStockSyncBatch(job.data);
+  }
 
+  return processLegacyStockSyncJob(job.data);
+}
+
+async function processLegacyStockSyncJob(data: StockSyncLegacyJobData) {
+  const { logId, warehouseProductId, shopId, externalProductId } = data;
   const [product, shop, log] = await Promise.all([
     prisma.warehouseProduct.findUnique({ where: { id: warehouseProductId } }),
     prisma.shop.findUnique({ where: { id: shopId } }),
@@ -43,8 +50,6 @@ async function processStockSyncJob(job: Job<StockSyncJobData>) {
   await prisma.stockSyncLog.update({
     where: { id: logId },
     data: {
-      status: 'PROCESSING',
-      attemptCount: { increment: 1 },
       stockAfter: product.currentStock,
       publishedQuantity: decision.publishedQuantity,
       availabilityPolicy: decision.availabilityPolicy,
@@ -52,89 +57,213 @@ async function processStockSyncJob(job: Job<StockSyncJobData>) {
       warningMessage: decision.warningMessage,
     },
   });
+
+  return processStockSyncBatch({
+    tenantId: data.tenantId,
+    shopId,
+    triggeredBy: data.triggeredBy,
+    documentId: data.documentId,
+    items: [{
+      logId,
+      warehouseProductId,
+      externalProductId,
+      quantity: Math.max(0, Math.floor(Number(decision.publishedQuantity))),
+    }],
+  });
+}
+
+async function processStockSyncBatch(data: StockSyncBatchJobData) {
+  if (data.items.length === 0) {
+    throw new UnrecoverableError('Stock sync batch is empty');
+  }
+
+  const logIds = data.items.map((item) => item.logId);
+  const shop = await prisma.shop.findUnique({ where: { id: data.shopId } });
+  if (!shop) {
+    await markLogsFailed(logIds, `Shop not found: ${data.shopId}`);
+    throw new UnrecoverableError(`Shop not found: ${data.shopId}`);
+  }
+
+  const logs = await prisma.stockSyncLog.findMany({
+    where: { id: { in: logIds } },
+    select: { id: true },
+  });
+  const foundLogIds = new Set(logs.map((log) => log.id));
+  const missingLogIds = logIds.filter((id) => !foundLogIds.has(id));
+  if (missingLogIds.length > 0) {
+    await markLogsFailed(logIds.filter((id) => foundLogIds.has(id)), `Stock sync logs not found: ${missingLogIds.join(', ')}`);
+    throw new UnrecoverableError(`Stock sync logs not found: ${missingLogIds.join(', ')}`);
+  }
 
   const client = createShopStockClient(shop);
   const prestashopShopId = client instanceof PrestaShopStockClient
     ? client.configuredPrestaShopShopId
     : null;
 
-  const externalNumericProductId = Number(externalProductId);
   const useBulk = client instanceof PrestaShopStockClient &&
     client.hasBulkModule &&
-    Number.isInteger(externalNumericProductId) &&
-    externalNumericProductId > 0;
+    data.items.every((item) => isPositiveIntegerString(item.externalProductId));
   let syncMode: 'BULK' | 'WEBSERVICE' = useBulk ? 'BULK' : 'WEBSERVICE';
 
-  await prisma.stockSyncLog.update({
-    where: { id: logId },
+  await prisma.stockSyncLog.updateMany({
+    where: { id: { in: logIds } },
     data: {
+      status: 'PROCESSING',
+      attemptCount: { increment: 1 },
       syncMode,
       prestashopShopId,
+      errorMessage: null,
     },
   });
 
   console.log(
-    `[StockSyncWorker] product=${externalProductId} qty=${decision.publishedQuantity} ` +
-    `mode=${useBulk ? 'BULK' : 'WEBSERVICE'}`,
+    `[StockSyncWorker] shop=${data.shopId} items=${data.items.length} mode=${syncMode}`,
   );
 
   if (useBulk) {
-    await client.bulkUpdateStock([{
-      productId: externalNumericProductId,
-      quantity: Math.max(0, Math.floor(Number(decision.publishedQuantity))),
-    }]);
-  } else {
-    await client.updateStockQuantity(externalProductId, Number(decision.publishedQuantity), {
-      outOfStockBehavior: decision.outOfStockBehavior,
-    });
+    return processBulkBatch(client, data.items, { syncMode, prestashopShopId });
   }
 
-  const expectedQuantity = Math.max(0, Math.floor(Number(decision.publishedQuantity)));
-  let remote: Awaited<ReturnType<typeof confirmRemoteStock>>;
+  return processWebserviceBatch(client, data.items, { syncMode, prestashopShopId });
+}
+
+async function processBulkBatch(
+  client: PrestaShopStockClient,
+  items: StockSyncBatchJobData['items'],
+  meta: { syncMode: 'BULK' | 'WEBSERVICE'; prestashopShopId: string | null },
+) {
   try {
-    remote = await confirmRemoteStock({
-      client,
-      externalProductId,
-      expectedQuantity,
-    });
+    const result = await client.bulkUpdateStock(items.map((item) => ({
+      productId: Number(item.externalProductId),
+      quantity: item.quantity,
+      ...(item.idProductAttribute === undefined ? {} : { idProductAttribute: item.idProductAttribute }),
+    })));
+
+    const hasItemErrors = result.results.some((item) => item.status === 'error');
+    if (result.errors.length > 0 && !hasItemErrors) {
+      const message = `kp_bulkstock errors: ${result.errors.join('; ')}`;
+      await markLogsFailed(items.map((item) => item.logId), message, meta);
+      return { success: false, failed: items.length, message };
+    }
+
+    const resultByKey = new Map(result.results.map((item) => [bulkResultKey(item.productId, item.idProductAttribute), item]));
+    let failed = 0;
+
+    for (const item of items) {
+      const remote = resultByKey.get(bulkResultKey(Number(item.externalProductId), item.idProductAttribute));
+      if (!remote) {
+        failed++;
+        const details = result.errors.length > 0 ? `: ${result.errors.join('; ')}` : '';
+        await markLogsFailed([item.logId], `kp_bulkstock did not return item result${details}`, meta);
+        continue;
+      }
+
+      if (remote?.status === 'error') {
+        failed++;
+        await markLogsFailed([item.logId], remote.message ?? 'kp_bulkstock item error', meta);
+        continue;
+      }
+
+      await prisma.stockSyncLog.update({
+        where: { id: item.logId },
+        data: {
+          status: 'SUCCESS',
+          syncMode: meta.syncMode,
+          remoteQuantity: remote.quantity ?? item.quantity,
+          stockAvailableId: null,
+          prestashopShopId: meta.prestashopShopId,
+          errorMessage: null,
+          syncedAt: new Date(),
+        },
+      });
+    }
+
+    return {
+      success: failed === 0,
+      updated: result.updated,
+      failed,
+    };
   } catch (error) {
-    const confirmation = error instanceof StockConfirmationError ? error.remote : null;
-    await prisma.stockSyncLog.update({
-      where: { id: logId },
-      data: {
-        syncMode,
-        remoteQuantity: confirmation?.stock ?? null,
-        stockAvailableId: confirmation?.stockAvailableId ?? null,
-        prestashopShopId: confirmation?.idShop ?? prestashopShopId,
-      },
-    });
+    const message = error instanceof Error ? error.message : 'unknown bulk stock error';
+    await markLogsFailed(items.map((item) => item.logId), message, meta);
     throw error;
   }
+}
 
-  await prisma.stockSyncLog.update({
-    where: { id: logId },
-    data: {
-      status: 'SUCCESS',
-      stockAfter: product.currentStock,
-      publishedQuantity: decision.publishedQuantity,
-      availabilityPolicy: decision.availabilityPolicy,
-      outOfStockBehavior: decision.outOfStockBehavior,
-      warningMessage: decision.warningMessage,
-      syncMode,
-      remoteQuantity: remote.stock,
-      stockAvailableId: remote.stockAvailableId ?? null,
-      prestashopShopId: remote.idShop ?? prestashopShopId,
-      errorMessage: null,
-      syncedAt: new Date(),
-    },
-  });
+async function processWebserviceBatch(
+  client: ReturnType<typeof createShopStockClient>,
+  items: StockSyncBatchJobData['items'],
+  meta: { syncMode: 'BULK' | 'WEBSERVICE'; prestashopShopId: string | null },
+) {
+  let failed = 0;
+
+  for (const item of items) {
+    try {
+      await client.updateStockQuantity(item.externalProductId, item.quantity);
+      const remote = await confirmRemoteStock({
+        client,
+        externalProductId: item.externalProductId,
+        expectedQuantity: item.quantity,
+      });
+      await prisma.stockSyncLog.update({
+        where: { id: item.logId },
+        data: {
+          status: 'SUCCESS',
+          syncMode: meta.syncMode,
+          remoteQuantity: remote.stock,
+          stockAvailableId: remote.stockAvailableId ?? null,
+          prestashopShopId: remote.idShop ?? meta.prestashopShopId,
+          errorMessage: null,
+          syncedAt: new Date(),
+        },
+      });
+    } catch (error) {
+      failed++;
+      const confirmation = error instanceof StockConfirmationError ? error.remote : null;
+      await prisma.stockSyncLog.update({
+        where: { id: item.logId },
+        data: {
+          status: 'FAILED',
+          syncMode: meta.syncMode,
+          remoteQuantity: confirmation?.stock ?? null,
+          stockAvailableId: confirmation?.stockAvailableId ?? null,
+          prestashopShopId: confirmation?.idShop ?? meta.prestashopShopId,
+          errorMessage: error instanceof Error ? error.message : 'unknown stock sync error',
+        },
+      });
+    }
+  }
 
   return {
-    success: true,
-    stock: Number(product.currentStock),
-    publishedQuantity: Number(decision.publishedQuantity),
-    availabilityPolicy: decision.availabilityPolicy,
+    success: failed === 0,
+    failed,
   };
+}
+
+async function markLogsFailed(
+  logIds: string[],
+  errorMessage: string,
+  meta: { syncMode?: 'BULK' | 'WEBSERVICE'; prestashopShopId?: string | null } = {},
+) {
+  if (logIds.length === 0) return;
+  await prisma.stockSyncLog.updateMany({
+    where: { id: { in: logIds } },
+    data: {
+      status: 'FAILED',
+      ...(meta.syncMode ? { syncMode: meta.syncMode } : {}),
+      ...(meta.prestashopShopId !== undefined ? { prestashopShopId: meta.prestashopShopId } : {}),
+      errorMessage,
+    },
+  });
+}
+
+function isPositiveIntegerString(value: string) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0;
+}
+
+function bulkResultKey(productId: number, idProductAttribute?: number) {
+  return `${productId}:${idProductAttribute ?? 0}`;
 }
 
 async function confirmRemoteStock(input: {
@@ -198,9 +327,15 @@ export function startStockSyncWorker() {
   stockSyncWorker.on('failed', async (job, err) => {
     console.error(`[StockSyncWorker] Job ${job?.id} failed:`, err.message);
 
-    if (job?.data.logId) {
-      await prisma.stockSyncLog.update({
-        where: { id: job.data.logId },
+    const logIds = job?.data
+      ? 'items' in job.data
+        ? job.data.items.map((item) => item.logId)
+        : [job.data.logId]
+      : [];
+
+    if (logIds.length > 0) {
+      await prisma.stockSyncLog.updateMany({
+        where: { id: { in: logIds } },
         data: {
           status: 'FAILED',
           errorMessage: err.message,

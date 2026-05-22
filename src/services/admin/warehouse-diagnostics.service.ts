@@ -1,7 +1,8 @@
 import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
-import { addStockSyncJob, getStockSyncQueue } from '../queue/stock-sync.queue';
+import { addStockSyncBatchJobs, addStockSyncJob, getStockSyncQueue, type StockSyncBatchItem } from '../queue/stock-sync.queue';
+import { getInventoryPublicationDecision } from '../stock/stock-sync.service';
 
 type StockSyncStatus = 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'FAILED';
 type DocumentType = 'PZ' | 'PW' | 'WZ' | 'RW';
@@ -113,6 +114,7 @@ export async function retryStockSyncLog(id: string) {
     throw new Error('Brak aktywnego mapowania produktu do sklepu dla ponowienia synchronizacji');
   }
 
+  const decision = await getInventoryPublicationDecision(log.warehouseProductId);
   const retryLog = await prisma.stockSyncLog.create({
     data: {
       tenantId,
@@ -122,6 +124,10 @@ export async function retryStockSyncLog(id: string) {
       documentId: log.documentId,
       stockBefore: log.stockAfter,
       stockAfter: log.warehouseProduct.currentStock,
+      publishedQuantity: decision.publishedQuantity,
+      availabilityPolicy: decision.availabilityPolicy,
+      outOfStockBehavior: decision.outOfStockBehavior,
+      warningMessage: decision.warningMessage,
       status: 'PENDING',
     },
   });
@@ -158,6 +164,13 @@ export async function requeuePendingStockSyncLogs(shopId?: string) {
   let requeued = 0;
   let skipped = 0;
   const errors: Array<{ logId: string; message: string }> = [];
+  const batchItemsByShop = new Map<string, {
+    tenantId: string;
+    shopId: string;
+    triggeredBy: import('../queue/stock-sync.queue').StockSyncTriggeredBy;
+    documentId?: string;
+    items: StockSyncBatchItem[];
+  }>();
 
   for (const log of pendingLogs) {
     try {
@@ -182,20 +195,29 @@ export async function requeuePendingStockSyncLogs(shopId?: string) {
         await existingJob.remove().catch(() => undefined);
       }
 
-      await addStockSyncJob({
-        logId: log.id,
+      const batch = batchItemsByShop.get(log.shopId) ?? {
         tenantId,
-        warehouseProductId: log.warehouseProductId,
         shopId: log.shopId,
-        externalProductId: mapping.externalProductId,
         triggeredBy: log.triggeredBy as import('../queue/stock-sync.queue').StockSyncTriggeredBy,
         documentId: log.documentId ?? undefined,
+        items: [],
+      };
+      batch.items.push({
+        logId: log.id,
+        warehouseProductId: log.warehouseProductId,
+        externalProductId: mapping.externalProductId,
+        quantity: Math.max(0, Math.floor(Number(log.publishedQuantity ?? log.stockAfter))),
       });
+      batchItemsByShop.set(log.shopId, batch);
 
       requeued++;
     } catch (error) {
       errors.push({ logId: log.id, message: error instanceof Error ? error.message : 'Błąd' });
     }
+  }
+
+  for (const batch of batchItemsByShop.values()) {
+    await addStockSyncBatchJobs(batch);
   }
 
   return { total: pendingLogs.length, requeued, skipped, errors };

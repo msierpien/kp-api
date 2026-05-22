@@ -2,6 +2,7 @@ import { Worker, Job, UnrecoverableError } from 'bullmq';
 import prisma from '../../lib/prisma';
 import { createShopStockClient } from '../shops/shop-client.factory';
 import { PrestaShopStockClient } from '../shops/prestashop-stock-client';
+import type { ShopProductInventorySnapshot } from '../shops/shop-stock-client.interface';
 import { getInventoryPublicationDecision } from '../stock/stock-sync.service';
 import { getRedisConnection } from './render.queue';
 import { STOCK_SYNC_QUEUE_NAME, type StockSyncJobData } from './stock-sync.queue';
@@ -53,12 +54,32 @@ async function processStockSyncJob(job: Job<StockSyncJobData>) {
   });
 
   const client = createShopStockClient(shop);
+  const prestashopShopId = client instanceof PrestaShopStockClient
+    ? client.configuredPrestaShopShopId
+    : null;
 
   const externalNumericProductId = Number(externalProductId);
   const useBulk = client instanceof PrestaShopStockClient &&
     client.hasBulkModule &&
     Number.isInteger(externalNumericProductId) &&
     externalNumericProductId > 0;
+  let syncMode: 'BULK' | 'WEBSERVICE' = useBulk ? 'BULK' : 'WEBSERVICE';
+
+  await prisma.stockSyncLog.update({
+    where: { id: logId },
+    data: {
+      syncMode,
+      prestashopShopId,
+    },
+  });
+
+  if (useBulk && !prestashopShopId) {
+    throw new Error(
+      `Brak prestashopShopId/idShopDefault w konfiguracji sklepu ${shop.name}. ` +
+      'Bulk stock wymaga jawnego ID sklepu PrestaShop, żeby nie aktualizować złego kontekstu multishop.',
+    );
+  }
+
   console.log(
     `[StockSyncWorker] product=${externalProductId} qty=${decision.publishedQuantity} ` +
     `mode=${useBulk ? 'BULK' : 'WEBSERVICE'}`,
@@ -74,6 +95,11 @@ async function processStockSyncJob(job: Job<StockSyncJobData>) {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'unknown bulk stock error';
       console.warn(`[StockSyncWorker] bulk stock failed for product=${externalProductId}, falling back to WEBSERVICE: ${message}`);
+      syncMode = 'WEBSERVICE';
+      await prisma.stockSyncLog.update({
+        where: { id: logId },
+        data: { syncMode },
+      });
       await client.updateStockQuantity(externalProductId, Number(decision.publishedQuantity), {
         outOfStockBehavior: decision.outOfStockBehavior,
       });
@@ -82,6 +108,28 @@ async function processStockSyncJob(job: Job<StockSyncJobData>) {
     await client.updateStockQuantity(externalProductId, Number(decision.publishedQuantity), {
       outOfStockBehavior: decision.outOfStockBehavior,
     });
+  }
+
+  const expectedQuantity = Math.max(0, Math.floor(Number(decision.publishedQuantity)));
+  let remote: Awaited<ReturnType<typeof confirmRemoteStock>>;
+  try {
+    remote = await confirmRemoteStock({
+      client,
+      externalProductId,
+      expectedQuantity,
+    });
+  } catch (error) {
+    const confirmation = error instanceof StockConfirmationError ? error.remote : null;
+    await prisma.stockSyncLog.update({
+      where: { id: logId },
+      data: {
+        syncMode,
+        remoteQuantity: confirmation?.stock ?? null,
+        stockAvailableId: confirmation?.stockAvailableId ?? null,
+        prestashopShopId: confirmation?.idShop ?? prestashopShopId,
+      },
+    });
+    throw error;
   }
 
   await prisma.stockSyncLog.update({
@@ -93,6 +141,10 @@ async function processStockSyncJob(job: Job<StockSyncJobData>) {
       availabilityPolicy: decision.availabilityPolicy,
       outOfStockBehavior: decision.outOfStockBehavior,
       warningMessage: decision.warningMessage,
+      syncMode,
+      remoteQuantity: remote.stock,
+      stockAvailableId: remote.stockAvailableId ?? null,
+      prestashopShopId: remote.idShop ?? prestashopShopId,
       errorMessage: null,
       syncedAt: new Date(),
     },
@@ -104,6 +156,44 @@ async function processStockSyncJob(job: Job<StockSyncJobData>) {
     publishedQuantity: Number(decision.publishedQuantity),
     availabilityPolicy: decision.availabilityPolicy,
   };
+}
+
+async function confirmRemoteStock(input: {
+  client: ReturnType<typeof createShopStockClient>;
+  externalProductId: string;
+  expectedQuantity: number;
+}) {
+  if (!input.client.getProductInventorySnapshot) {
+    throw new Error('Klient sklepu nie obsługuje potwierdzenia stanu po synchronizacji');
+  }
+
+  const remote = input.client instanceof PrestaShopStockClient
+    ? await input.client.getStockAvailableSnapshot(input.externalProductId)
+    : await input.client.getProductInventorySnapshot(input.externalProductId);
+  if (remote.stock === undefined || remote.stock === null) {
+    throw new Error(`PrestaShop nie zwrócił quantity dla produktu ${input.externalProductId}`);
+  }
+
+  if (Number(remote.stock) !== input.expectedQuantity) {
+    throw new StockConfirmationError(
+      `PrestaShop stock confirmation mismatch for product ${input.externalProductId}: ` +
+      `expected ${input.expectedQuantity}, remote ${remote.stock}, ` +
+      `stock_available=${remote.stockAvailableId ?? 'unknown'}, id_shop=${remote.idShop ?? 'unknown'}`,
+      remote,
+    );
+  }
+
+  return remote;
+}
+
+class StockConfirmationError extends Error {
+  constructor(
+    message: string,
+    readonly remote: ShopProductInventorySnapshot,
+  ) {
+    super(message);
+    this.name = 'StockConfirmationError';
+  }
 }
 
 export function startStockSyncWorker() {

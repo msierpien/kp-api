@@ -34,9 +34,33 @@ const mapShop = (shop: any): ShopItem => {
     },
     hasBulkStock: Boolean(configJson.bulkStockUrl && configJson.bulkStockApiKey),
     bulkStockUrl: typeof configJson.bulkStockUrl === 'string' ? configJson.bulkStockUrl : null,
+    prestashopShopId: resolvePrestaShopShopId(configJson),
     tenantId: shop.tenantId,
   };
 };
+
+function resolvePrestaShopShopId(configJson: Record<string, any>) {
+  if (typeof configJson.prestashopShopId === 'string' || typeof configJson.prestashopShopId === 'number') {
+    return String(configJson.prestashopShopId);
+  }
+  if (typeof configJson.idShopDefault === 'string' || typeof configJson.idShopDefault === 'number') {
+    return String(configJson.idShopDefault);
+  }
+
+  const defaults = configJson.prestashopProductDefaults;
+  if (defaults && typeof defaults === 'object' && !Array.isArray(defaults)) {
+    const id = defaults.idShopDefault;
+    if (typeof id === 'string' || typeof id === 'number') return String(id);
+  }
+
+  const productCreate = configJson.productCreate;
+  if (productCreate && typeof productCreate === 'object' && !Array.isArray(productCreate)) {
+    const id = productCreate.idShopDefault;
+    if (typeof id === 'string' || typeof id === 'number') return String(id);
+  }
+
+  return null;
+}
 
 export async function listShops(): Promise<ShopItem[]> {
   const shops = await prisma.shop.findMany({

@@ -818,6 +818,10 @@ model StockSyncLog {
   availabilityPolicy String?   @map("availability_policy")
   outOfStockBehavior Int?      @map("out_of_stock_behavior")
   warningMessage     String?   @map("warning_message") @db.Text
+  syncMode           String?   @map("sync_mode")
+  remoteQuantity     Decimal?  @map("remote_quantity") @db.Decimal(10, 3)
+  stockAvailableId   String?   @map("stock_available_id")
+  prestashopShopId   String?   @map("prestashop_shop_id")
   status             String    @default("PENDING")
   errorMessage       String?   @map("error_message") @db.Text
   attemptCount       Int       @default(0) @map("attempt_count")

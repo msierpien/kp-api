@@ -43,6 +43,10 @@ export class PrestaShopStockClient implements ShopStockClient {
     return Boolean(this.bulkStockUrl && this.bulkStockApiKey);
   }
 
+  get configuredPrestaShopShopId(): string | null {
+    return this.prestashopShopId;
+  }
+
   async bulkUpdateStock(items: BulkStockItem[]): Promise<BulkStockResult> {
     if (!this.bulkStockUrl || !this.bulkStockApiKey) {
       throw new Error('Moduł kp_bulkstock nie jest skonfigurowany dla tego sklepu');
@@ -175,6 +179,18 @@ export class PrestaShopStockClient implements ShopStockClient {
       price: Number.isFinite(price) ? price : undefined,
       stock: stockAvailable?.quantity,
       stockAvailableId: stockAvailable?.id,
+      idShop: stockAvailable?.idShop,
+    };
+  }
+
+  async getStockAvailableSnapshot(externalProductId: string): Promise<ShopProductInventorySnapshot> {
+    const stockAvailable = await this.findStockAvailable(externalProductId);
+
+    return {
+      externalProductId,
+      stock: stockAvailable?.quantity,
+      stockAvailableId: stockAvailable?.id,
+      idShop: stockAvailable?.idShop,
     };
   }
 

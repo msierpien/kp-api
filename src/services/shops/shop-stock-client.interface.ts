@@ -17,4 +17,5 @@ export interface ShopProductInventorySnapshot {
   price?: number;
   stock?: number;
   stockAvailableId?: string;
+  idShop?: string;
 }

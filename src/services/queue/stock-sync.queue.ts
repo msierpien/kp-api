@@ -10,7 +10,8 @@ export type StockSyncTriggeredBy =
   | 'ORDER_RESERVATION_RELEASE'
   | 'MANUAL'
   | 'WHOLESALE_SYNC'
-  | 'SCHEDULED';
+  | 'SCHEDULED'
+  | 'LEAD_TIME_UPDATE';
 
 export interface StockSyncLegacyJobData {
   logId: string;
@@ -27,6 +28,7 @@ export interface StockSyncBatchItem {
   warehouseProductId: string;
   externalProductId: string;
   quantity: number;
+  leadTimeDays?: number;
   idProductAttribute?: number;
 }
 

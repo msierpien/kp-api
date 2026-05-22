@@ -34,10 +34,16 @@ const mapShop = (shop: any): ShopItem => {
     },
     hasBulkStock: Boolean(configJson.bulkStockApiKey),
     bulkStockUrl: typeof configJson.bulkStockUrl === 'string' ? configJson.bulkStockUrl : null,
+    defaultLeadTimeDays: normalizeLeadTimeDays(configJson.defaultLeadTimeDays),
     prestashopShopId: resolvePrestaShopShopId(configJson),
     tenantId: shop.tenantId,
   };
 };
+
+function normalizeLeadTimeDays(value: unknown) {
+  const days = Number(value);
+  return Number.isInteger(days) && days >= 0 && days <= 365 ? days : null;
+}
 
 function resolvePrestaShopShopId(configJson: Record<string, any>) {
   if (typeof configJson.prestashopShopId === 'string' || typeof configJson.prestashopShopId === 'number') {

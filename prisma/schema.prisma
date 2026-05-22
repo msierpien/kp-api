@@ -36,6 +36,7 @@ model Tenant {
   emailSettings         EmailSettings[]
   warehouseProducts     WarehouseProduct[]
   warehouseCatalogs     WarehouseCatalog[]
+  warehouseLeadTimeGroups WarehouseLeadTimeGroup[]
   warehouseDocuments    WarehouseDocument[]
   warehouseBarcodes     WarehouseProductBarcode[]
   shopProductMappings   ShopProductMapping[]
@@ -586,12 +587,15 @@ model WarehouseProduct {
   purchasePrice Decimal? @map("purchase_price") @db.Decimal(10, 2)
   retailPrice   Decimal? @map("retail_price") @db.Decimal(10, 2)
   currentStock  Decimal  @default(0) @map("current_stock") @db.Decimal(10, 3)
+  leadTimeDaysOverride Int? @map("lead_time_days_override")
+  leadTimeGroupId String? @map("lead_time_group_id")
   isActive      Boolean  @default(true) @map("is_active")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
   tenant                Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   catalog               WarehouseCatalog          @relation(fields: [catalogId], references: [id], onDelete: Restrict)
+  leadTimeGroup         WarehouseLeadTimeGroup?    @relation(fields: [leadTimeGroupId], references: [id], onDelete: SetNull)
   items                 WarehouseDocumentItem[]
   barcodes              WarehouseProductBarcode[]
   shopProductMappings   ShopProductMapping[]
@@ -604,6 +608,7 @@ model WarehouseProduct {
   @@unique([tenantId, sku])
   @@index([tenantId])
   @@index([catalogId])
+  @@index([leadTimeGroupId])
   @@index([tenantId, isActive])
   @@map("warehouse_products")
 }
@@ -626,6 +631,25 @@ model WarehouseCatalog {
   @@index([tenantId])
   @@index([tenantId, isActive])
   @@map("warehouse_catalogs")
+}
+
+model WarehouseLeadTimeGroup {
+  id           String   @id @default(cuid())
+  tenantId     String   @map("tenant_id")
+  code         String
+  name         String
+  leadTimeDays Int      @map("lead_time_days")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tenant   Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  products WarehouseProduct[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@map("warehouse_lead_time_groups")
 }
 
 model ShopProductMapping {
@@ -815,11 +839,13 @@ model StockSyncLog {
   stockBefore        Decimal?  @map("stock_before") @db.Decimal(10, 3)
   stockAfter         Decimal   @map("stock_after") @db.Decimal(10, 3)
   publishedQuantity  Decimal?  @map("published_quantity") @db.Decimal(10, 3)
+  publishedLeadTimeDays Int?   @map("published_lead_time_days")
   availabilityPolicy String?   @map("availability_policy")
   outOfStockBehavior Int?      @map("out_of_stock_behavior")
   warningMessage     String?   @map("warning_message") @db.Text
   syncMode           String?   @map("sync_mode")
   remoteQuantity     Decimal?  @map("remote_quantity") @db.Decimal(10, 3)
+  remoteLeadTimeDays Int?      @map("remote_lead_time_days")
   stockAvailableId   String?   @map("stock_available_id")
   prestashopShopId   String?   @map("prestashop_shop_id")
   status             String    @default("PENDING")
@@ -881,6 +907,7 @@ model WholesaleProvider {
   configJson   Json?             @map("config_json")
   syncEnabled  Boolean           @default(true) @map("sync_enabled")
   syncInterval Int               @default(1440) @map("sync_interval")
+  leadTimeDays Int?              @map("lead_time_days")
   isActive     Boolean           @default(true) @map("is_active")
   lastSyncAt   DateTime?         @map("last_sync_at")
   createdAt    DateTime          @default(now()) @map("created_at")

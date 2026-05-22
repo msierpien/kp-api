@@ -46,12 +46,14 @@ async function processLegacyStockSyncJob(data: StockSyncLegacyJobData) {
   const decision = await getInventoryPublicationDecision(warehouseProductId, {
     warningMessage: log.warningMessage ?? undefined,
   });
+  const publishedLeadTimeDays = resolvePublishedLeadTimeDays(decision.leadTimeDays, shop.configJson);
 
   await prisma.stockSyncLog.update({
     where: { id: logId },
     data: {
       stockAfter: product.currentStock,
       publishedQuantity: decision.publishedQuantity,
+      publishedLeadTimeDays,
       availabilityPolicy: decision.availabilityPolicy,
       outOfStockBehavior: decision.outOfStockBehavior,
       warningMessage: decision.warningMessage,
@@ -68,6 +70,7 @@ async function processLegacyStockSyncJob(data: StockSyncLegacyJobData) {
       warehouseProductId,
       externalProductId,
       quantity: Math.max(0, Math.floor(Number(decision.publishedQuantity))),
+      leadTimeDays: publishedLeadTimeDays,
     }],
   });
 }
@@ -136,6 +139,7 @@ async function processBulkBatch(
     const result = await client.bulkUpdateStock(items.map((item) => ({
       productId: Number(item.externalProductId),
       quantity: item.quantity,
+      leadTimeDays: item.leadTimeDays,
       ...(item.idProductAttribute === undefined ? {} : { idProductAttribute: item.idProductAttribute }),
     })));
 
@@ -170,6 +174,7 @@ async function processBulkBatch(
           status: 'SUCCESS',
           syncMode: meta.syncMode,
           remoteQuantity: remote.quantity ?? item.quantity,
+          remoteLeadTimeDays: remote.leadTimeDays ?? item.leadTimeDays ?? null,
           stockAvailableId: null,
           prestashopShopId: meta.prestashopShopId,
           errorMessage: null,
@@ -211,6 +216,7 @@ async function processWebserviceBatch(
           status: 'SUCCESS',
           syncMode: meta.syncMode,
           remoteQuantity: remote.stock,
+          remoteLeadTimeDays: null,
           stockAvailableId: remote.stockAvailableId ?? null,
           prestashopShopId: remote.idShop ?? meta.prestashopShopId,
           errorMessage: null,
@@ -226,6 +232,7 @@ async function processWebserviceBatch(
           status: 'FAILED',
           syncMode: meta.syncMode,
           remoteQuantity: confirmation?.stock ?? null,
+          remoteLeadTimeDays: null,
           stockAvailableId: confirmation?.stockAvailableId ?? null,
           prestashopShopId: confirmation?.idShop ?? meta.prestashopShopId,
           errorMessage: error instanceof Error ? error.message : 'unknown stock sync error',
@@ -264,6 +271,24 @@ function isPositiveIntegerString(value: string) {
 
 function bulkResultKey(productId: number, idProductAttribute?: number) {
   return `${productId}:${idProductAttribute ?? 0}`;
+}
+
+function resolvePublishedLeadTimeDays(value: unknown, shopConfigJson: unknown) {
+  return normalizeOptionalLeadTimeDays(value) ??
+    getShopDefaultLeadTimeDays(shopConfigJson) ??
+    0;
+}
+
+function getShopDefaultLeadTimeDays(configJson: unknown) {
+  if (!configJson || typeof configJson !== 'object' || Array.isArray(configJson)) return null;
+  return normalizeOptionalLeadTimeDays((configJson as Record<string, unknown>).defaultLeadTimeDays);
+}
+
+function normalizeOptionalLeadTimeDays(value: unknown) {
+  if (value === undefined || value === null || value === '') return null;
+  const days = Number(value);
+  if (!Number.isInteger(days) || days < 0 || days > 365) return null;
+  return days;
 }
 
 async function confirmRemoteStock(input: {

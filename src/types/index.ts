@@ -109,6 +109,7 @@ export interface ShopItem {
   config: any;
   hasBulkStock?: boolean;
   bulkStockUrl?: string | null;
+  defaultLeadTimeDays?: number | null;
   prestashopShopId?: string | null;
   tenantId: string;
 }

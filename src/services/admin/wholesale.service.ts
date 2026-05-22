@@ -8,6 +8,7 @@ import {
   type WholesaleSyncJobData,
   type WholesaleSyncTriggeredBy,
 } from '../queue/wholesale-sync.queue';
+import { publishInventoryToShops } from '../stock/stock-sync.service';
 
 type WholesalePreset = 'GODAN' | 'PARTYDECO' | 'CUSTOM';
 
@@ -65,6 +66,7 @@ export interface CreateWholesaleProviderInput {
   fieldMapping?: FieldMapping;
   syncEnabled?: boolean;
   syncInterval?: number;
+  leadTimeDays?: number | null;
   isActive?: boolean;
 }
 
@@ -77,6 +79,7 @@ export interface UpdateWholesaleProviderInput {
   fieldMapping?: FieldMapping;
   syncEnabled?: boolean;
   syncInterval?: number;
+  leadTimeDays?: number | null;
   isActive?: boolean;
 }
 
@@ -245,6 +248,7 @@ export async function createWholesaleProvider(input: CreateWholesaleProviderInpu
       configJson: config as unknown as Prisma.InputJsonValue,
       syncEnabled: input.syncEnabled ?? true,
       syncInterval,
+      leadTimeDays: normalizeOptionalLeadTimeDays(input.leadTimeDays),
       isActive: input.isActive ?? true,
     },
   });
@@ -261,7 +265,9 @@ export async function updateWholesaleProvider(id: string, input: UpdateWholesale
   if (input.platform !== undefined) data.platform = input.platform;
   if (input.syncEnabled !== undefined) data.syncEnabled = input.syncEnabled;
   if (input.syncInterval !== undefined) data.syncInterval = validateWholesaleSyncInterval(input.syncInterval);
+  if (input.leadTimeDays !== undefined) data.leadTimeDays = normalizeOptionalLeadTimeDays(input.leadTimeDays);
   if (input.isActive !== undefined) data.isActive = input.isActive;
+  const shouldSyncLeadTime = input.leadTimeDays !== undefined && input.leadTimeDays !== provider.leadTimeDays;
 
   if (input.preset !== undefined || input.delimiter !== undefined || input.fieldMapping !== undefined) {
     const currentConfig = parseProviderConfig(provider.configJson);
@@ -275,7 +281,15 @@ export async function updateWholesaleProvider(id: string, input: UpdateWholesale
     data.configJson = nextConfig as unknown as Prisma.InputJsonValue;
   }
 
-  return prisma.wholesaleProvider.update({ where: { id }, data });
+  const updated = await prisma.wholesaleProvider.update({ where: { id }, data });
+
+  if (shouldSyncLeadTime) {
+    enqueueWholesaleProviderLeadTimeStockSync(id, tenantId).catch((error) => {
+      console.error('[Wholesale] Failed to enqueue stock sync for provider lead time change:', error);
+    });
+  }
+
+  return updated;
 }
 
 export async function updateWholesaleProviderSyncInterval(
@@ -459,6 +473,7 @@ export async function getWholesaleProductOffers(query: WholesaleProductOffersQue
           name: true,
           isActive: true,
           syncEnabled: true,
+          leadTimeDays: true,
           lastSyncAt: true,
         },
       },
@@ -475,6 +490,7 @@ export async function getWholesaleProductOffers(query: WholesaleProductOffersQue
     providerName: string;
     providerActive: boolean;
     providerSyncEnabled: boolean;
+    providerLeadTimeDays: number | null;
     externalSku: string;
     externalEan: string | null;
     externalName: string | null;
@@ -494,6 +510,7 @@ export async function getWholesaleProductOffers(query: WholesaleProductOffersQue
       providerName: mapping.provider.name,
       providerActive: mapping.provider.isActive,
       providerSyncEnabled: mapping.provider.syncEnabled,
+      providerLeadTimeDays: mapping.provider.leadTimeDays,
       externalSku: mapping.externalSku,
       externalEan: mapping.externalEan,
       externalName: mapping.externalName,
@@ -1052,6 +1069,41 @@ function validateWholesaleSyncInterval(intervalMinutes: number) {
   }
 
   return intervalMinutes;
+}
+
+function normalizeOptionalLeadTimeDays(value: number | null | undefined) {
+  if (value === undefined || value === null) return null;
+  const days = Number(value);
+  if (!Number.isInteger(days) || days < 0 || days > 365) {
+    throw new Error('Czas wysyłki dostawcy musi być liczbą całkowitą od 0 do 365 dni');
+  }
+  return days;
+}
+
+async function enqueueWholesaleProviderLeadTimeStockSync(providerId: string, tenantId: string) {
+  const products = await prisma.warehouseProduct.findMany({
+    where: {
+      tenantId,
+      isActive: true,
+      currentStock: { lte: new Prisma.Decimal(0) },
+      wholesaleMappings: {
+        some: {
+          providerId,
+          isActive: true,
+          lastKnownStock: { gt: new Prisma.Decimal(0) },
+        },
+      },
+    },
+    select: { id: true },
+  });
+
+  for (let i = 0; i < products.length; i += 500) {
+    await publishInventoryToShops({
+      tenantId,
+      warehouseProductIds: products.slice(i, i + 500).map((product) => product.id),
+      triggeredBy: 'LEAD_TIME_UPDATE',
+    });
+  }
 }
 
 function normalizeSyncLimit(limit?: number) {

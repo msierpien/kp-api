@@ -10,21 +10,25 @@ import { consumeDocumentReservations, releaseDocumentReservations, reserveOrder 
 
 export interface CreateProductInput {
   catalogId?: string | null;
+  leadTimeGroupId?: string | null;
   sku: string;
   name: string;
   unit?: string;
   description?: string;
   purchasePrice?: number;
   retailPrice?: number;
+  leadTimeDaysOverride?: number | null;
 }
 
 export interface UpdateProductInput {
   catalogId?: string | null;
+  leadTimeGroupId?: string | null;
   name?: string;
   unit?: string;
   description?: string;
   purchasePrice?: number | null;
   retailPrice?: number | null;
+  leadTimeDaysOverride?: number | null;
   isActive?: boolean;
 }
 
@@ -32,6 +36,8 @@ export interface BulkUpdateProductsInput {
   productIds: string[];
   isActive?: boolean;
   catalogId?: string | null;
+  leadTimeGroupId?: string | null;
+  leadTimeDaysOverride?: number | null;
 }
 
 export interface BulkUpdateProductsResult {
@@ -162,6 +168,7 @@ export async function getProducts(query: ProductsQuery = {}) {
       orderBy: { name: 'asc' },
       include: {
         catalog: true,
+        leadTimeGroup: true,
         _count: {
           select: {
             barcodes: { where: { isActive: true } },
@@ -204,6 +211,7 @@ export async function getProductById(id: string) {
     where,
     include: {
       catalog: true,
+      leadTimeGroup: true,
       _count: {
         select: {
           barcodes: { where: { isActive: true } },
@@ -225,17 +233,22 @@ export async function createProduct(input: CreateProductInput) {
   if (existing) throw new Error(`Produkt z SKU "${input.sku}" już istnieje`);
 
   const catalog = await resolveCatalogForProduct(tenantId, input.catalogId);
+  const leadTimeGroup = input.leadTimeGroupId === undefined
+    ? null
+    : await resolveLeadTimeGroupForProduct(tenantId, input.leadTimeGroupId);
 
   return prisma.warehouseProduct.create({
     data: {
       tenantId,
       catalogId: catalog.id,
+      leadTimeGroupId: leadTimeGroup?.id ?? null,
       sku: input.sku,
       name: input.name,
       unit: input.unit ?? 'szt',
       description: input.description,
       purchasePrice: input.purchasePrice,
       retailPrice: input.retailPrice,
+      leadTimeDaysOverride: normalizeOptionalLeadTimeDays(input.leadTimeDaysOverride),
     },
   });
 }
@@ -250,24 +263,40 @@ export async function updateProduct(id: string, input: UpdateProductInput) {
   const shouldSyncPrice = input.retailPrice !== undefined
     && input.retailPrice !== null
     && !pricesEqual(product.retailPrice, input.retailPrice);
+  const shouldSyncLeadTime = (input.leadTimeDaysOverride !== undefined && input.leadTimeDaysOverride !== product.leadTimeDaysOverride) ||
+    (input.leadTimeGroupId !== undefined && input.leadTimeGroupId !== product.leadTimeGroupId);
 
   const data: Prisma.WarehouseProductUpdateInput = { ...input };
   delete (data as any).catalogId;
+  delete (data as any).leadTimeGroupId;
+  delete (data as any).leadTimeDaysOverride;
 
   if (input.catalogId !== undefined) {
     const catalog = await resolveCatalogForProduct(product.tenantId, input.catalogId);
     data.catalog = { connect: { id: catalog.id } };
   }
+  if (input.leadTimeGroupId !== undefined) {
+    const leadTimeGroup = await resolveLeadTimeGroupForProduct(product.tenantId, input.leadTimeGroupId);
+    data.leadTimeGroup = leadTimeGroup ? { connect: { id: leadTimeGroup.id } } : { disconnect: true };
+  }
+  if (input.leadTimeDaysOverride !== undefined) {
+    data.leadTimeDaysOverride = normalizeOptionalLeadTimeDays(input.leadTimeDaysOverride);
+  }
 
   const updatedProduct = await prisma.warehouseProduct.update({
     where: { id },
     data,
-    include: { catalog: true },
+    include: { catalog: true, leadTimeGroup: true },
   });
 
   if (shouldSyncPrice && tenantId) {
     syncProductPrice(id, { triggeredBy: 'PRODUCT_PRICE_UPDATE' }).catch((error) => {
       console.error('[Warehouse] Failed to enqueue automatic price sync:', error);
+    });
+  }
+  if (shouldSyncLeadTime && tenantId) {
+    syncStockForProducts([id], 'LEAD_TIME_UPDATE').catch((error) => {
+      console.error('[Warehouse] Failed to enqueue automatic lead time sync:', error);
     });
   }
 
@@ -292,7 +321,12 @@ export async function bulkUpdateProducts(input: BulkUpdateProductsInput): Promis
   const tenantId = requireTenantId();
   const productIds = normalizeBulkProductIds(input.productIds);
 
-  if (input.isActive === undefined && input.catalogId === undefined) {
+  if (
+    input.isActive === undefined &&
+    input.catalogId === undefined &&
+    input.leadTimeGroupId === undefined &&
+    input.leadTimeDaysOverride === undefined
+  ) {
     throw new Error('Podaj przynajmniej jedną zmianę masową');
   }
 
@@ -330,6 +364,17 @@ export async function bulkUpdateProducts(input: BulkUpdateProductsInput): Promis
     const catalog = await resolveCatalogForProduct(tenantId ?? productTenantIds[0], input.catalogId);
     data.catalogId = catalog.id;
   }
+  if (input.leadTimeGroupId !== undefined) {
+    const productTenantIds = Array.from(new Set(products.map((product) => product.tenantId)));
+    if (!tenantId && productTenantIds.length !== 1) {
+      throw new Error('Masowa zmiana grupy czasu wysyłki wymaga produktów z jednego tenanta');
+    }
+    const leadTimeGroup = await resolveLeadTimeGroupForProduct(tenantId ?? productTenantIds[0], input.leadTimeGroupId);
+    data.leadTimeGroupId = leadTimeGroup?.id ?? null;
+  }
+  if (input.leadTimeDaysOverride !== undefined) {
+    data.leadTimeDaysOverride = normalizeOptionalLeadTimeDays(input.leadTimeDaysOverride);
+  }
 
   const result = await prisma.warehouseProduct.updateMany({
     where: {
@@ -347,6 +392,13 @@ export async function bulkUpdateProducts(input: BulkUpdateProductsInput): Promis
     });
   }
 
+  const shouldSyncLeadTime = input.leadTimeGroupId !== undefined || input.leadTimeDaysOverride !== undefined;
+  if (shouldSyncLeadTime && foundIds.length > 0) {
+    syncStockForProducts(foundIds, 'LEAD_TIME_UPDATE').catch((error) => {
+      console.error('[Warehouse] Failed to enqueue bulk lead time sync:', error);
+    });
+  }
+
   return {
     requested: productIds.length,
     updated: result.count,
@@ -354,6 +406,25 @@ export async function bulkUpdateProducts(input: BulkUpdateProductsInput): Promis
     failed,
     errors,
   };
+}
+
+async function resolveLeadTimeGroupForProduct(tenantId: string, leadTimeGroupId?: string | null) {
+  if (!leadTimeGroupId) return null;
+  const group = await prisma.warehouseLeadTimeGroup.findFirst({
+    where: { id: leadTimeGroupId, tenantId, isActive: true },
+    select: { id: true },
+  });
+  if (!group) throw new Error('Aktywna grupa czasu wysyłki nie znaleziona');
+  return group;
+}
+
+function normalizeOptionalLeadTimeDays(value: number | null | undefined) {
+  if (value === undefined || value === null) return null;
+  const days = Number(value);
+  if (!Number.isInteger(days) || days < 0 || days > 365) {
+    throw new Error('Czas wysyłki musi być liczbą całkowitą od 0 do 365 dni');
+  }
+  return days;
 }
 
 export async function bulkDeleteProducts(input: BulkDeleteProductsInput): Promise<BulkDeleteProductsResult> {

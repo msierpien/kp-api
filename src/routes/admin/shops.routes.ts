@@ -25,6 +25,7 @@ import {
   updateShopSyncInterval,
 } from '../../services/scheduler/scheduler.service';
 import { buildBulkStockUrl } from '../../services/shops/prestashop-stock-client';
+import * as stockSyncService from '../../services/stock/stock-sync.service';
 import * as shopWebhookService from '../../services/webhooks/prestashop-order-webhook.service';
 
 const shopResponseSchema = {
@@ -88,6 +89,16 @@ function normalizeOptionalString(value: unknown) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed || null;
+}
+
+function normalizeOptionalLeadTimeDays(value: unknown) {
+  if (value === undefined) return null;
+  if (value === null || value === '') return null;
+  const days = Number(value);
+  if (!Number.isInteger(days) || days < 0 || days > 365) {
+    throw new Error('Domyślny czas wysyłki musi być liczbą całkowitą od 0 do 365 dni');
+  }
+  return days;
 }
 
 const webhookSettingsResponseSchema = {
@@ -268,7 +279,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
   );
 
   // PATCH /admin/shops/:id/bulk-stock-config
-  fastify.patch<{ Params: ShopIdParamsInput; Body: { bulkStockUrl?: string | null; bulkStockApiKey?: string | null } }>(
+  fastify.patch<{ Params: ShopIdParamsInput; Body: { bulkStockUrl?: string | null; bulkStockApiKey?: string | null; defaultLeadTimeDays?: number | null } }>(
     '/:id/bulk-stock-config',
     {
       schema: {
@@ -280,13 +291,14 @@ export async function shopsRoutes(fastify: FastifyInstance) {
           properties: {
             bulkStockUrl: { type: 'string', nullable: true },
             bulkStockApiKey: { type: 'string', nullable: true },
+            defaultLeadTimeDays: { type: ['integer', 'null'], minimum: 0, maximum: 365 },
           },
         },
       },
     },
     async (request, reply) => {
       const shopId = request.params.id;
-      const { bulkStockUrl, bulkStockApiKey } = request.body ?? {};
+      const { bulkStockUrl, bulkStockApiKey, defaultLeadTimeDays } = request.body ?? {};
       try {
         const shop = await prisma.shop.findUnique({ where: { id: shopId }, select: { id: true, configJson: true } });
         if (!shop) return reply.status(404).send({ error: 'Not Found', message: 'Sklep nie znaleziony' });
@@ -305,14 +317,24 @@ export async function shopsRoutes(fastify: FastifyInstance) {
           : providedBulkStockApiKey
             ? encrypt(providedBulkStockApiKey)
             : null;
+        const nextDefaultLeadTimeDays = defaultLeadTimeDays === undefined
+          ? normalizeOptionalLeadTimeDays(existing.defaultLeadTimeDays)
+          : normalizeOptionalLeadTimeDays(defaultLeadTimeDays);
+        const defaultLeadTimeChanged = nextDefaultLeadTimeDays !== normalizeOptionalLeadTimeDays(existing.defaultLeadTimeDays);
 
         const updated = {
           ...existing,
           bulkStockUrl: nextBulkStockUrl,
           bulkStockApiKey: nextBulkStockApiKey,
+          defaultLeadTimeDays: nextDefaultLeadTimeDays,
         };
 
         await prisma.shop.update({ where: { id: shopId }, data: { configJson: updated } });
+        if (defaultLeadTimeChanged) {
+          stockSyncService.syncStockForShop(shopId, 'LEAD_TIME_UPDATE').catch((error) => {
+            fastify.log.error({ err: error, shopId }, 'Failed to enqueue lead time sync after bulk stock config change');
+          });
+        }
         return reply.send({ success: true, hasBulkStock: Boolean(updated.bulkStockApiKey) });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Błąd zapisu konfiguracji bulk';

@@ -115,6 +115,7 @@ export async function retryStockSyncLog(id: string) {
   }
 
   const decision = await getInventoryPublicationDecision(log.warehouseProductId);
+  const publishedLeadTimeDays = resolvePublishedLeadTimeDays(decision.leadTimeDays, log.shop.configJson);
   const retryLog = await prisma.stockSyncLog.create({
     data: {
       tenantId,
@@ -125,6 +126,7 @@ export async function retryStockSyncLog(id: string) {
       stockBefore: log.stockAfter,
       stockAfter: log.warehouseProduct.currentStock,
       publishedQuantity: decision.publishedQuantity,
+      publishedLeadTimeDays,
       availabilityPolicy: decision.availabilityPolicy,
       outOfStockBehavior: decision.outOfStockBehavior,
       warningMessage: decision.warningMessage,
@@ -207,6 +209,7 @@ export async function requeuePendingStockSyncLogs(shopId?: string) {
         warehouseProductId: log.warehouseProductId,
         externalProductId: mapping.externalProductId,
         quantity: Math.max(0, Math.floor(Number(log.publishedQuantity ?? log.stockAfter))),
+        leadTimeDays: log.publishedLeadTimeDays ?? 0,
       });
       batchItemsByShop.set(log.shopId, batch);
 
@@ -221,6 +224,24 @@ export async function requeuePendingStockSyncLogs(shopId?: string) {
   }
 
   return { total: pendingLogs.length, requeued, skipped, errors };
+}
+
+function resolvePublishedLeadTimeDays(value: unknown, shopConfigJson: unknown) {
+  return normalizeOptionalLeadTimeDays(value) ??
+    getShopDefaultLeadTimeDays(shopConfigJson) ??
+    0;
+}
+
+function getShopDefaultLeadTimeDays(configJson: unknown) {
+  if (!configJson || typeof configJson !== 'object' || Array.isArray(configJson)) return null;
+  return normalizeOptionalLeadTimeDays((configJson as Record<string, unknown>).defaultLeadTimeDays);
+}
+
+function normalizeOptionalLeadTimeDays(value: unknown) {
+  if (value === undefined || value === null || value === '') return null;
+  const days = Number(value);
+  if (!Number.isInteger(days) || days < 0 || days > 365) return null;
+  return days;
 }
 
 export async function getProductMovements(productId: string, query: ProductMovementsQuery = {}) {

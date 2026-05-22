@@ -6,14 +6,15 @@ const BULK_BATCH_SIZE = 500;
 
 export interface BulkStockItem {
   productId: number;
-  quantity: number;
+  quantity?: number;
+  leadTimeDays?: number;
   idProductAttribute?: number;
 }
 
 export interface BulkStockResult {
   updated: number;
   errors: string[];
-  results: Array<{ productId: number; quantity?: number; idProductAttribute?: number; status: 'ok' | 'error'; message?: string }>;
+  results: Array<{ productId: number; quantity?: number; leadTimeDays?: number; idProductAttribute?: number; status: 'ok' | 'error'; message?: string }>;
 }
 
 export class PrestaShopStockClient implements ShopStockClient {
@@ -56,9 +57,15 @@ export class PrestaShopStockClient implements ShopStockClient {
       const batch = items.slice(i, i + BULK_BATCH_SIZE);
       const payloadItems = batch.map((item) => ({
         productId: item.productId,
-        quantity: item.quantity,
+        ...(item.quantity === undefined ? {} : { quantity: item.quantity }),
+        ...(item.leadTimeDays === undefined ? {} : { leadTimeDays: normalizeLeadTimeDays(item.leadTimeDays) }),
         ...(item.idProductAttribute === undefined ? {} : { idProductAttribute: item.idProductAttribute }),
       }));
+      for (const item of payloadItems) {
+        if (item.quantity === undefined && item.leadTimeDays === undefined) {
+          throw new Error(`kp_bulkstock item for product ${item.productId} requires quantity or leadTimeDays`);
+        }
+      }
       const res = await fetch(this.bulkStockUrl, {
         method: 'POST',
         headers: {
@@ -308,6 +315,14 @@ function normalizeNullableString(value: unknown) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed || null;
+}
+
+function normalizeLeadTimeDays(value: unknown) {
+  const days = Number(value);
+  if (!Number.isInteger(days) || days < 0 || days > 365) {
+    throw new Error('leadTimeDays must be an integer between 0 and 365');
+  }
+  return days;
 }
 
 export function buildBulkStockUrl(baseUrl: string) {

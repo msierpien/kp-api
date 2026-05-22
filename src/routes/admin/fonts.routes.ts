@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { listFonts, uploadFont, deleteFont } from '../../services/admin/fonts.service';
+import { ALLOWED_FONT_EXTENSIONS, assertAllowedFontUpload } from '../../lib/upload-validation';
 
 export async function fontsRoutes(fastify: FastifyInstance) {
   // GET /admin/fonts
@@ -33,20 +34,18 @@ export async function fontsRoutes(fastify: FastifyInstance) {
     }
 
     const ext = data.filename.split('.').pop()?.toLowerCase() || '';
-    if (!['ttf', 'otf', 'woff', 'woff2'].includes(ext)) {
-      return reply.status(400).send({
-        error: 'Upload Error',
-        message: `Niedozwolony format: .${ext}. Dozwolone: TTF, OTF, WOFF, WOFF2`,
-      });
-    }
 
     try {
       const buffer = await data.toBuffer();
-      const font = await uploadFont(buffer, data.filename, data.mimetype);
+      assertAllowedFontUpload(buffer, ext);
+      const font = await uploadFont(buffer, data.filename);
       return reply.status(201).send({ font });
     } catch (error: any) {
       fastify.log.error(error);
-      return reply.status(400).send({ error: 'Upload Failed', message: error.message });
+      return reply.status(400).send({
+        error: 'Upload Failed',
+        message: error.message || `Dozwolone formaty: ${ALLOWED_FONT_EXTENSIONS.join(', ')}`,
+      });
     }
   });
 

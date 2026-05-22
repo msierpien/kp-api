@@ -28,6 +28,7 @@ import {
   uploadTemplateAsset,
   deleteTemplateAsset,
 } from '../../services/admin/templates-layout.service';
+import { ALLOWED_IMAGE_MIME_TYPES, assertAllowedImageUpload } from '../../lib/upload-validation';
 
 const templateItemResponseSchema = {
   type: 'object',
@@ -391,20 +392,13 @@ export async function templatesRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({ error: 'Upload Error', message: 'Brak pliku' });
       }
 
-      // Walidacja typu MIME
-      const allowedMimeTypes = ['image/png', 'image/jpeg', 'image/svg+xml', 'image/webp'];
-      if (!allowedMimeTypes.includes(data.mimetype)) {
-        return reply.status(400).send({
-          error: 'Upload Error',
-          message: `Niedozwolony typ pliku: ${data.mimetype}. Dozwolone: PNG, JPG, SVG, WebP`,
-        });
-      }
-
-      // Odczytaj typ assetu z pola formularza (domyślnie BACKGROUND)
-      const assetType = (data.fields?.assetType as any)?.value || 'BACKGROUND';
-
       try {
         const buffer = await data.toBuffer();
+        assertAllowedImageUpload(buffer, data.mimetype);
+
+        // Odczytaj typ assetu z pola formularza (domyślnie BACKGROUND)
+        const assetType = (data.fields?.assetType as any)?.value || 'BACKGROUND';
+
         const asset = await uploadTemplateAsset(
           paramsParsed.data.id,
           buffer,
@@ -416,7 +410,11 @@ export async function templatesRoutes(fastify: FastifyInstance) {
         return reply.status(201).send({ asset });
       } catch (error: any) {
         fastify.log.error(error);
-        return reply.status(400).send({ error: 'Upload Failed', message: error.message });
+        return reply.status(400).send({
+          error: 'Upload Failed',
+          message: error.message ||
+            `Niedozwolony typ pliku. Dozwolone: ${ALLOWED_IMAGE_MIME_TYPES.join(', ')}`,
+        });
       }
     }
   );

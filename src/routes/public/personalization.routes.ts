@@ -6,6 +6,7 @@ import { saveFile, fileExists, buildStorageUrl } from '../../services/storage/lo
 import { addFinalPdfJob } from '../../services/queue/render.queue';
 import { listFonts } from '../../services/admin/fonts.service';
 import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
+import { assertAllowedPngUpload } from '../../lib/upload-validation';
 
 interface PersonalizationParams {
   token: string;
@@ -893,18 +894,11 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
-        // Sprawdź typ pliku
-        if (!data.mimetype.startsWith('image/')) {
-          return reply.status(400).send({
-            error: 'Bad Request',
-            message: 'Plik musi być obrazem',
-          });
-        }
-
         fastify.log.info(`[UploadPreview] File received: ${data.filename}, size: ${data.file.bytesRead} bytes`);
 
         // Konwertuj stream na buffer
         const buffer = await data.toBuffer();
+        assertAllowedPngUpload(buffer, data.mimetype);
 
         // Zapisz plik
         const savedFile = await saveFile(buffer, {

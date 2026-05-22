@@ -6,6 +6,19 @@ const TENANT_MODELS = new Set([
   'Shop',
   'PersonalizationTemplate',
   'EmailSettings',
+  'WarehouseProduct',
+  'WarehouseCatalog',
+  'WarehouseLeadTimeGroup',
+  'ShopProductMapping',
+  'ShopProductImportLog',
+  'WarehouseProductBarcode',
+  'WarehouseReservation',
+  'WarehouseDocument',
+  'StockSyncLog',
+  'PriceSyncLog',
+  'WholesaleProvider',
+  'WholesaleProductMapping',
+  'WholesaleSyncLog',
 ]);
 
 const DEBUG_TENANT_CONTEXT = process.env.DEBUG_TENANT_CONTEXT === 'true';
@@ -56,7 +69,14 @@ export function createTenantMiddleware(getTenantId: () => string | null) {
     // Handle models with direct tenantId
     if (TENANT_MODELS.has(model)) {
       // READ operations: add tenantId filter
-      if (params.action === 'findUnique' || params.action === 'findFirst' || params.action === 'findMany') {
+      if (
+        params.action === 'findUnique' ||
+        params.action === 'findFirst' ||
+        params.action === 'findMany' ||
+        params.action === 'count' ||
+        params.action === 'aggregate' ||
+        params.action === 'groupBy'
+      ) {
         params.args = params.args || {};
         params.args.where = params.args.where || {};
         
@@ -94,6 +114,14 @@ export function createTenantMiddleware(getTenantId: () => string | null) {
             tenantId,
           }));
         }
+      }
+
+      if (params.action === 'upsert') {
+        params.args = params.args || {};
+        params.args.where = params.args.where || {};
+        params.args.where.tenantId = tenantId;
+        params.args.create = params.args.create || {};
+        params.args.create.tenantId = tenantId;
       }
     }
 

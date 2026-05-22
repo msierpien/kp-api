@@ -50,6 +50,10 @@ const envSchema = z.object({
   // Storage
   STORAGE_TYPE: z.enum(['local', 's3']).default('local'),
   STORAGE_PATH: z.string().default('./storage'),
+
+  // Runtime process roles
+  WORKERS_ENABLED: z.string().transform(val => val !== 'false').default('true'),
+  SCHEDULER_ENABLED: z.string().transform(val => val !== 'false').default('true'),
 });
 
 type Env = z.infer<typeof envSchema>;
@@ -166,6 +170,11 @@ export const config = {
     type: env.STORAGE_TYPE,
     path: env.STORAGE_PATH,
     publicUrl: env.PUBLIC_STORAGE_URL || `${env.APP_URL}/storage`,
+  },
+
+  runtime: {
+    workersEnabled: env.WORKERS_ENABLED,
+    schedulerEnabled: env.SCHEDULER_ENABLED,
   },
 } as const;
 

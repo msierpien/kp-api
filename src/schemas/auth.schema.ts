@@ -6,7 +6,7 @@ export const loginSchema = z.object({
 });
 
 export const refreshSchema = z.object({
-  refreshToken: z.string().min(1, 'Refresh token jest wymagany'),
+  refreshToken: z.string().min(1, 'Refresh token jest wymagany').optional(),
 });
 
 export type LoginInput = z.infer<typeof loginSchema>;

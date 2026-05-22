@@ -4,6 +4,7 @@ import { loginSchema, refreshSchema, LoginInput, RefreshInput } from '../schemas
 import prisma from '../lib/prisma';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { normalizeFeatures } from '../lib/features';
+import { clearAuthCookies, getRefreshTokenFromRequest, setAuthCookies } from '../lib/auth-cookies';
 
 export async function authRoutes(fastify: FastifyInstance) {
   const authService = new AuthService({
@@ -71,8 +72,12 @@ export async function authRoutes(fastify: FastifyInstance) {
 
         const { email, password } = parsed.data;
         const result = await authService.login(email, password);
+        setAuthCookies(reply, {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+        });
 
-        return reply.send(result);
+        return reply.send({ user: result.user });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Błąd logowania';
         return reply.status(401).send({
@@ -120,10 +125,18 @@ export async function authRoutes(fastify: FastifyInstance) {
           });
         }
 
-        const { refreshToken } = parsed.data;
-        const result = await authService.refresh(refreshToken);
+        const refreshToken = parsed.data.refreshToken || getRefreshTokenFromRequest(request);
+        if (!refreshToken) {
+          return reply.status(400).send({
+            error: 'Validation Error',
+            message: 'Refresh token jest wymagany',
+          });
+        }
 
-        return reply.send(result);
+        const result = await authService.refresh(refreshToken);
+        setAuthCookies(reply, { accessToken: result.accessToken });
+
+        return reply.send({ success: true });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Błąd odświeżania tokenu';
         return reply.status(401).send({
@@ -149,6 +162,7 @@ export async function authRoutes(fastify: FastifyInstance) {
   }, async (_request: FastifyRequest, reply: FastifyReply) => {
     // W JWT stateless, logout jest po stronie klienta (usunięcie tokenu)
     // Tutaj możemy dodać blacklistowanie tokenu w Redis w przyszłości
+    clearAuthCookies(reply);
     return reply.send({ message: 'Wylogowano pomyślnie' });
   });
 

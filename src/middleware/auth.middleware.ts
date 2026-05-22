@@ -1,20 +1,20 @@
 import { FastifyRequest, FastifyReply, FastifyInstance } from 'fastify';
 import type { JwtPayload, UserRole } from '../types';
 import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../lib/features';
+import { getAccessTokenFromRequest } from '../lib/auth-cookies';
 
 export function authMiddleware(fastify: FastifyInstance) {
   return async function authenticate(request: FastifyRequest, reply: FastifyReply) {
     try {
-      const authHeader = request.headers.authorization;
+      const token = getAccessTokenFromRequest(request);
 
-      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      if (!token) {
         return reply.status(401).send({
           error: 'Unauthorized',
           message: 'Brak tokenu autoryzacji',
         });
       }
 
-      const token = authHeader.substring(7);
       const decoded = (await fastify.jwt.verify(token)) as JwtPayload;
 
       (request as any).user = decoded;

@@ -2,17 +2,6 @@ import fs from 'fs/promises';
 import path from 'path';
 
 const FONTS_DIR = path.join(process.cwd(), 'storage', 'fonts');
-const ALLOWED_MIME_TYPES = [
-  'font/ttf',
-  'font/otf',
-  'font/woff',
-  'font/woff2',
-  'application/font-woff',
-  'application/font-woff2',
-  'application/x-font-ttf',
-  'application/x-font-opentype',
-  'application/octet-stream', // Some browsers send this for fonts
-];
 const ALLOWED_EXTENSIONS = ['.ttf', '.otf', '.woff', '.woff2'];
 
 export interface FontItem {
@@ -58,8 +47,7 @@ export async function listFonts(): Promise<FontItem[]> {
 
 export async function uploadFont(
   fileBuffer: Buffer,
-  originalFileName: string,
-  mimeType: string
+  originalFileName: string
 ): Promise<FontItem> {
   await ensureFontsDir();
 

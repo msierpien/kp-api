@@ -179,7 +179,7 @@ async function executeActions(
  * Akcja: Wyślij email
  */
 async function executeSendEmail(config: any, caseData: any): Promise<void> {
-  const { to, subject, template } = config;
+  const { to, template } = config;
 
   if (!emailService.isConfigured()) {
     throw new Error('Email service not configured');

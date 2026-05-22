@@ -73,37 +73,16 @@ async function processStockSyncJob(job: Job<StockSyncJobData>) {
     },
   });
 
-  if (useBulk && !prestashopShopId) {
-    throw new Error(
-      `Brak prestashopShopId/idShopDefault w konfiguracji sklepu ${shop.name}. ` +
-      'Bulk stock wymaga jawnego ID sklepu PrestaShop, żeby nie aktualizować złego kontekstu multishop.',
-    );
-  }
-
   console.log(
     `[StockSyncWorker] product=${externalProductId} qty=${decision.publishedQuantity} ` +
     `mode=${useBulk ? 'BULK' : 'WEBSERVICE'}`,
   );
 
   if (useBulk) {
-    try {
-      await client.bulkUpdateStock([{
-        productId: externalNumericProductId,
-        quantity: Math.max(0, Math.floor(Number(decision.publishedQuantity))),
-        outOfStockBehavior: decision.outOfStockBehavior,
-      }]);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'unknown bulk stock error';
-      console.warn(`[StockSyncWorker] bulk stock failed for product=${externalProductId}, falling back to WEBSERVICE: ${message}`);
-      syncMode = 'WEBSERVICE';
-      await prisma.stockSyncLog.update({
-        where: { id: logId },
-        data: { syncMode },
-      });
-      await client.updateStockQuantity(externalProductId, Number(decision.publishedQuantity), {
-        outOfStockBehavior: decision.outOfStockBehavior,
-      });
-    }
+    await client.bulkUpdateStock([{
+      productId: externalNumericProductId,
+      quantity: Math.max(0, Math.floor(Number(decision.publishedQuantity))),
+    }]);
   } else {
     await client.updateStockQuantity(externalProductId, Number(decision.publishedQuantity), {
       outOfStockBehavior: decision.outOfStockBehavior,

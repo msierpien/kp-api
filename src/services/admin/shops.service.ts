@@ -32,7 +32,7 @@ const mapShop = (shop: any): ShopItem => {
         scopes: [],
       },
     },
-    hasBulkStock: Boolean(configJson.bulkStockUrl && configJson.bulkStockApiKey),
+    hasBulkStock: Boolean(configJson.bulkStockApiKey),
     bulkStockUrl: typeof configJson.bulkStockUrl === 'string' ? configJson.bulkStockUrl : null,
     prestashopShopId: resolvePrestaShopShopId(configJson),
     tenantId: shop.tenantId,

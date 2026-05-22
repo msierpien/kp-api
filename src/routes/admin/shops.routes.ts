@@ -253,7 +253,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
   );
 
   // PATCH /admin/shops/:id/bulk-stock-config
-  fastify.patch<{ Params: ShopIdParamsInput; Body: { bulkStockUrl?: string | null; bulkStockApiKey?: string | null; prestashopShopId?: string | null } }>(
+  fastify.patch<{ Params: ShopIdParamsInput; Body: { bulkStockUrl?: string | null; bulkStockApiKey?: string | null } }>(
     '/:id/bulk-stock-config',
     {
       schema: {
@@ -265,14 +265,13 @@ export async function shopsRoutes(fastify: FastifyInstance) {
           properties: {
             bulkStockUrl: { type: 'string', nullable: true },
             bulkStockApiKey: { type: 'string', nullable: true },
-            prestashopShopId: { type: 'string', nullable: true },
           },
         },
       },
     },
     async (request, reply) => {
       const shopId = request.params.id;
-      const { bulkStockUrl, bulkStockApiKey, prestashopShopId } = request.body ?? {};
+      const { bulkStockUrl, bulkStockApiKey } = request.body ?? {};
       try {
         const shop = await prisma.shop.findUnique({ where: { id: shopId }, select: { id: true, configJson: true } });
         if (!shop) return reply.status(404).send({ error: 'Not Found', message: 'Sklep nie znaleziony' });
@@ -282,20 +281,6 @@ export async function shopsRoutes(fastify: FastifyInstance) {
           : {};
 
         const nextBulkStockUrl = normalizeOptionalString(bulkStockUrl);
-        const providedPrestaShopShopId = normalizeOptionalString(prestashopShopId);
-        const existingPrestaShopShopId =
-          normalizeOptionalString(existing.prestashopShopId) ??
-          normalizeOptionalString(existing.idShopDefault);
-        const nextPrestaShopShopId = prestashopShopId === undefined
-          ? existingPrestaShopShopId
-          : providedPrestaShopShopId;
-        if (nextBulkStockUrl && !nextPrestaShopShopId) {
-          return reply.status(400).send({
-            error: 'Validation Error',
-            message: 'Bulk stock wymaga jawnego prestashopShopId/idShopDefault dla sklepu PrestaShop.',
-          });
-        }
-
         const providedBulkStockApiKey = normalizeOptionalString(bulkStockApiKey);
         const existingBulkStockApiKey = typeof existing.bulkStockApiKey === 'string'
           ? existing.bulkStockApiKey
@@ -309,13 +294,11 @@ export async function shopsRoutes(fastify: FastifyInstance) {
         const updated = {
           ...existing,
           bulkStockUrl: nextBulkStockUrl,
-          bulkStockApiKey: nextBulkStockUrl ? nextBulkStockApiKey : null,
-          prestashopShopId: nextPrestaShopShopId,
-          idShopDefault: nextPrestaShopShopId,
+          bulkStockApiKey: nextBulkStockApiKey,
         };
 
         await prisma.shop.update({ where: { id: shopId }, data: { configJson: updated } });
-        return reply.send({ success: true, hasBulkStock: Boolean(updated.bulkStockUrl && updated.bulkStockApiKey) });
+        return reply.send({ success: true, hasBulkStock: Boolean(updated.bulkStockApiKey) });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Błąd zapisu konfiguracji bulk';
         return reply.status(500).send({ error: 'Error', message });

@@ -8,8 +8,6 @@ export interface BulkStockItem {
   productId: number;
   quantity: number;
   idProductAttribute?: number;
-  idShop?: number;
-  outOfStockBehavior?: 0 | 1 | 2;
 }
 
 export interface BulkStockResult {
@@ -34,7 +32,7 @@ export class PrestaShopStockClient implements ShopStockClient {
   }) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '').replace(/\/api$/, '');
     this.apiKey = config.apiKey;
-    this.bulkStockUrl = normalizeNullableString(config.bulkStockUrl);
+    this.bulkStockUrl = normalizeNullableString(config.bulkStockUrl) ?? buildBulkStockUrl(this.baseUrl);
     this.bulkStockApiKey = normalizeNullableString(config.bulkStockApiKey);
     this.prestashopShopId = normalizeNullableString(config.prestashopShopId);
   }
@@ -57,8 +55,9 @@ export class PrestaShopStockClient implements ShopStockClient {
     for (let i = 0; i < items.length; i += BULK_BATCH_SIZE) {
       const batch = items.slice(i, i + BULK_BATCH_SIZE);
       const payloadItems = batch.map((item) => ({
-        ...item,
-        idShop: item.idShop ?? parseOptionalPositiveInt(this.prestashopShopId) ?? undefined,
+        productId: item.productId,
+        quantity: item.quantity,
+        ...(item.idProductAttribute === undefined ? {} : { idProductAttribute: item.idProductAttribute }),
       }));
       const res = await fetch(this.bulkStockUrl, {
         method: 'POST',
@@ -66,7 +65,6 @@ export class PrestaShopStockClient implements ShopStockClient {
           'Content-Type': 'application/json',
           Accept: 'application/json',
           'X-Api-Key': this.bulkStockApiKey,
-          Authorization: `Bearer ${this.bulkStockApiKey}`,
         },
         body: JSON.stringify({ items: payloadItems }),
       });
@@ -317,10 +315,8 @@ function normalizeNullableString(value: unknown) {
   return trimmed || null;
 }
 
-function parseOptionalPositiveInt(value: string | null) {
-  if (!value) return null;
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+function buildBulkStockUrl(baseUrl: string) {
+  return `${baseUrl}/index.php?fc=module&module=kp_bulkstock&controller=bulkupdate`;
 }
 
 function buildStockAvailableXml(input: {

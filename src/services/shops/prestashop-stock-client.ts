@@ -8,6 +8,7 @@ export interface BulkStockItem {
   productId: number;
   quantity?: number;
   leadTimeDays?: number | null;
+  warehouseAvailableAt?: string | null;
   outOfStockBehavior?: 0 | 1;
   availabilityPolicy?: 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
   idProductAttribute?: number;
@@ -20,6 +21,7 @@ export interface BulkStockResult {
     productId: number;
     quantity?: number;
     leadTimeDays?: number | null;
+    warehouseAvailableAt?: string | null;
     outOfStockBehavior?: 0 | 1;
     availabilityPolicy?: 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
     idProductAttribute?: number;
@@ -70,6 +72,7 @@ export class PrestaShopStockClient implements ShopStockClient {
         productId: item.productId,
         ...(item.quantity === undefined ? {} : { quantity: item.quantity }),
         ...(item.leadTimeDays === undefined ? {} : { leadTimeDays: normalizeLeadTimeDays(item.leadTimeDays) }),
+        ...(item.warehouseAvailableAt === undefined ? {} : { warehouseAvailableAt: normalizeWarehouseAvailableAt(item.warehouseAvailableAt) }),
         ...(item.outOfStockBehavior === undefined ? {} : { outOfStockBehavior: normalizeOutOfStockBehavior(item.outOfStockBehavior) }),
         ...(item.availabilityPolicy === undefined ? {} : { availabilityPolicy: normalizeAvailabilityPolicy(item.availabilityPolicy) }),
         ...(item.idProductAttribute === undefined ? {} : { idProductAttribute: item.idProductAttribute }),
@@ -337,6 +340,25 @@ function normalizeLeadTimeDays(value: unknown) {
     throw new Error('leadTimeDays must be an integer between 0 and 365');
   }
   return days;
+}
+
+function normalizeWarehouseAvailableAt(value: unknown) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') {
+    throw new Error('warehouseAvailableAt must be a YYYY-MM-DD string or null');
+  }
+
+  const dateValue = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) {
+    throw new Error('warehouseAvailableAt must use YYYY-MM-DD format');
+  }
+
+  const parsed = new Date(`${dateValue}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== dateValue) {
+    throw new Error('warehouseAvailableAt must be a valid calendar date');
+  }
+
+  return dateValue;
 }
 
 function normalizeOutOfStockBehavior(value: unknown) {

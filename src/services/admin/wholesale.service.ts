@@ -21,6 +21,7 @@ interface FieldMapping {
   description?: string;
   image?: string;
   category?: string;
+  warehouseAvailableAt?: string;
 }
 
 interface WholesaleProviderConfig {
@@ -577,6 +578,7 @@ export async function getWholesaleProductOffers(query: WholesaleProductOffersQue
     externalCategory: string | null;
     lastKnownStock: number | null;
     lastKnownPrice: number | null;
+    warehouseAvailableAt: Date | null;
     lastSyncAt: Date | null;
     providerLastSyncAt: Date | null;
   }>> = Object.fromEntries(productIds.map((productId) => [productId, []]));
@@ -597,6 +599,7 @@ export async function getWholesaleProductOffers(query: WholesaleProductOffersQue
       externalCategory: mapping.externalCategory,
       lastKnownStock: mapping.lastKnownStock != null ? mapping.lastKnownStock.toNumber() : null,
       lastKnownPrice: mapping.lastKnownPrice != null ? mapping.lastKnownPrice.toNumber() : null,
+      warehouseAvailableAt: mapping.warehouseAvailableAt,
       lastSyncAt: mapping.lastSyncAt,
       providerLastSyncAt: mapping.provider.lastSyncAt,
     });
@@ -969,6 +972,7 @@ async function processWholesaleSyncBatch(input: {
       externalSku: true,
       warehouseProductId: true,
       lastKnownStock: true,
+      warehouseAvailableAt: true,
       isActive: true,
     },
   });
@@ -986,6 +990,7 @@ async function processWholesaleSyncBatch(input: {
       externalCategory: mapped.externalCategory,
       lastKnownStock: mapped.lastKnownStock,
       lastKnownPrice: mapped.lastKnownPrice,
+      warehouseAvailableAt: mapped.warehouseAvailableAt,
       payloadJson: mapped.payloadJson,
       isActive: true,
       lastSyncAt: now,
@@ -994,7 +999,8 @@ async function processWholesaleSyncBatch(input: {
     if (existing) {
       const wasAvailable = existing.isActive && isPositiveDecimal(existing.lastKnownStock);
       const isAvailable = isPositiveDecimal(mapped.lastKnownStock);
-      if (existing.warehouseProductId && wasAvailable !== isAvailable) {
+      const availabilityDateChanged = !sameDateOnly(existing.warehouseAvailableAt, mapped.warehouseAvailableAt);
+      if (existing.warehouseProductId && (wasAvailable !== isAvailable || availabilityDateChanged)) {
         availabilityChangedProductIds.add(existing.warehouseProductId);
       }
       updateOperations.push(prisma.wholesaleProductMapping.update({
@@ -1082,13 +1088,25 @@ function buildProviderConfig(input: {
   const preset = input.preset ?? detectPreset(input.feedUrl, input.name);
   const presetConfig = preset !== 'CUSTOM' ? PRESET_CONFIGS[preset] : undefined;
   const delimiter = normalizeDelimiter(input.delimiter ?? presetConfig?.delimiter);
-  const fieldMapping = input.fieldMapping ?? presetConfig?.fieldMapping;
+  const inputFieldMapping = compactFieldMapping(input.fieldMapping);
+  const fieldMapping = presetConfig
+    ? { ...presetConfig.fieldMapping, ...inputFieldMapping }
+    : inputFieldMapping;
 
   if (!fieldMapping?.sku || !fieldMapping?.name) {
     throw new Error('Konfiguracja hurtowni wymaga mapowania pól sku i name');
   }
 
-  return { preset, delimiter, fieldMapping };
+  return { preset, delimiter, fieldMapping: fieldMapping as FieldMapping };
+}
+
+function compactFieldMapping(fieldMapping?: FieldMapping): Partial<FieldMapping> {
+  if (!fieldMapping) return {};
+  return Object.fromEntries(
+    Object.entries(fieldMapping)
+      .map(([key, value]) => [key, typeof value === 'string' ? value.trim() : value])
+      .filter(([, value]) => Boolean(value)),
+  ) as Partial<FieldMapping>;
 }
 
 function parseProviderConfig(configJson: unknown): WholesaleProviderConfig {
@@ -1174,6 +1192,14 @@ function normalizeOptionalLeadTimeDays(value: number | null | undefined) {
 function isPositiveDecimal(value: Prisma.Decimal | number | string | null | undefined) {
   if (value === undefined || value === null) return false;
   return new Prisma.Decimal(value).gt(0);
+}
+
+function sameDateOnly(a?: Date | null, b?: Date | null) {
+  return dateOnlyString(a) === dateOnlyString(b);
+}
+
+function dateOnlyString(value?: Date | null) {
+  return value ? value.toISOString().slice(0, 10) : null;
 }
 
 async function enqueueWholesaleAvailabilityStockSync(warehouseProductIds: string[], tenantId: string) {
@@ -1271,7 +1297,36 @@ function mapCsvRecord(record: Record<string, string>, fieldMapping: FieldMapping
     externalCategory: readOptionalField(record, fieldMapping.category),
     lastKnownStock: parseDecimal(readOptionalField(record, fieldMapping.stock), 3),
     lastKnownPrice: parseDecimal(readOptionalField(record, fieldMapping.price), 2),
+    warehouseAvailableAt: parseWarehouseAvailableAt(readOptionalField(record, fieldMapping.warehouseAvailableAt)),
   };
+}
+
+function parseWarehouseAvailableAt(value?: string | null) {
+  const normalized = normalizeDateOnly(value);
+  return normalized ? new Date(`${normalized}T00:00:00.000Z`) : null;
+}
+
+function normalizeDateOnly(value?: string | null) {
+  const raw = value?.trim();
+  if (!raw) return null;
+
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) return validDateOnly(isoMatch[1], isoMatch[2], isoMatch[3]);
+
+  const slashMatch = raw.match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
+  if (slashMatch) return validDateOnly(slashMatch[1], slashMatch[2], slashMatch[3]);
+
+  const polishMatch = raw.match(/^(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})$/);
+  if (polishMatch) return validDateOnly(polishMatch[3], polishMatch[2], polishMatch[1]);
+
+  return null;
+}
+
+function validDateOnly(year: string, month: string, day: string) {
+  const normalized = `${year.padStart(4, '0')}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  const parsed = new Date(`${normalized}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== normalized) return null;
+  return normalized;
 }
 
 export async function bulkCreateWarehouseProductsFromWholesale(

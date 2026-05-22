@@ -31,6 +31,7 @@ export interface StockSyncBatchItem {
   externalProductId: string;
   quantity: number;
   leadTimeDays?: number | null;
+  warehouseAvailableAt?: string | null;
   outOfStockBehavior?: 0 | 1;
   availabilityPolicy?: StockSyncAvailabilityPolicy;
   idProductAttribute?: number;

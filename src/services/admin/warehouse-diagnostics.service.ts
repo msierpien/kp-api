@@ -127,6 +127,7 @@ export async function retryStockSyncLog(id: string) {
       stockAfter: log.warehouseProduct.currentStock,
       publishedQuantity: decision.publishedQuantity,
       publishedLeadTimeDays,
+      publishedWarehouseAvailableAt: decision.warehouseAvailableAt ?? null,
       availabilityPolicy: decision.availabilityPolicy,
       outOfStockBehavior: decision.outOfStockBehavior,
       warningMessage: decision.warningMessage,
@@ -210,6 +211,7 @@ export async function requeuePendingStockSyncLogs(shopId?: string) {
         externalProductId: mapping.externalProductId,
         quantity: Math.max(0, Math.floor(Number(log.publishedQuantity ?? log.stockAfter))),
         leadTimeDays: log.publishedLeadTimeDays ?? null,
+        warehouseAvailableAt: formatWarehouseAvailableAt(log.publishedWarehouseAvailableAt),
         outOfStockBehavior: log.outOfStockBehavior === 1 ? 1 : 0,
         availabilityPolicy: isStockSyncAvailabilityPolicy(log.availabilityPolicy) ? log.availabilityPolicy : undefined,
       });
@@ -236,6 +238,10 @@ function resolvePublishedLeadTimeDays(
   return normalizeOptionalLeadTimeDays(decision.leadTimeDays) ??
     getShopDefaultLeadTimeDays(shopConfigJson) ??
     0;
+}
+
+function formatWarehouseAvailableAt(value?: Date | null) {
+  return value ? value.toISOString().slice(0, 10) : null;
 }
 
 function isStockSyncAvailabilityPolicy(value: unknown): value is import('../queue/stock-sync.queue').StockSyncAvailabilityPolicy {

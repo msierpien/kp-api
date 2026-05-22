@@ -10,6 +10,7 @@ export interface InventoryPublicationDecision {
   stockAfter: Prisma.Decimal;
   publishedQuantity: Prisma.Decimal;
   leadTimeDays?: number | null;
+  warehouseAvailableAt?: Date | null;
   availabilityPolicy: InventoryAvailabilityPolicy;
   outOfStockBehavior: PrestaShopOutOfStockBehavior;
   warningMessage?: string;
@@ -109,6 +110,7 @@ export async function getInventoryPublicationDecisions(
         stockAfter: product.currentStock,
         publishedQuantity: ZERO,
         leadTimeDays: productLeadTimeDays ?? normalizeOptionalLeadTimeDays(wholesale.provider.leadTimeDays),
+        warehouseAvailableAt: wholesale.warehouseAvailableAt,
         availabilityPolicy: 'BACKORDER_FROM_WHOLESALE',
         outOfStockBehavior: 1,
         warningMessage: options.warningMessage,
@@ -211,6 +213,7 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
         stockAfter: decision.stockAfter,
         publishedQuantity: decision.publishedQuantity,
         publishedLeadTimeDays,
+        publishedWarehouseAvailableAt: decision.warehouseAvailableAt ?? null,
         availabilityPolicy: decision.availabilityPolicy,
         outOfStockBehavior: decision.outOfStockBehavior,
         warningMessage: decision.warningMessage,
@@ -231,6 +234,7 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
       externalProductId: mapping.externalProductId,
       quantity: Math.max(0, Math.floor(Number(decision.publishedQuantity))),
       leadTimeDays: publishedLeadTimeDays,
+      warehouseAvailableAt: formatWarehouseAvailableAt(decision.warehouseAvailableAt),
       outOfStockBehavior: decision.outOfStockBehavior,
       availabilityPolicy: decision.availabilityPolicy,
     });
@@ -333,6 +337,10 @@ function resolvePublishedLeadTimeDays(decision: InventoryPublicationDecision, sh
   return normalizeOptionalLeadTimeDays(decision.leadTimeDays) ??
     getShopDefaultLeadTimeDays(shopConfigJson) ??
     0;
+}
+
+function formatWarehouseAvailableAt(value?: Date | null) {
+  return value ? value.toISOString().slice(0, 10) : null;
 }
 
 function getShopDefaultLeadTimeDays(configJson: unknown) {

@@ -71,6 +71,7 @@ async function processLegacyStockSyncJob(data: StockSyncLegacyJobData) {
       externalProductId,
       quantity: Math.max(0, Math.floor(Number(decision.publishedQuantity))),
       leadTimeDays: publishedLeadTimeDays,
+      warehouseAvailableAt: formatWarehouseAvailableAt(decision.warehouseAvailableAt),
       outOfStockBehavior: decision.outOfStockBehavior,
       availabilityPolicy: decision.availabilityPolicy,
     }],
@@ -142,6 +143,7 @@ async function processBulkBatch(
       productId: Number(item.externalProductId),
       quantity: item.quantity,
       leadTimeDays: item.leadTimeDays,
+      warehouseAvailableAt: item.warehouseAvailableAt,
       outOfStockBehavior: item.outOfStockBehavior,
       availabilityPolicy: item.availabilityPolicy,
       ...(item.idProductAttribute === undefined ? {} : { idProductAttribute: item.idProductAttribute }),
@@ -179,6 +181,7 @@ async function processBulkBatch(
           syncMode: meta.syncMode,
           remoteQuantity: remote.quantity ?? item.quantity,
           remoteLeadTimeDays: remote.leadTimeDays ?? item.leadTimeDays ?? null,
+          remoteWarehouseAvailableAt: parseWarehouseAvailableAt(remote.warehouseAvailableAt ?? item.warehouseAvailableAt ?? null),
           stockAvailableId: null,
           prestashopShopId: meta.prestashopShopId,
           errorMessage: null,
@@ -287,6 +290,16 @@ function resolvePublishedLeadTimeDays(
   return normalizeOptionalLeadTimeDays(decision.leadTimeDays) ??
     getShopDefaultLeadTimeDays(shopConfigJson) ??
     0;
+}
+
+function formatWarehouseAvailableAt(value?: Date | null) {
+  return value ? value.toISOString().slice(0, 10) : null;
+}
+
+function parseWarehouseAvailableAt(value?: string | null) {
+  if (!value) return null;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 function getShopDefaultLeadTimeDays(configJson: unknown) {

@@ -4,6 +4,9 @@ import { getEmailQueue } from './email.queue';
 import { getStockSyncQueue } from './stock-sync.queue';
 import { getPriceSyncQueue } from './price-sync.queue';
 import { getWholesaleSyncQueue } from './wholesale-sync.queue';
+import { createLogger } from '../../lib/logger';
+
+const logger = createLogger('queue-stats-service');
 
 // Map queue names to queue instances
 const queues: Record<string, () => Queue> = {
@@ -175,7 +178,7 @@ export async function retryAllFailed(queueName: string): Promise<number> {
       await job.retry();
       retriedCount++;
     } catch (error) {
-      console.error(`[QueueStats] Failed to retry job ${job.id}:`, error);
+      logger.error({ err: error, jobId: job.id }, 'Failed to retry job');
     }
   }
 

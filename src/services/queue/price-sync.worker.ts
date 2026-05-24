@@ -1,8 +1,11 @@
 import { Worker, Job } from 'bullmq';
+import { createLogger } from '../../lib/logger';
 import prisma from '../../lib/prisma';
 import { createShopStockClient } from '../shops/shop-client.factory';
 import { getRedisConnection } from './render.queue';
 import { PRICE_SYNC_QUEUE_NAME, type PriceSyncJobData } from './price-sync.queue';
+
+const logger = createLogger('price-sync-worker');
 
 let priceSyncWorker: Worker<PriceSyncJobData> | null = null;
 const PRESTASHOP_SYNC_RATE_LIMIT = { max: 30, duration: 60_000 };
@@ -67,7 +70,7 @@ async function processPriceSyncJob(job: Job<PriceSyncJobData>) {
 
 export function startPriceSyncWorker() {
   if (priceSyncWorker) {
-    console.log('[PriceSyncWorker] Worker already running');
+    logger.info('Worker already running');
     return;
   }
 
@@ -82,11 +85,11 @@ export function startPriceSyncWorker() {
   );
 
   priceSyncWorker.on('completed', (job) => {
-    console.log(`[PriceSyncWorker] Job ${job.id} completed`);
+    logger.info({ jobId: job.id }, 'Job completed');
   });
 
   priceSyncWorker.on('failed', async (job, err) => {
-    console.error(`[PriceSyncWorker] Job ${job?.id} failed:`, err.message);
+    logger.error({ err, jobId: job?.id }, 'Job failed');
 
     if (job?.data.logId) {
       await prisma.priceSyncLog.update({
@@ -100,16 +103,16 @@ export function startPriceSyncWorker() {
   });
 
   priceSyncWorker.on('error', (err) => {
-    console.error('[PriceSyncWorker] Worker error:', err);
+    logger.error({ err }, 'Worker error');
   });
 
-  console.log('[PriceSyncWorker] Worker started');
+  logger.info('Worker started');
 }
 
 export async function stopPriceSyncWorker() {
   if (priceSyncWorker) {
     await priceSyncWorker.close();
     priceSyncWorker = null;
-    console.log('[PriceSyncWorker] Worker stopped');
+    logger.info('Worker stopped');
   }
 }

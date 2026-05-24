@@ -1,4 +1,5 @@
 import { Prisma, WholesalePlatform } from '@prisma/client';
+import { createLogger } from '../../lib/logger';
 import prisma from '../../lib/prisma';
 import { publishInventoryToShops } from '../stock/stock-sync.service';
 import {
@@ -15,6 +16,8 @@ import {
   type FieldMapping,
   type WholesalePreset,
 } from './wholesale/shared';
+
+const logger = createLogger('wholesale-provider-service');
 
 export interface WholesaleProvidersQuery {
   page?: number;
@@ -190,7 +193,7 @@ export async function updateWholesaleProvider(id: string, input: UpdateWholesale
 
   if (shouldSyncLeadTime) {
     enqueueWholesaleProviderLeadTimeStockSync(id, tenantId).catch((error) => {
-      console.error('[Wholesale] Failed to enqueue stock sync for provider lead time change:', error);
+      logger.error({ err: error, providerId: id }, 'Failed to enqueue stock sync for provider lead time change');
     });
   }
 
@@ -249,7 +252,7 @@ export async function bulkUpdateWholesaleProviderLeadTimes(
 
   for (const providerId of changedProviderIds) {
     enqueueWholesaleProviderLeadTimeStockSync(providerId, tenantId).catch((error) => {
-      console.error('[Wholesale] Failed to enqueue stock sync for provider lead time change:', error);
+      logger.error({ err: error, providerId }, 'Failed to enqueue stock sync for provider lead time change');
     });
   }
 

@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { createLogger } from './lib/logger';
+
+const logger = createLogger('config');
 
 /**
  * Validation schema for environment variables
@@ -67,10 +70,12 @@ function loadConfig(): Env {
     return parsed;
   } catch (error) {
     if (error instanceof z.ZodError) {
-      console.error('❌ Invalid environment variables:');
-      error.errors.forEach((err) => {
-        console.error(`  - ${err.path.join('.')}: ${err.message}`);
-      });
+      logger.error({
+        errors: error.errors.map((err) => ({
+          path: err.path.join('.'),
+          message: err.message,
+        })),
+      }, 'Invalid environment variables');
       process.exit(1);
     }
     throw error;

@@ -3,10 +3,12 @@ import path from 'path';
 import { nanoid } from 'nanoid';
 import mime from 'mime-types';
 import { config } from '../../config';
+import { createLogger } from '../../lib/logger';
 
 const STORAGE_ROOT = config.storage.path;
 const PUBLIC_STORAGE_URL = config.storage.publicUrl;
 const storageRootAbsolute = path.resolve(STORAGE_ROOT);
+const logger = createLogger('local-storage');
 
 interface SaveFileOptions {
   orderId: string;
@@ -29,9 +31,9 @@ interface StoredFile {
 export async function initStorage(): Promise<void> {
   try {
     await fs.mkdir(storageRootAbsolute, { recursive: true });
-    console.log(`[Storage] Storage root initialized: ${storageRootAbsolute}`);
+    logger.info({ storageRoot: storageRootAbsolute }, 'Storage root initialized');
   } catch (error) {
-    console.error('[Storage] Failed to initialize storage:', error);
+    logger.error({ err: error, storageRoot: storageRootAbsolute }, 'Failed to initialize storage');
     throw error;
   }
 }

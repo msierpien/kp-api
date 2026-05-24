@@ -1,5 +1,8 @@
 import crypto from 'crypto';
 import { config } from '../config';
+import { createLogger } from './logger';
+
+const logger = createLogger('encryption');
 
 // Pobierz klucz szyfrowania z config (32 bajty dla AES-256)
 const ENCRYPTION_KEY = config.encryption.key;
@@ -36,7 +39,7 @@ export function encrypt(text: string): string {
       encrypted,
     ].join(':');
   } catch (error) {
-    console.error('Encryption failed:', error);
+    logger.error({ err: error }, 'Encryption failed');
     throw new Error('Encryption failed');
   }
 }
@@ -90,12 +93,12 @@ export function decrypt(text: string): string {
     return text;
   } catch (error) {
     if (text.startsWith(`${VERSION_PREFIX}:`)) {
-      console.warn('Authenticated decryption failed:', error);
+      logger.warn({ err: error }, 'Authenticated decryption failed');
       throw new Error('Decryption failed');
     }
 
     // Backward compatibility for old plaintext or legacy broken values.
-    console.warn('Legacy decryption failed, returning original text:', error);
+    logger.warn({ err: error }, 'Legacy decryption failed, returning original text');
     return text;
   }
 }

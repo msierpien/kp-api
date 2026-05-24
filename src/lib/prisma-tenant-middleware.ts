@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { createLogger } from './logger';
 
 // Models that have tenantId field
 export const TENANT_MODELS = new Set([
@@ -23,6 +24,7 @@ export const TENANT_MODELS = new Set([
 ]);
 
 const DEBUG_TENANT_CONTEXT = process.env.DEBUG_TENANT_CONTEXT === 'true';
+const logger = createLogger('prisma-tenant-middleware');
 
 type TenantScopedData = Record<string, unknown>;
 
@@ -82,13 +84,13 @@ export function createTenantMiddleware(getTenantId: () => string | null) {
     const action = params.action;
 
     if (DEBUG_TENANT_CONTEXT) {
-      console.log(`[Tenant Middleware] CALLED - Model: ${model || 'N/A'}, Action: ${action}`);
+      logger.debug({ model, action }, 'Tenant middleware called');
     }
 
     const tenantId = getTenantId();
 
     if (DEBUG_TENANT_CONTEXT && model && TENANT_MODELS.has(model)) {
-      console.log(`[Tenant Middleware] TENANT MODEL - Model: ${model}, Action: ${action}, TenantID: ${tenantId || 'NULL'}`);
+      logger.debug({ model, action, tenantId }, 'Tenant scoped Prisma operation');
     }
 
     // If no tenantId in context, pass through (e.g., public routes)

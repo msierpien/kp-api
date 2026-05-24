@@ -18,6 +18,8 @@ type RefreshJwtPayload = JwtPayload & {
   sessionId?: string;
 };
 
+type AuthDb = Pick<typeof prisma, 'user' | 'authSession'>;
+
 function hashRefreshToken(token: string) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
@@ -31,13 +33,15 @@ export class AuthService {
     sign: (payload: object, options?: { expiresIn: string }) => string;
     verify: <T>(token: string) => T;
   };
+  private db: AuthDb;
 
-  constructor(jwt: typeof AuthService.prototype.jwt) {
+  constructor(jwt: typeof AuthService.prototype.jwt, db: AuthDb = prisma) {
     this.jwt = jwt;
+    this.db = db;
   }
 
   async login(email: string, password: string, meta: AuthRequestMeta = {}): Promise<TokenResponse> {
-    const user = await prisma.user.findUnique({
+    const user = await this.db.user.findUnique({
       where: { email },
       include: {
         tenant: {
@@ -65,7 +69,7 @@ export class AuthService {
     }
 
     // Update last login
-    await prisma.user.update({
+    await this.db.user.update({
       where: { id: user.id },
       data: { lastLoginAt: new Date() },
     });
@@ -84,7 +88,7 @@ export class AuthService {
       { expiresIn: REFRESH_TOKEN_EXPIRY }
     );
 
-    await prisma.authSession.create({
+    await this.db.authSession.create({
       data: {
         id: sessionId,
         userId: user.id,
@@ -123,7 +127,7 @@ export class AuthService {
         throw new Error('Nieprawidłowy token');
       }
 
-      const session = await prisma.authSession.findUnique({
+      const session = await this.db.authSession.findUnique({
         where: { id: decoded.sessionId },
         include: { user: true },
       });
@@ -155,7 +159,7 @@ export class AuthService {
         { expiresIn: REFRESH_TOKEN_EXPIRY }
       );
 
-      const rotation = await prisma.authSession.updateMany({
+      const rotation = await this.db.authSession.updateMany({
         where: {
           id: session.id,
           refreshTokenHash: hashRefreshToken(refreshToken),
@@ -184,7 +188,7 @@ export class AuthService {
       const decoded = this.jwt.verify<RefreshJwtPayload>(refreshToken);
       if (decoded.type !== 'refresh' || !decoded.sessionId) return;
 
-      await prisma.authSession.updateMany({
+      await this.db.authSession.updateMany({
         where: { id: decoded.sessionId, revokedAt: null },
         data: { revokedAt: new Date() },
       });

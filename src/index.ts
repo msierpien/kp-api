@@ -41,6 +41,7 @@ type TenantContextData = Pick<JwtPayload, 'tenantId' | 'userId' | 'role'> & {
 };
 
 const server = Fastify({
+  trustProxy: config.app.trustProxy,
   routerOptions: {
     ignoreTrailingSlash: true,
   },

@@ -1,6 +1,6 @@
 export const RATE_LIMITS = {
   authLogin: {
-    max: 5,
+    max: 10,
     timeWindow: '1 minute',
     groupId: 'auth-login',
   },

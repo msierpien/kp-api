@@ -14,7 +14,9 @@ const envSchema = z.object({
   API_PORT: z.string().transform(Number).pipe(z.number().int().positive()).default('3001'),
   API_HOST: z.string().default('0.0.0.0'),
   APP_URL: z.string().url().default('http://localhost:3001'),
-  TRUST_PROXY: z.string().transform(val => val === 'true').default('false'),
+  TRUST_PROXY: z.enum(['true', 'false']).optional(),
+  API_RATE_LIMIT_MAX: z.string().transform(Number).pipe(z.number().int().positive()).default('600'),
+  API_RATE_LIMIT_WINDOW: z.string().default('1 minute'),
 
   // Database
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
@@ -62,6 +64,12 @@ const envSchema = z.object({
 
 type Env = z.infer<typeof envSchema>;
 
+export function resolveTrustProxy(nodeEnv: Env['NODE_ENV'], trustProxy?: string) {
+  if (trustProxy === 'true') return true;
+  if (trustProxy === 'false') return false;
+  return nodeEnv === 'production';
+}
+
 /**
  * Load and validate configuration from environment variables
  */
@@ -99,7 +107,7 @@ export const config = {
     port: env.API_PORT,
     host: env.API_HOST,
     url: env.APP_URL,
-    trustProxy: env.TRUST_PROXY,
+    trustProxy: resolveTrustProxy(env.NODE_ENV, env.TRUST_PROXY),
     isDevelopment: env.NODE_ENV === 'development',
     isProduction: env.NODE_ENV === 'production',
     isTest: env.NODE_ENV === 'test',
@@ -122,6 +130,14 @@ export const config = {
     url: env.REDIS_PASSWORD
       ? `redis://:${env.REDIS_PASSWORD}@${env.REDIS_HOST}:${env.REDIS_PORT}`
       : `redis://${env.REDIS_HOST}:${env.REDIS_PORT}`,
+  },
+
+  /**
+   * Global API rate limit. Route-specific limits can still be stricter.
+   */
+  rateLimit: {
+    max: env.API_RATE_LIMIT_MAX,
+    timeWindow: env.API_RATE_LIMIT_WINDOW,
   },
 
   /**

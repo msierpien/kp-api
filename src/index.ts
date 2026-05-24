@@ -152,8 +152,8 @@ server.register(helmet, {
 });
 
 server.register(rateLimit, {
-  max: 100,
-  timeWindow: '1 minute',
+  max: config.rateLimit.max,
+  timeWindow: config.rateLimit.timeWindow,
 });
 
 // JWT Plugin

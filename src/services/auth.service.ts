@@ -1,10 +1,30 @@
 import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 import prisma from '../lib/prisma';
 import type { TokenResponse, JwtPayload, UserRole } from '../types';
 import { normalizeFeatures } from '../lib/features';
 
 const ACCESS_TOKEN_EXPIRY = '15m';
 const REFRESH_TOKEN_EXPIRY = '7d';
+const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+type AuthRequestMeta = {
+  userAgent?: string;
+  ipAddress?: string;
+};
+
+type RefreshJwtPayload = JwtPayload & {
+  type?: string;
+  sessionId?: string;
+};
+
+function hashRefreshToken(token: string) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function refreshTokenExpiresAt() {
+  return new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
+}
 
 export class AuthService {
   private jwt: {
@@ -16,7 +36,7 @@ export class AuthService {
     this.jwt = jwt;
   }
 
-  async login(email: string, password: string): Promise<TokenResponse> {
+  async login(email: string, password: string, meta: AuthRequestMeta = {}): Promise<TokenResponse> {
     const user = await prisma.user.findUnique({
       where: { email },
       include: {
@@ -58,10 +78,23 @@ export class AuthService {
     };
 
     const accessToken = this.jwt.sign(payload, { expiresIn: ACCESS_TOKEN_EXPIRY });
+    const sessionId = crypto.randomUUID();
     const refreshToken = this.jwt.sign(
-      { ...payload, type: 'refresh' },
+      { ...payload, type: 'refresh', sessionId },
       { expiresIn: REFRESH_TOKEN_EXPIRY }
     );
+
+    await prisma.authSession.create({
+      data: {
+        id: sessionId,
+        userId: user.id,
+        tenantId: user.tenantId,
+        refreshTokenHash: hashRefreshToken(refreshToken),
+        userAgent: meta.userAgent,
+        ipAddress: meta.ipAddress,
+        expiresAt: refreshTokenExpiresAt(),
+      },
+    });
 
     return {
       accessToken,
@@ -82,20 +115,30 @@ export class AuthService {
     };
   }
 
-  async refresh(refreshToken: string): Promise<{ accessToken: string }> {
+  async refresh(refreshToken: string): Promise<{ accessToken: string; refreshToken: string }> {
     try {
-      const decoded = this.jwt.verify<JwtPayload & { type?: string }>(refreshToken);
+      const decoded = this.jwt.verify<RefreshJwtPayload>(refreshToken);
 
-      if (decoded.type !== 'refresh') {
+      if (decoded.type !== 'refresh' || !decoded.sessionId) {
         throw new Error('Nieprawidłowy token');
       }
 
-      // Verify user still exists and is active
-      const user = await prisma.user.findUnique({
-        where: { id: decoded.userId },
+      const session = await prisma.authSession.findUnique({
+        where: { id: decoded.sessionId },
+        include: { user: true },
       });
 
-      if (!user || !user.isActive) {
+      if (
+        !session ||
+        session.revokedAt ||
+        session.expiresAt <= new Date() ||
+        session.refreshTokenHash !== hashRefreshToken(refreshToken)
+      ) {
+        throw new Error('Nieprawidłowy token');
+      }
+
+      const user = session.user;
+      if (!user.isActive) {
         throw new Error('Użytkownik nie istnieje lub jest nieaktywny');
       }
 
@@ -107,10 +150,46 @@ export class AuthService {
       };
 
       const accessToken = this.jwt.sign(payload, { expiresIn: ACCESS_TOKEN_EXPIRY });
+      const nextRefreshToken = this.jwt.sign(
+        { ...payload, type: 'refresh', sessionId: session.id },
+        { expiresIn: REFRESH_TOKEN_EXPIRY }
+      );
 
-      return { accessToken };
+      const rotation = await prisma.authSession.updateMany({
+        where: {
+          id: session.id,
+          refreshTokenHash: hashRefreshToken(refreshToken),
+          revokedAt: null,
+        },
+        data: {
+          refreshTokenHash: hashRefreshToken(nextRefreshToken),
+          expiresAt: refreshTokenExpiresAt(),
+        },
+      });
+
+      if (rotation.count !== 1) {
+        throw new Error('Nieprawidłowy token');
+      }
+
+      return { accessToken, refreshToken: nextRefreshToken };
     } catch (error) {
       throw new Error('Nieprawidłowy lub wygasły token');
+    }
+  }
+
+  async logout(refreshToken?: string): Promise<void> {
+    if (!refreshToken) return;
+
+    try {
+      const decoded = this.jwt.verify<RefreshJwtPayload>(refreshToken);
+      if (decoded.type !== 'refresh' || !decoded.sessionId) return;
+
+      await prisma.authSession.updateMany({
+        where: { id: decoded.sessionId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    } catch {
+      // Logout should be idempotent even when the cookie is already invalid.
     }
   }
 

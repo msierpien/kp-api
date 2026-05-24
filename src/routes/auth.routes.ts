@@ -12,6 +12,14 @@ export async function authRoutes(fastify: FastifyInstance) {
     verify: (token: string) => fastify.jwt.verify(token) as any,
   });
 
+  function authRequestMeta(request: FastifyRequest) {
+    const userAgent = request.headers['user-agent'];
+    return {
+      userAgent: Array.isArray(userAgent) ? userAgent.join(' ') : userAgent,
+      ipAddress: request.ip,
+    };
+  }
+
   // POST /auth/login
   fastify.post<{ Body: LoginInput }>(
     '/login',
@@ -69,7 +77,7 @@ export async function authRoutes(fastify: FastifyInstance) {
         }
 
         const { email, password } = parsed.data;
-        const result = await authService.login(email, password);
+        const result = await authService.login(email, password, authRequestMeta(request));
         setAuthCookies(reply, {
           accessToken: result.accessToken,
           refreshToken: result.refreshToken,
@@ -131,7 +139,10 @@ export async function authRoutes(fastify: FastifyInstance) {
         }
 
         const result = await authService.refresh(refreshToken);
-        setAuthCookies(reply, { accessToken: result.accessToken });
+        setAuthCookies(reply, {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+        });
 
         return reply.send({ success: true });
       } catch (error) {
@@ -156,9 +167,8 @@ export async function authRoutes(fastify: FastifyInstance) {
         },
       },
     },
-  }, async (_request: FastifyRequest, reply: FastifyReply) => {
-    // W JWT stateless, logout jest po stronie klienta (usunięcie tokenu)
-    // Tutaj możemy dodać blacklistowanie tokenu w Redis w przyszłości
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    await authService.logout(getRefreshTokenFromRequest(request));
     clearAuthCookies(reply);
     return reply.send({ message: 'Wylogowano pomyślnie' });
   });

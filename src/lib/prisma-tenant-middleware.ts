@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 // Models that have tenantId field
 export const TENANT_MODELS = new Set([
   'User',
+  'AuthSession',
   'Shop',
   'PersonalizationTemplate',
   'EmailSettings',

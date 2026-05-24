@@ -31,6 +31,7 @@ model Tenant {
 
   // Relations
   users                 User[]
+  authSessions          AuthSession[]
   shops                 Shop[]
   templates             PersonalizationTemplate[]
   emailSettings         EmailSettings[]
@@ -538,12 +539,35 @@ model User {
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  authSessions AuthSession[]
 
   @@index([tenantId])
   @@index([email])
   @@index([role])
   @@map("users")
+}
+
+model AuthSession {
+  id               String    @id
+  userId           String    @map("user_id")
+  tenantId         String    @map("tenant_id")
+  refreshTokenHash String    @unique @map("refresh_token_hash")
+  userAgent        String?   @map("user_agent") @db.Text
+  ipAddress        String?   @map("ip_address")
+  revokedAt        DateTime? @map("revoked_at")
+  expiresAt        DateTime  @map("expires_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tenantId])
+  @@index([expiresAt])
+  @@index([revokedAt])
+  @@map("auth_sessions")
 }
 
 // ============================================

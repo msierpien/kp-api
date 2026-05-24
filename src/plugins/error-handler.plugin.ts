@@ -1,4 +1,5 @@
 import { FastifyInstance, FastifyError, FastifyRequest, FastifyReply } from 'fastify';
+import { isAppError } from '../lib/errors';
 
 /**
  * Standardowy format odpowiedzi błędu
@@ -7,7 +8,28 @@ export interface ErrorResponse {
   error: string;
   message: string;
   statusCode: number;
-  details?: any;
+  details?: unknown;
+}
+
+function statusCodeFromError(error: FastifyError | Error) {
+  if (isAppError(error)) return error.statusCode;
+  if ('statusCode' in error && typeof error.statusCode === 'number') return error.statusCode;
+  return 500;
+}
+
+export function toErrorResponse(error: FastifyError | Error): ErrorResponse {
+  const statusCode = statusCodeFromError(error);
+  const response: ErrorResponse = {
+    error: isAppError(error) ? error.error : getErrorName(statusCode),
+    message: getErrorMessage(error, statusCode),
+    statusCode,
+  };
+
+  if (isAppError(error) && error.details !== undefined) {
+    response.details = error.details;
+  }
+
+  return response;
 }
 
 /**
@@ -25,22 +47,15 @@ export async function errorHandlerPlugin(fastify: FastifyInstance) {
         method: request.method,
       });
 
-      // Określ status code
-      const statusCode = error.statusCode || 500;
-
       // Format odpowiedzi
-      const response: ErrorResponse = {
-        error: getErrorName(statusCode),
-        message: getErrorMessage(error, statusCode),
-        statusCode,
-      };
+      const response = toErrorResponse(error);
 
       // Dodaj szczegóły w dev mode
       if (process.env.NODE_ENV === 'development' && error.validation) {
         response.details = error.validation;
       }
 
-      return reply.status(statusCode).send(response);
+      return reply.status(response.statusCode).send(response);
     }
   );
 
@@ -77,7 +92,7 @@ function getErrorName(statusCode: number): string {
 /**
  * Generuje przyjazną wiadomość błędu
  */
-function getErrorMessage(error: FastifyError, statusCode: number): string {
+function getErrorMessage(error: FastifyError | Error, statusCode: number): string {
   // Użyj message z błędu jeśli jest
   if (error.message) {
     return error.message;

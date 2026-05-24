@@ -1,5 +1,5 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import * as warehouseService from '../../../services/admin/warehouse.service';
+import * as warehouseProductService from '../../../services/admin/warehouse-products.service';
 import * as barcodeService from '../../../services/admin/warehouse-barcodes.service';
 import * as diagnosticsService from '../../../services/admin/warehouse-diagnostics.service';
 import * as sourceMappingService from '../../../services/admin/warehouse-product-source-mapping.service';
@@ -34,9 +34,9 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
         },
       },
     },
-  }, async (request: FastifyRequest<{ Querystring: warehouseService.ProductsQuery }>, reply: FastifyReply) => {
+  }, async (request: FastifyRequest<{ Querystring: warehouseProductService.ProductsQuery }>, reply: FastifyReply) => {
     try {
-      const result = await warehouseService.getProducts(request.query);
+      const result = await warehouseProductService.getProducts(request.query);
       return reply.send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Nie udało się pobrać produktów';
@@ -67,9 +67,9 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
         },
       },
     },
-  }, async (request: FastifyRequest<{ Body: warehouseService.CreateProductInput }>, reply: FastifyReply) => {
+  }, async (request: FastifyRequest<{ Body: warehouseProductService.CreateProductInput }>, reply: FastifyReply) => {
     try {
-      const product = await warehouseService.createProduct(request.body);
+      const product = await warehouseProductService.createProduct(request.body);
       return reply.status(201).send(product);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd tworzenia produktu';
@@ -98,9 +98,9 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
         },
       },
     },
-  }, async (request: FastifyRequest<{ Body: warehouseService.BulkUpdateProductsInput }>, reply: FastifyReply) => {
+  }, async (request: FastifyRequest<{ Body: warehouseProductService.BulkUpdateProductsInput }>, reply: FastifyReply) => {
     try {
-      const result = await warehouseService.bulkUpdateProducts(request.body);
+      const result = await warehouseProductService.bulkUpdateProducts(request.body);
       return reply.send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd masowej aktualizacji produktów';
@@ -126,9 +126,9 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
         },
       },
     },
-  }, async (request: FastifyRequest<{ Body: warehouseService.BulkDeleteProductsInput }>, reply: FastifyReply) => {
+  }, async (request: FastifyRequest<{ Body: warehouseProductService.BulkDeleteProductsInput }>, reply: FastifyReply) => {
     try {
-      const result = await warehouseService.bulkDeleteProducts(request.body);
+      const result = await warehouseProductService.bulkDeleteProducts(request.body);
       return reply.send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd masowego usuwania produktów';
@@ -357,7 +357,7 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
     schema: { tags: ['warehouse'], summary: 'Szczegóły produktu' },
   }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
     try {
-      const product = await warehouseService.getProductById(request.params.id);
+      const product = await warehouseProductService.getProductById(request.params.id);
       if (!product) return reply.status(404).send({ error: 'Not Found', message: 'Produkt nie znaleziony' });
       return reply.send(product);
     } catch (error) {
@@ -402,7 +402,7 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
     schema: { tags: ['warehouse'], summary: 'Lista kodów EAN produktu' },
   }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
     try {
-      const product = await warehouseService.getProductById(request.params.id);
+      const product = await warehouseProductService.getProductById(request.params.id);
       if (!product) return reply.status(404).send({ error: 'Not Found', message: 'Produkt nie znaleziony' });
       const barcodes = await barcodeService.getProductBarcodes(request.params.id);
       return reply.send(barcodes);
@@ -459,9 +459,9 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
         },
       },
     },
-  }, async (request: FastifyRequest<{ Params: { id: string }; Body: warehouseService.UpdateProductInput }>, reply: FastifyReply) => {
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: warehouseProductService.UpdateProductInput }>, reply: FastifyReply) => {
     try {
-      const product = await warehouseService.updateProduct(request.params.id, request.body);
+      const product = await warehouseProductService.updateProduct(request.params.id, request.body);
       return reply.send(product);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd edycji produktu';
@@ -484,10 +484,10 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
     },
   }, async (request: FastifyRequest<{
     Params: { id: string };
-    Body: Pick<warehouseService.UpdateProductInput, 'purchasePrice' | 'retailPrice'>;
+    Body: Pick<warehouseProductService.UpdateProductInput, 'purchasePrice' | 'retailPrice'>;
   }>, reply: FastifyReply) => {
     try {
-      const product = await warehouseService.updateProduct(request.params.id, request.body);
+      const product = await warehouseProductService.updateProduct(request.params.id, request.body);
       return reply.send(product);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd aktualizacji cen';
@@ -643,7 +643,7 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
     schema: { tags: ['warehouse'], summary: 'Usuń produkt magazynowy' },
   }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
     try {
-      await warehouseService.deleteProduct(request.params.id);
+      await warehouseProductService.deleteProduct(request.params.id);
       return reply.status(204).send();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd usuwania produktu';

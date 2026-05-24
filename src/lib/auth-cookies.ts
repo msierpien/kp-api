@@ -45,31 +45,31 @@ export function getRefreshTokenFromRequest(request: FastifyRequest) {
   return getCookieValue(request, REFRESH_TOKEN_COOKIE);
 }
 
-function cookieOptions(maxAgeSeconds: number) {
+export function buildAuthCookieOptions(maxAgeSeconds: number, isProduction = config.app.isProduction) {
   const parts = [
     'Path=/',
     'HttpOnly',
     `Max-Age=${maxAgeSeconds}`,
-    'SameSite=Lax',
+    isProduction ? 'SameSite=None' : 'SameSite=Lax',
   ];
 
-  if (config.app.isProduction) {
+  if (isProduction) {
     parts.push('Secure');
   }
 
   return parts.join('; ');
 }
 
-function expiredCookie(name: string) {
+export function buildExpiredAuthCookie(name: string, isProduction = config.app.isProduction) {
   const parts = [
     `${name}=`,
     'Path=/',
     'HttpOnly',
     'Max-Age=0',
-    'SameSite=Lax',
+    isProduction ? 'SameSite=None' : 'SameSite=Lax',
   ];
 
-  if (config.app.isProduction) {
+  if (isProduction) {
     parts.push('Secure');
   }
 
@@ -78,12 +78,12 @@ function expiredCookie(name: string) {
 
 export function setAuthCookies(reply: FastifyReply, tokens: { accessToken: string; refreshToken?: string }) {
   const cookies = [
-    `${ACCESS_TOKEN_COOKIE}=${encodeURIComponent(tokens.accessToken)}; ${cookieOptions(ACCESS_TOKEN_MAX_AGE_SECONDS)}`,
+    `${ACCESS_TOKEN_COOKIE}=${encodeURIComponent(tokens.accessToken)}; ${buildAuthCookieOptions(ACCESS_TOKEN_MAX_AGE_SECONDS)}`,
   ];
 
   if (tokens.refreshToken) {
     cookies.push(
-      `${REFRESH_TOKEN_COOKIE}=${encodeURIComponent(tokens.refreshToken)}; ${cookieOptions(REFRESH_TOKEN_MAX_AGE_SECONDS)}`
+      `${REFRESH_TOKEN_COOKIE}=${encodeURIComponent(tokens.refreshToken)}; ${buildAuthCookieOptions(REFRESH_TOKEN_MAX_AGE_SECONDS)}`
     );
   }
 
@@ -92,7 +92,7 @@ export function setAuthCookies(reply: FastifyReply, tokens: { accessToken: strin
 
 export function clearAuthCookies(reply: FastifyReply) {
   reply.header('Set-Cookie', [
-    expiredCookie(ACCESS_TOKEN_COOKIE),
-    expiredCookie(REFRESH_TOKEN_COOKIE),
+    buildExpiredAuthCookie(ACCESS_TOKEN_COOKIE),
+    buildExpiredAuthCookie(REFRESH_TOKEN_COOKIE),
   ]);
 }

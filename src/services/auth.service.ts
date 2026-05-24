@@ -31,7 +31,7 @@ function refreshTokenExpiresAt() {
 export class AuthService {
   private jwt: {
     sign: (payload: object, options?: { expiresIn: string }) => string;
-    verify: <T>(token: string) => T;
+    verify: <T extends object | string>(token: string) => T;
   };
   private db: AuthDb;
 

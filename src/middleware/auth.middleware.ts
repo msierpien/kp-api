@@ -18,7 +18,7 @@ export function authMiddleware(fastify: FastifyInstance) {
 
       const decoded = (await fastify.jwt.verify(token)) as JwtPayload;
 
-      (request as any).user = decoded;
+      request.user = decoded;
     } catch (error) {
       return reply.status(401).send({
         error: 'Unauthorized',
@@ -30,7 +30,7 @@ export function authMiddleware(fastify: FastifyInstance) {
 
 export function requireRole(...roles: UserRole[]) {
   return async function checkRole(request: FastifyRequest, reply: FastifyReply) {
-    const user = (request as any).user as JwtPayload | undefined;
+    const user = request.user;
 
     if (!user) {
       return reply.status(401).send({
@@ -50,7 +50,7 @@ export function requireRole(...roles: UserRole[]) {
 
 export function requireAdminPathAccess() {
   return async function checkAdminPathAccess(request: FastifyRequest, reply: FastifyReply) {
-    const user = (request as any).user as JwtPayload | undefined;
+    const user = request.user;
 
     if (!user) {
       return reply.status(401).send({
@@ -70,7 +70,7 @@ export function requireAdminPathAccess() {
 
 export function requireTenantFeatureAccess() {
   return async function checkTenantFeatureAccess(request: FastifyRequest, reply: FastifyReply) {
-    const user = (request as any).user as JwtPayload | undefined;
+    const user = request.user;
     if (!user) {
       return reply.status(401).send({
         error: 'Unauthorized',

@@ -9,7 +9,7 @@ import { clearAuthCookies, getRefreshTokenFromRequest, setAuthCookies } from '..
 export async function authRoutes(fastify: FastifyInstance) {
   const authService = new AuthService({
     sign: (payload, options) => fastify.jwt.sign(payload, options),
-    verify: (token: string) => fastify.jwt.verify(token) as any,
+    verify: <T extends object | string>(token: string) => fastify.jwt.verify<T>(token),
   });
 
   function authRequestMeta(request: FastifyRequest) {
@@ -211,7 +211,14 @@ export async function authRoutes(fastify: FastifyInstance) {
       preHandler: [authMiddleware(fastify)],
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const jwtUser = request.user as any;
+      const jwtUser = request.user;
+      if (!jwtUser) {
+        return reply.status(401).send({
+          error: 'Unauthorized',
+          message: 'Brak autoryzacji',
+        });
+      }
+
       const user = await prisma.user.findUnique({
         where: { id: jwtUser.userId },
         select: {

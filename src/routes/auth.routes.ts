@@ -5,6 +5,7 @@ import prisma from '../lib/prisma';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { normalizeFeatures } from '../lib/features';
 import { clearAuthCookies, getRefreshTokenFromRequest, setAuthCookies } from '../lib/auth-cookies';
+import { RATE_LIMITS } from '../lib/rate-limits';
 
 export async function authRoutes(fastify: FastifyInstance) {
   const authService = new AuthService({
@@ -24,6 +25,9 @@ export async function authRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: LoginInput }>(
     '/login',
     {
+      config: {
+        rateLimit: RATE_LIMITS.authLogin,
+      },
       schema: {
         tags: ['auth'],
         summary: 'Logowanie',
@@ -98,6 +102,9 @@ export async function authRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: RefreshInput }>(
     '/refresh',
     {
+      config: {
+        rateLimit: RATE_LIMITS.authRefresh,
+      },
       schema: {
         tags: ['auth'],
         summary: 'Odśwież token dostępu',

@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { listFonts, uploadFont, deleteFont } from '../../services/admin/fonts.service';
 import { ALLOWED_FONT_EXTENSIONS, MAX_FONT_UPLOAD_BYTES, assertAllowedFontUpload } from '../../lib/upload-validation';
+import { RATE_LIMITS } from '../../lib/rate-limits';
 
 export async function fontsRoutes(fastify: FastifyInstance) {
   // GET /admin/fonts
@@ -17,6 +18,9 @@ export async function fontsRoutes(fastify: FastifyInstance) {
 
   // POST /admin/fonts
   fastify.post('/', {
+    config: {
+      rateLimit: RATE_LIMITS.adminUpload,
+    },
     schema: {
       tags: ['fonts'],
       summary: 'Wgraj czcionkę (TTF/OTF/WOFF/WOFF2)',

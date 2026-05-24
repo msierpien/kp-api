@@ -33,6 +33,7 @@ import {
   MAX_TEMPLATE_ASSET_BYTES,
   assertAllowedImageUpload,
 } from '../../lib/upload-validation';
+import { RATE_LIMITS } from '../../lib/rate-limits';
 
 const templateItemResponseSchema = {
   type: 'object',
@@ -369,6 +370,9 @@ export async function templatesRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: TemplateIdParams }>(
     '/:id/assets',
     {
+      config: {
+        rateLimit: RATE_LIMITS.adminUpload,
+      },
       schema: {
         tags: ['templates'],
         summary: 'Wgraj zasób graficzny do szablonu (PNG/JPG/WebP)',

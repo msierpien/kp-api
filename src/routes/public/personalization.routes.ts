@@ -7,6 +7,7 @@ import { addFinalPdfJob } from '../../services/queue/render.queue';
 import { listFonts } from '../../services/admin/fonts.service';
 import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
 import { MAX_PREVIEW_UPLOAD_BYTES, assertAllowedPngUpload, isUploadValidationError } from '../../lib/upload-validation';
+import { RATE_LIMITS } from '../../lib/rate-limits';
 
 interface PersonalizationParams {
   token: string;
@@ -398,6 +399,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: PersonalizationParams; Body: SaveDesignBody }>(
     '/:token/preview',
     {
+      config: {
+        rateLimit: RATE_LIMITS.personalizationPreview,
+      },
       schema: {
         tags: ['personalization'],
         summary: 'Waliduj odpowiedzi i pobierz URL podglądu',
@@ -808,6 +812,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: PersonalizationParams }>(
     '/:token/upload-preview',
     {
+      config: {
+        rateLimit: RATE_LIMITS.publicPreviewUpload,
+      },
       schema: {
         tags: ['personalization'],
         summary: 'Wgraj podgląd PNG wygenerowany przez frontend',

@@ -6,6 +6,7 @@ import {
   WebhookRequestError,
   type PrestaShopOrderWebhookPayload,
 } from '../../services/webhooks/prestashop-order-webhook.service';
+import { RATE_LIMITS } from '../../lib/rate-limits';
 
 const webhookParamsSchema = z.object({
   shopId: z.string().min(1),
@@ -33,6 +34,9 @@ export async function prestashopWebhooksRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: { shopId: string }; Body: PrestaShopOrderWebhookPayload }>(
     '/:shopId/orders',
     {
+      config: {
+        rateLimit: RATE_LIMITS.prestashopWebhook,
+      },
       schema: {
         tags: ['webhooks'],
         summary: 'Webhook zamówień PrestaShop',

@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { listFonts, uploadFont, deleteFont } from '../../services/admin/fonts.service';
-import { ALLOWED_FONT_EXTENSIONS, assertAllowedFontUpload } from '../../lib/upload-validation';
+import { ALLOWED_FONT_EXTENSIONS, MAX_FONT_UPLOAD_BYTES, assertAllowedFontUpload } from '../../lib/upload-validation';
 
 export async function fontsRoutes(fastify: FastifyInstance) {
   // GET /admin/fonts
@@ -37,7 +37,7 @@ export async function fontsRoutes(fastify: FastifyInstance) {
 
     try {
       const buffer = await data.toBuffer();
-      assertAllowedFontUpload(buffer, ext);
+      assertAllowedFontUpload(buffer, ext, { maxBytes: MAX_FONT_UPLOAD_BYTES });
       const font = await uploadFont(buffer, data.filename);
       return reply.status(201).send({ font });
     } catch (error: any) {

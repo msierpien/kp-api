@@ -28,7 +28,11 @@ import {
   uploadTemplateAsset,
   deleteTemplateAsset,
 } from '../../services/admin/templates-layout.service';
-import { ALLOWED_IMAGE_MIME_TYPES, assertAllowedImageUpload } from '../../lib/upload-validation';
+import {
+  ALLOWED_IMAGE_MIME_TYPES,
+  MAX_TEMPLATE_ASSET_BYTES,
+  assertAllowedImageUpload,
+} from '../../lib/upload-validation';
 
 const templateItemResponseSchema = {
   type: 'object',
@@ -367,7 +371,7 @@ export async function templatesRoutes(fastify: FastifyInstance) {
     {
       schema: {
         tags: ['templates'],
-        summary: 'Wgraj zasób graficzny do szablonu (PNG/JPG/SVG/WebP)',
+        summary: 'Wgraj zasób graficzny do szablonu (PNG/JPG/WebP)',
         description: 'Przyjmuje multipart/form-data z plikiem obrazu i opcjonalnym polem assetType',
         consumes: ['multipart/form-data'],
         params: { type: 'object', properties: { id: { type: 'string' } } },
@@ -394,10 +398,10 @@ export async function templatesRoutes(fastify: FastifyInstance) {
 
       try {
         const buffer = await data.toBuffer();
-        assertAllowedImageUpload(buffer, data.mimetype);
+        assertAllowedImageUpload(buffer, data.mimetype, { maxBytes: MAX_TEMPLATE_ASSET_BYTES });
 
         // Odczytaj typ assetu z pola formularza (domyślnie BACKGROUND)
-        const assetType = (data.fields?.assetType as any)?.value || 'BACKGROUND';
+        const assetType = String((data.fields?.assetType as any)?.value || 'BACKGROUND').toUpperCase();
 
         const asset = await uploadTemplateAsset(
           paramsParsed.data.id,

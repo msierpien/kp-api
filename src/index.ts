@@ -194,6 +194,8 @@ server.register(fastifyStatic, {
     res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
     // Pozwól na cross-origin embedding (dla <img>, <video> etc.)
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
     // Cache dla obrazów (1 godzina)
     res.setHeader('Cache-Control', 'public, max-age=3600');
   },

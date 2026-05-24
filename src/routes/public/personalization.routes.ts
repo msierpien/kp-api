@@ -6,7 +6,7 @@ import { saveFile, fileExists, buildStorageUrl } from '../../services/storage/lo
 import { addFinalPdfJob } from '../../services/queue/render.queue';
 import { listFonts } from '../../services/admin/fonts.service';
 import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
-import { assertAllowedPngUpload } from '../../lib/upload-validation';
+import { MAX_PREVIEW_UPLOAD_BYTES, assertAllowedPngUpload, isUploadValidationError } from '../../lib/upload-validation';
 
 interface PersonalizationParams {
   token: string;
@@ -898,7 +898,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
 
         // Konwertuj stream na buffer
         const buffer = await data.toBuffer();
-        assertAllowedPngUpload(buffer, data.mimetype);
+        assertAllowedPngUpload(buffer, data.mimetype, { maxBytes: MAX_PREVIEW_UPLOAD_BYTES });
 
         // Zapisz plik
         const savedFile = await saveFile(buffer, {
@@ -951,6 +951,13 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         });
       } catch (error) {
         fastify.log.error({ err: error }, '[UploadPreview] Failed');
+        if (isUploadValidationError(error)) {
+          return reply.status(400).send({
+            error: 'Upload Failed',
+            message: error.message,
+          });
+        }
+
         return reply.status(500).send({
           error: 'Internal Server Error',
           message: 'Nie udało się zapisać podglądu',

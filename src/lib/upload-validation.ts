@@ -12,14 +12,57 @@ export type AllowedFontExtension = 'ttf' | 'otf' | 'woff' | 'woff2';
 
 export const ALLOWED_IMAGE_MIME_TYPES: AllowedImageMimeType[] = ['image/png', 'image/jpeg', 'image/webp'];
 export const ALLOWED_FONT_EXTENSIONS: AllowedFontExtension[] = ['ttf', 'otf', 'woff', 'woff2'];
+export const MAX_TEMPLATE_ASSET_BYTES = 8 * 1024 * 1024;
+export const MAX_PREVIEW_UPLOAD_BYTES = 5 * 1024 * 1024;
+export const MAX_FONT_UPLOAD_BYTES = 2 * 1024 * 1024;
+
+type UploadValidationOptions = {
+  maxBytes?: number;
+};
+
+export class UploadValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UploadValidationError';
+  }
+}
+
+export function isUploadValidationError(error: unknown): error is Error {
+  return error instanceof UploadValidationError ||
+    (typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: string }).code === 'FST_REQ_FILE_TOO_LARGE');
+}
 
 function startsWith(buffer: Buffer, signature: Buffer) {
   return buffer.length >= signature.length && buffer.subarray(0, signature.length).equals(signature);
 }
 
-export function assertAllowedImageUpload(buffer: Buffer, mimetype: string) {
+function assertUploadSize(buffer: Buffer, maxBytes: number | undefined, label: string) {
+  if (maxBytes === undefined) return;
+  if (buffer.length > maxBytes) {
+    const maxMb = (maxBytes / 1024 / 1024).toFixed(1).replace(/\.0$/, '');
+    throw new UploadValidationError(`${label} jest za duży. Maksymalny rozmiar: ${maxMb} MB`);
+  }
+}
+
+export function imageExtensionForMimeType(mimetype: string): 'png' | 'jpg' | 'webp' {
+  if (mimetype === 'image/png') return 'png';
+  if (mimetype === 'image/jpeg') return 'jpg';
+  if (mimetype === 'image/webp') return 'webp';
+  throw new UploadValidationError(`Niedozwolony typ pliku: ${mimetype}. Dozwolone: PNG, JPG, WebP`);
+}
+
+export function assertAllowedImageUpload(
+  buffer: Buffer,
+  mimetype: string,
+  options: UploadValidationOptions = {}
+) {
+  assertUploadSize(buffer, options.maxBytes, 'Plik graficzny');
+
   if (!ALLOWED_IMAGE_MIME_TYPES.includes(mimetype as AllowedImageMimeType)) {
-    throw new Error(`Niedozwolony typ pliku: ${mimetype}. Dozwolone: PNG, JPG, WebP`);
+    throw new UploadValidationError(`Niedozwolony typ pliku: ${mimetype}. Dozwolone: PNG, JPG, WebP`);
   }
 
   const isPng = mimetype === 'image/png' && startsWith(buffer, PNG_SIGNATURE);
@@ -30,20 +73,32 @@ export function assertAllowedImageUpload(buffer: Buffer, mimetype: string) {
     buffer.subarray(8, 12).equals(WEBP_FORMAT_SIGNATURE);
 
   if (!isPng && !isJpeg && !isWebp) {
-    throw new Error('Sygnatura pliku nie zgadza się z deklarowanym typem MIME');
+    throw new UploadValidationError('Sygnatura pliku nie zgadza się z deklarowanym typem MIME');
   }
 }
 
-export function assertAllowedPngUpload(buffer: Buffer, mimetype: string) {
+export function assertAllowedPngUpload(
+  buffer: Buffer,
+  mimetype: string,
+  options: UploadValidationOptions = {}
+) {
+  assertUploadSize(buffer, options.maxBytes, 'Podgląd PNG');
+
   if (mimetype !== 'image/png' || !startsWith(buffer, PNG_SIGNATURE)) {
-    throw new Error('Plik musi być poprawnym obrazem PNG');
+    throw new UploadValidationError('Plik musi być poprawnym obrazem PNG');
   }
 }
 
-export function assertAllowedFontUpload(buffer: Buffer, extension: string) {
+export function assertAllowedFontUpload(
+  buffer: Buffer,
+  extension: string,
+  options: UploadValidationOptions = {}
+) {
+  assertUploadSize(buffer, options.maxBytes, 'Plik czcionki');
+
   const normalizedExtension = extension.toLowerCase();
   if (!ALLOWED_FONT_EXTENSIONS.includes(normalizedExtension as AllowedFontExtension)) {
-    throw new Error(`Niedozwolony format: .${extension}. Dozwolone: TTF, OTF, WOFF, WOFF2`);
+    throw new UploadValidationError(`Niedozwolony format: .${extension}. Dozwolone: TTF, OTF, WOFF, WOFF2`);
   }
 
   const isValid =
@@ -53,6 +108,6 @@ export function assertAllowedFontUpload(buffer: Buffer, extension: string) {
     (normalizedExtension === 'woff2' && startsWith(buffer, WOFF2_SIGNATURE));
 
   if (!isValid) {
-    throw new Error('Sygnatura pliku czcionki nie zgadza się z rozszerzeniem');
+    throw new UploadValidationError('Sygnatura pliku czcionki nie zgadza się z rozszerzeniem');
   }
 }

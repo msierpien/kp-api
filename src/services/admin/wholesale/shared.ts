@@ -1,6 +1,7 @@
 /// <reference lib="dom" />
 import { parse } from 'csv-parse/sync';
 import { Prisma } from '@prisma/client';
+import prisma from '../../../lib/prisma';
 import { getTenantId } from '../../../lib/tenant-context';
 
 export type WholesalePreset = 'GODAN' | 'PARTYDECO' | 'CUSTOM';
@@ -57,6 +58,14 @@ export function requireTenantId() {
   const tenantId = getTenantId();
   if (!tenantId) throw new Error('Brak kontekstu tenanta');
   return tenantId;
+}
+
+export async function assertProviderBelongsToTenant(providerId: string, tenantId: string) {
+  const provider = await prisma.wholesaleProvider.findFirst({
+    where: { id: providerId, tenantId },
+    select: { id: true },
+  });
+  if (!provider) throw new Error('Provider hurtowni nie znaleziony');
 }
 
 export function buildProviderConfig(input: {

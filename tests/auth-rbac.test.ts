@@ -163,14 +163,14 @@ describe('auth sessions', () => {
 
 describe('admin RBAC policy', () => {
   it('allows SUPER_ADMIN to access all admin paths', async () => {
-    const { canAccessAdminPath } = await import('../src/middleware/auth.middleware');
+    const { canAccessAdminPath } = await import('../src/lib/authz/admin-policy');
 
     assert.equal(canAccessAdminPath('SUPER_ADMIN', 'DELETE', '/admin/storage/cleanup'), true);
     assert.equal(canAccessAdminPath('SUPER_ADMIN', 'POST', '/admin/tenants'), true);
   });
 
   it('blocks ADMIN from system administration paths', async () => {
-    const { canAccessAdminPath } = await import('../src/middleware/auth.middleware');
+    const { canAccessAdminPath } = await import('../src/lib/authz/admin-policy');
 
     assert.equal(canAccessAdminPath('ADMIN', 'GET', '/admin/templates'), true);
     assert.equal(canAccessAdminPath('ADMIN', 'GET', '/admin/tenants'), false);
@@ -179,7 +179,7 @@ describe('admin RBAC policy', () => {
   });
 
   it('limits OPERATOR to operational read/write paths', async () => {
-    const { canAccessAdminPath } = await import('../src/middleware/auth.middleware');
+    const { canAccessAdminPath } = await import('../src/lib/authz/admin-policy');
 
     assert.equal(canAccessAdminPath('OPERATOR', 'GET', '/admin/stats'), true);
     assert.equal(canAccessAdminPath('OPERATOR', 'DELETE', '/admin/orders/1'), false);

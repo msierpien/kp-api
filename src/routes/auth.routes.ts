@@ -32,8 +32,6 @@ export async function authRoutes(fastify: FastifyInstance) {
           200: {
             type: 'object',
             properties: {
-              accessToken: { type: 'string' },
-              refreshToken: { type: 'string' },
               user: {
                 type: 'object',
                 properties: {
@@ -98,7 +96,6 @@ export async function authRoutes(fastify: FastifyInstance) {
         security: [],
         body: {
           type: 'object',
-          required: ['refreshToken'],
           properties: {
             refreshToken: { type: 'string' },
           },
@@ -107,7 +104,7 @@ export async function authRoutes(fastify: FastifyInstance) {
           200: {
             type: 'object',
             properties: {
-              accessToken: { type: 'string' },
+              success: { type: 'boolean' },
             },
           },
           401: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
@@ -116,7 +113,7 @@ export async function authRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest<{ Body: RefreshInput }>, reply: FastifyReply) => {
       try {
-        const parsed = refreshSchema.safeParse(request.body);
+        const parsed = refreshSchema.safeParse(request.body ?? {});
 
         if (!parsed.success) {
           return reply.status(400).send({

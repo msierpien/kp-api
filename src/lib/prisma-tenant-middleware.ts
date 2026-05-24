@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 
 // Models that have tenantId field
-const TENANT_MODELS = new Set([
+export const TENANT_MODELS = new Set([
   'User',
   'Shop',
   'PersonalizationTemplate',
@@ -22,6 +22,39 @@ const TENANT_MODELS = new Set([
 ]);
 
 const DEBUG_TENANT_CONTEXT = process.env.DEBUG_TENANT_CONTEXT === 'true';
+
+type TenantScopedData = Record<string, unknown>;
+
+function addTenantWhere(args: Prisma.MiddlewareParams['args'], tenantId: string) {
+  args.where = args.where || {};
+  args.where.tenantId = tenantId;
+}
+
+function addTenantToCreateData(data: unknown, tenantId: string): unknown {
+  if (Array.isArray(data)) {
+    return data.map((item) => addTenantToCreateData(item, tenantId));
+  }
+
+  if (data && typeof data === 'object') {
+    return {
+      ...(data as TenantScopedData),
+      tenantId,
+    };
+  }
+
+  return data;
+}
+
+function stripTenantFromUpdateData(data: unknown): unknown {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return data;
+  }
+
+  const sanitized = { ...(data as TenantScopedData) };
+  delete sanitized.tenantId;
+  delete sanitized.tenant;
+  return sanitized;
+}
 
 // Models that inherit tenantId through relations (read-only access)
 // Currently not used but kept for future reference
@@ -78,50 +111,40 @@ export function createTenantMiddleware(getTenantId: () => string | null) {
         params.action === 'groupBy'
       ) {
         params.args = params.args || {};
-        params.args.where = params.args.where || {};
-        
-        // Add tenantId to where clause
-        params.args.where.tenantId = tenantId;
+        addTenantWhere(params.args, tenantId);
       }
 
       // UPDATE operations: ensure tenantId filter
       if (params.action === 'update' || params.action === 'updateMany') {
         params.args = params.args || {};
-        params.args.where = params.args.where || {};
-        params.args.where.tenantId = tenantId;
+        addTenantWhere(params.args, tenantId);
+        params.args.data = stripTenantFromUpdateData(params.args.data);
       }
 
       // DELETE operations: ensure tenantId filter
       if (params.action === 'delete' || params.action === 'deleteMany') {
         params.args = params.args || {};
-        params.args.where = params.args.where || {};
-        params.args.where.tenantId = tenantId;
+        addTenantWhere(params.args, tenantId);
       }
 
       // CREATE operations: automatically add tenantId
       if (params.action === 'create') {
         params.args = params.args || {};
-        params.args.data = params.args.data || {};
-        params.args.data.tenantId = tenantId;
+        params.args.data = addTenantToCreateData(params.args.data || {}, tenantId);
       }
 
       // CREATE MANY operations: add tenantId to all records
       if (params.action === 'createMany') {
         params.args = params.args || {};
-        if (Array.isArray(params.args.data)) {
-          params.args.data = params.args.data.map((item: any) => ({
-            ...item,
-            tenantId,
-          }));
-        }
+        params.args.data = addTenantToCreateData(params.args.data || [], tenantId);
       }
 
       if (params.action === 'upsert') {
         params.args = params.args || {};
-        params.args.where = params.args.where || {};
-        params.args.where.tenantId = tenantId;
+        addTenantWhere(params.args, tenantId);
         params.args.create = params.args.create || {};
-        params.args.create.tenantId = tenantId;
+        params.args.create = addTenantToCreateData(params.args.create, tenantId);
+        params.args.update = stripTenantFromUpdateData(params.args.update);
       }
     }
 

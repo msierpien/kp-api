@@ -20,12 +20,14 @@ import { fontsRoutes } from './fonts.routes';
 import { warehouseCatalogsRoutes } from './warehouse-catalogs.routes';
 import { warehouseRoutes } from './warehouse.routes';
 import { wholesaleRoutes } from './wholesale.routes';
+import { writeAdminAuditLog } from '../../services/audit/audit-log.service';
 
 export async function adminRoutes(fastify: FastifyInstance) {
   // Apply auth middleware to all admin routes
   fastify.addHook('preHandler', authMiddleware(fastify));
   fastify.addHook('preHandler', requireAdminPathAccess());
   fastify.addHook('preHandler', requireTenantFeatureAccess());
+  fastify.addHook('onResponse', writeAdminAuditLog);
 
   // Register admin sub-routes
   fastify.register(statsRoutes, { prefix: '/stats' });

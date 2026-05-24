@@ -570,6 +570,32 @@ model AuthSession {
   @@map("auth_sessions")
 }
 
+model AuditLog {
+  id             String    @id @default(cuid())
+  actorUserId    String?   @map("actor_user_id")
+  actorEmail     String?   @map("actor_email")
+  actorRole      UserRole? @map("actor_role")
+  actorTenantId  String?   @map("actor_tenant_id")
+  targetTenantId String?   @map("target_tenant_id")
+  action         String
+  resource       String
+  resourceId     String?   @map("resource_id")
+  method         String
+  path           String
+  statusCode     Int       @map("status_code")
+  ipAddress      String?   @map("ip_address")
+  userAgent      String?   @map("user_agent") @db.Text
+  metadataJson   Json?     @map("metadata_json")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@index([actorTenantId, createdAt])
+  @@index([targetTenantId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([resource, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_logs")
+}
+
 // ============================================
 // MODUŁ MAGAZYNOWY
 // ============================================

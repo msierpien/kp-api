@@ -3,7 +3,7 @@ import { PrestaShopClient, type PrestaShopOrderDetails } from '../prestashop/pre
 import { decrypt } from '../../lib/encryption';
 import { emailService } from '../email/email.service';
 import { generateAccessToken } from '../../lib/token';
-import { createWzForOrder, shouldAutoCreateWzForTenant } from '../admin/warehouse.service';
+import { createWzForOrder, shouldAutoCreateWzForTenant } from '../admin/warehouse-documents.service';
 import { reserveOrder } from '../admin/warehouse-reservations.service';
 import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
 

@@ -1,5 +1,5 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import * as warehouseService from '../../../services/admin/warehouse.service';
+import * as warehouseDocumentService from '../../../services/admin/warehouse-documents.service';
 
 export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) {
   // GET /admin/warehouse/documents
@@ -19,9 +19,9 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
         },
       },
     },
-  }, async (request: FastifyRequest<{ Querystring: warehouseService.DocumentsQuery }>, reply: FastifyReply) => {
+  }, async (request: FastifyRequest<{ Querystring: warehouseDocumentService.DocumentsQuery }>, reply: FastifyReply) => {
     try {
-      const result = await warehouseService.getDocuments(request.query);
+      const result = await warehouseDocumentService.getDocuments(request.query);
       return reply.send(result);
     } catch (error) {
       fastify.log.error(error);
@@ -66,9 +66,9 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
         },
       },
     },
-  }, async (request: FastifyRequest<{ Body: warehouseService.CreateDocumentInput }>, reply: FastifyReply) => {
+  }, async (request: FastifyRequest<{ Body: warehouseDocumentService.CreateDocumentInput }>, reply: FastifyReply) => {
     try {
-      const doc = await warehouseService.createDocument(request.body);
+      const doc = await warehouseDocumentService.createDocument(request.body);
       return reply.status(201).send(doc);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd tworzenia dokumentu';
@@ -81,7 +81,7 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
     schema: { tags: ['warehouse'], summary: 'Szczegóły dokumentu' },
   }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
     try {
-      const doc = await warehouseService.getDocumentById(request.params.id);
+      const doc = await warehouseDocumentService.getDocumentById(request.params.id);
       if (!doc) return reply.status(404).send({ error: 'Not Found', message: 'Dokument nie znaleziony' });
       return reply.send(doc);
     } catch (error) {
@@ -123,9 +123,9 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
         },
       },
     },
-  }, async (request: FastifyRequest<{ Params: { id: string }; Body: warehouseService.UpdateDocumentInput }>, reply: FastifyReply) => {
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: warehouseDocumentService.UpdateDocumentInput }>, reply: FastifyReply) => {
     try {
-      const doc = await warehouseService.updateDocument(request.params.id, request.body);
+      const doc = await warehouseDocumentService.updateDocument(request.params.id, request.body);
       return reply.send(doc);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd edycji dokumentu';
@@ -161,10 +161,10 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
     },
   }, async (request: FastifyRequest<{
     Params: { id: string };
-    Body: warehouseService.DocumentItemInput;
+    Body: warehouseDocumentService.DocumentItemInput;
   }>, reply: FastifyReply) => {
     try {
-      const doc = await warehouseService.mergeDocumentItem(request.params.id, request.body);
+      const doc = await warehouseDocumentService.mergeDocumentItem(request.params.id, request.body);
       return reply.send(doc);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd dodawania pozycji dokumentu';
@@ -198,10 +198,10 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
     },
   }, async (request: FastifyRequest<{
     Params: { id: string; itemId: string };
-    Body: warehouseService.UpdateDocumentItemInput;
+    Body: warehouseDocumentService.UpdateDocumentItemInput;
   }>, reply: FastifyReply) => {
     try {
-      const doc = await warehouseService.updateDocumentItem(request.params.id, request.params.itemId, request.body);
+      const doc = await warehouseDocumentService.updateDocumentItem(request.params.id, request.params.itemId, request.body);
       return reply.send(doc);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd edycji pozycji dokumentu';
@@ -225,7 +225,7 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
     },
   }, async (request: FastifyRequest<{ Params: { id: string; itemId: string } }>, reply: FastifyReply) => {
     try {
-      const doc = await warehouseService.deleteDocumentItem(request.params.id, request.params.itemId);
+      const doc = await warehouseDocumentService.deleteDocumentItem(request.params.id, request.params.itemId);
       return reply.send(doc);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd usuwania pozycji dokumentu';
@@ -239,7 +239,7 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
     schema: { tags: ['warehouse'], summary: 'Zatwierdź dokument (DRAFT → CONFIRMED)' },
   }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
     try {
-      const doc = await warehouseService.confirmDocument(request.params.id);
+      const doc = await warehouseDocumentService.confirmDocument(request.params.id);
       return reply.send(doc);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd zatwierdzania dokumentu';
@@ -260,9 +260,9 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
         },
       },
     },
-  }, async (request: FastifyRequest<{ Params: { id: string }; Body: warehouseService.CancelDocumentInput }>, reply: FastifyReply) => {
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: warehouseDocumentService.CancelDocumentInput }>, reply: FastifyReply) => {
     try {
-      const doc = await warehouseService.cancelDocument(request.params.id, request.body ?? {});
+      const doc = await warehouseDocumentService.cancelDocument(request.params.id, request.body ?? {});
       return reply.send(doc);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd anulowania dokumentu';
@@ -276,7 +276,7 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
     schema: { tags: ['warehouse'], summary: 'Usuń dokument (tylko DRAFT)' },
   }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
     try {
-      await warehouseService.deleteDocument(request.params.id);
+      await warehouseDocumentService.deleteDocument(request.params.id);
       return reply.status(204).send();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd usuwania dokumentu';

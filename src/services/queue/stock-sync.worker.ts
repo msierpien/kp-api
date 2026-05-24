@@ -109,7 +109,7 @@ async function processStockSyncBatch(data: StockSyncBatchJobData) {
   const useBulk = client instanceof PrestaShopStockClient &&
     client.hasBulkModule &&
     data.items.every((item) => isPositiveIntegerString(item.externalProductId));
-  let syncMode: 'BULK' | 'WEBSERVICE' = useBulk ? 'BULK' : 'WEBSERVICE';
+  const syncMode: 'BULK' | 'WEBSERVICE' = useBulk ? 'BULK' : 'WEBSERVICE';
 
   await prisma.stockSyncLog.updateMany({
     where: { id: { in: logIds } },

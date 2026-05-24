@@ -4,9 +4,11 @@ import type { TemplateLayoutInput } from '../../schemas/admin.schema';
 import type { TemplateLayoutJson, TemplateAssetItem } from '../../types/template-layout';
 import fs from 'fs/promises';
 import path from 'path';
+import { imageExtensionForMimeType } from '../../lib/upload-validation';
 
 const STORAGE_DIR = path.join(process.cwd(), 'storage', 'templates');
 const MAX_ASSETS_PER_TEMPLATE = 50;
+const ALLOWED_TEMPLATE_ASSET_TYPES = new Set(['BACKGROUND', 'DECORATION', 'LOGO', 'CUT_LINE_SVG']);
 
 // ============================================
 // Layout CRUD
@@ -81,6 +83,10 @@ export async function uploadTemplateAsset(
   assetType: string,
   metadata?: { width?: number; height?: number; originalName?: string }
 ): Promise<TemplateAssetItem> {
+  if (!ALLOWED_TEMPLATE_ASSET_TYPES.has(assetType)) {
+    throw new Error('Niedozwolony typ assetu');
+  }
+
   const currentCount = await prisma.templateAsset.count({ where: { templateId } });
   if (currentCount >= MAX_ASSETS_PER_TEMPLATE) {
     throw new Error(`Osiagnieto limit ${MAX_ASSETS_PER_TEMPLATE} plików dla tego szablonu`);
@@ -96,22 +102,26 @@ export async function uploadTemplateAsset(
     throw new Error('Szablon nie znaleziony');
   }
 
+  const safeTemplateCode = sanitizePathPart(template.code) || templateId;
+  const safeAssetType = assetType.toLowerCase();
+
   // Utwórz katalog jeśli nie istnieje
-  const assetDir = path.join(STORAGE_DIR, template.code, assetType.toLowerCase());
+  const assetDir = path.join(STORAGE_DIR, safeTemplateCode, safeAssetType);
   await fs.mkdir(assetDir, { recursive: true });
 
   // Generuj unikatową nazwę pliku
   const timestamp = Date.now();
-  const ext = path.extname(fileName);
-  const baseName = path.basename(fileName, ext);
-  const safeFileName = `${baseName.replace(/[^a-zA-Z0-9_-]/g, '_')}_${timestamp}${ext}`;
+  const ext = `.${imageExtensionForMimeType(mimeType)}`;
+  const baseName = path.basename(fileName, path.extname(fileName));
+  const safeBaseName = sanitizePathPart(baseName) || 'asset';
+  const safeFileName = `${safeBaseName}_${timestamp}${ext}`;
   const filePath = path.join(assetDir, safeFileName);
 
   // Zapisz plik
   await fs.writeFile(filePath, fileBuffer);
 
   // Ścieżka relatywna dla bazy (od storage/)
-  const relativePath = path.join('templates', template.code, assetType.toLowerCase(), safeFileName);
+  const relativePath = path.join('templates', safeTemplateCode, safeAssetType, safeFileName);
 
   // Zapisz do bazy
   const asset = await prisma.templateAsset.create({
@@ -127,6 +137,15 @@ export async function uploadTemplateAsset(
   });
 
   return mapAssetToItem(asset);
+}
+
+function sanitizePathPart(value: string) {
+  return path
+    .basename(value)
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 80);
 }
 
 export async function deleteTemplateAsset(assetId: string): Promise<void> {

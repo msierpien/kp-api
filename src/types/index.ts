@@ -7,6 +7,7 @@ export interface JwtPayload {
   email: string;
   role: UserRole;
   tenantId: string;
+  sessionId?: string;
 }
 
 export interface AuthenticatedRequest extends FastifyRequest {

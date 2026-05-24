@@ -3,9 +3,12 @@ import path from 'path';
 import { nanoid } from 'nanoid';
 import mime from 'mime-types';
 import { config } from '../../config';
+import { createLogger } from '../../lib/logger';
 
 const STORAGE_ROOT = config.storage.path;
 const PUBLIC_STORAGE_URL = config.storage.publicUrl;
+const storageRootAbsolute = path.resolve(STORAGE_ROOT);
+const logger = createLogger('local-storage');
 
 interface SaveFileOptions {
   orderId: string;
@@ -27,12 +30,29 @@ interface StoredFile {
  */
 export async function initStorage(): Promise<void> {
   try {
-    await fs.mkdir(STORAGE_ROOT, { recursive: true });
-    console.log(`[Storage] Storage root initialized: ${STORAGE_ROOT}`);
+    await fs.mkdir(storageRootAbsolute, { recursive: true });
+    logger.info({ storageRoot: storageRootAbsolute }, 'Storage root initialized');
   } catch (error) {
-    console.error('[Storage] Failed to initialize storage:', error);
+    logger.error({ err: error, storageRoot: storageRootAbsolute }, 'Failed to initialize storage');
     throw error;
   }
+}
+
+function safeStoragePath(relativePath: string) {
+  const fullPath = path.resolve(storageRootAbsolute, relativePath);
+  if (!fullPath.startsWith(`${storageRootAbsolute}${path.sep}`) && fullPath !== storageRootAbsolute) {
+    throw new Error('Nieprawidłowa ścieżka pliku');
+  }
+  return fullPath;
+}
+
+function sanitizeFilePart(value: string) {
+  return path
+    .basename(value)
+    .replace(/[^a-zA-Z0-9._-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 120);
 }
 
 /**
@@ -45,13 +65,15 @@ export async function saveFile(
   const { orderId, templateVersion, filename, extension } = options;
 
   // Folder: storage/orderId/v{templateVersion}/
-  const folderPath = path.join(STORAGE_ROOT, orderId, `v${templateVersion}`);
+  const safeOrderId = sanitizeFilePart(orderId) || 'unknown';
+  const folderPath = safeStoragePath(path.join(safeOrderId, `v${templateVersion}`));
   await fs.mkdir(folderPath, { recursive: true });
 
   // Nazwa pliku: {filename}-{nanoid}.{extension}
   const fileId = nanoid(10);
-  const baseName = filename || 'asset';
-  const fileName = `${baseName}-${fileId}.${extension}`;
+  const baseName = sanitizeFilePart(filename || 'asset') || 'asset';
+  const safeExtension = sanitizeFilePart(extension).replace(/^\.+/, '') || 'bin';
+  const fileName = `${baseName}-${fileId}.${safeExtension}`;
   const filePath = path.join(folderPath, fileName);
 
   // Zapisz plik
@@ -76,7 +98,7 @@ export async function saveFile(
  * Odczytuje plik z lokalnego storage
  */
 export async function readFile(relativePath: string): Promise<Buffer> {
-  const fullPath = path.join(STORAGE_ROOT, relativePath);
+  const fullPath = safeStoragePath(relativePath);
   return fs.readFile(fullPath);
 }
 
@@ -84,7 +106,7 @@ export async function readFile(relativePath: string): Promise<Buffer> {
  * Usuwa plik z lokalnego storage
  */
 export async function deleteFile(relativePath: string): Promise<void> {
-  const fullPath = path.join(STORAGE_ROOT, relativePath);
+  const fullPath = safeStoragePath(relativePath);
   await fs.unlink(fullPath);
 }
 
@@ -93,7 +115,7 @@ export async function deleteFile(relativePath: string): Promise<void> {
  */
 export async function fileExists(relativePath: string): Promise<boolean> {
   try {
-    const fullPath = path.join(STORAGE_ROOT, relativePath);
+    const fullPath = safeStoragePath(relativePath);
     await fs.access(fullPath);
     return true;
   } catch {
@@ -134,7 +156,7 @@ export async function buildStorageUrlSafe(relativePath: string): Promise<string 
  */
 export function generateSignedUrl(
   relativePath: string,
-  expiresInSeconds: number = 3600
+  _expiresInSeconds: number = 3600
 ): string {
   // TODO: Implementacja signed URLs z tokenem lub HMAC
   // Na razie zwracamy normalny URL
@@ -145,7 +167,7 @@ export function generateSignedUrl(
  * Pobiera rozmiar pliku w bajtach
  */
 export async function getFileSize(relativePath: string): Promise<number> {
-  const fullPath = path.join(STORAGE_ROOT, relativePath);
+  const fullPath = safeStoragePath(relativePath);
   const stats = await fs.stat(fullPath);
   return stats.size;
 }

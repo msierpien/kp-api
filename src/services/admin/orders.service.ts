@@ -164,7 +164,7 @@ export async function createManualOrder(data: CreateManualOrderInput): Promise<M
 
   // Trigger automations for created cases (after transaction commits)
   const { triggerAutomations, AutomationTrigger } = await import('./automation.service');
-  const { createWzForOrder, shouldAutoCreateWzForTenant } = await import('./warehouse.service');
+  const { createWzForOrder, shouldAutoCreateWzForTenant } = await import('./warehouse-documents.service');
 
   await reserveOrder(order.id);
 

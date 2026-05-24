@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { createLogger } from './lib/logger';
+
+const logger = createLogger('config');
 
 /**
  * Validation schema for environment variables
@@ -11,6 +14,7 @@ const envSchema = z.object({
   API_PORT: z.string().transform(Number).pipe(z.number().int().positive()).default('3001'),
   API_HOST: z.string().default('0.0.0.0'),
   APP_URL: z.string().url().default('http://localhost:3001'),
+  TRUST_PROXY: z.string().transform(val => val === 'true').default('false'),
 
   // Database
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
@@ -50,6 +54,10 @@ const envSchema = z.object({
   // Storage
   STORAGE_TYPE: z.enum(['local', 's3']).default('local'),
   STORAGE_PATH: z.string().default('./storage'),
+
+  // Runtime process roles
+  WORKERS_ENABLED: z.string().transform(val => val !== 'false').default('true'),
+  SCHEDULER_ENABLED: z.string().transform(val => val !== 'false').default('true'),
 });
 
 type Env = z.infer<typeof envSchema>;
@@ -63,10 +71,12 @@ function loadConfig(): Env {
     return parsed;
   } catch (error) {
     if (error instanceof z.ZodError) {
-      console.error('❌ Invalid environment variables:');
-      error.errors.forEach((err) => {
-        console.error(`  - ${err.path.join('.')}: ${err.message}`);
-      });
+      logger.error({
+        errors: error.errors.map((err) => ({
+          path: err.path.join('.'),
+          message: err.message,
+        })),
+      }, 'Invalid environment variables');
       process.exit(1);
     }
     throw error;
@@ -89,6 +99,7 @@ export const config = {
     port: env.API_PORT,
     host: env.API_HOST,
     url: env.APP_URL,
+    trustProxy: env.TRUST_PROXY,
     isDevelopment: env.NODE_ENV === 'development',
     isProduction: env.NODE_ENV === 'production',
     isTest: env.NODE_ENV === 'test',
@@ -166,6 +177,11 @@ export const config = {
     type: env.STORAGE_TYPE,
     path: env.STORAGE_PATH,
     publicUrl: env.PUBLIC_STORAGE_URL || `${env.APP_URL}/storage`,
+  },
+
+  runtime: {
+    workersEnabled: env.WORKERS_ENABLED,
+    schedulerEnabled: env.SCHEDULER_ENABLED,
   },
 } as const;
 

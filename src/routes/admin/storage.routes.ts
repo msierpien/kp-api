@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { authMiddleware, requireRole } from '../../middleware/auth.middleware';
 import { cleanupStorage, type CleanupOptions } from '../../services/storage/cleanup-storage.service';
+import { InternalServerError } from '../../lib/errors';
 
 export async function storageRoutes(fastify: FastifyInstance) {
   // Tylko SUPER_ADMIN
@@ -37,7 +38,7 @@ export async function storageRoutes(fastify: FastifyInstance) {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Storage cleanup failed';
-        return reply.status(500).send({ error: 'Internal Server Error', message });
+        throw new InternalServerError(message);
       }
     }
   );
@@ -67,7 +68,7 @@ export async function storageRoutes(fastify: FastifyInstance) {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to get storage stats';
-        return reply.status(500).send({ error: 'Internal Server Error', message });
+        throw new InternalServerError(message);
       }
     }
   );

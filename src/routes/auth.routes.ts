@@ -4,17 +4,30 @@ import { loginSchema, refreshSchema, LoginInput, RefreshInput } from '../schemas
 import prisma from '../lib/prisma';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { normalizeFeatures } from '../lib/features';
+import { clearAuthCookies, getRefreshTokenFromRequest, setAuthCookies } from '../lib/auth-cookies';
+import { RATE_LIMITS } from '../lib/rate-limits';
 
 export async function authRoutes(fastify: FastifyInstance) {
   const authService = new AuthService({
     sign: (payload, options) => fastify.jwt.sign(payload, options),
-    verify: (token: string) => fastify.jwt.verify(token) as any,
+    verify: <T extends object | string>(token: string) => fastify.jwt.verify<T>(token),
   });
+
+  function authRequestMeta(request: FastifyRequest) {
+    const userAgent = request.headers['user-agent'];
+    return {
+      userAgent: Array.isArray(userAgent) ? userAgent.join(' ') : userAgent,
+      ipAddress: request.ip,
+    };
+  }
 
   // POST /auth/login
   fastify.post<{ Body: LoginInput }>(
     '/login',
     {
+      config: {
+        rateLimit: RATE_LIMITS.authLogin,
+      },
       schema: {
         tags: ['auth'],
         summary: 'Logowanie',
@@ -31,8 +44,6 @@ export async function authRoutes(fastify: FastifyInstance) {
           200: {
             type: 'object',
             properties: {
-              accessToken: { type: 'string' },
-              refreshToken: { type: 'string' },
               user: {
                 type: 'object',
                 properties: {
@@ -70,9 +81,13 @@ export async function authRoutes(fastify: FastifyInstance) {
         }
 
         const { email, password } = parsed.data;
-        const result = await authService.login(email, password);
+        const result = await authService.login(email, password, authRequestMeta(request));
+        setAuthCookies(reply, {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+        });
 
-        return reply.send(result);
+        return reply.send({ user: result.user });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Błąd logowania';
         return reply.status(401).send({
@@ -87,13 +102,15 @@ export async function authRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: RefreshInput }>(
     '/refresh',
     {
+      config: {
+        rateLimit: RATE_LIMITS.authRefresh,
+      },
       schema: {
         tags: ['auth'],
         summary: 'Odśwież token dostępu',
         security: [],
         body: {
           type: 'object',
-          required: ['refreshToken'],
           properties: {
             refreshToken: { type: 'string' },
           },
@@ -102,7 +119,7 @@ export async function authRoutes(fastify: FastifyInstance) {
           200: {
             type: 'object',
             properties: {
-              accessToken: { type: 'string' },
+              success: { type: 'boolean' },
             },
           },
           401: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
@@ -111,7 +128,7 @@ export async function authRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest<{ Body: RefreshInput }>, reply: FastifyReply) => {
       try {
-        const parsed = refreshSchema.safeParse(request.body);
+        const parsed = refreshSchema.safeParse(request.body ?? {});
 
         if (!parsed.success) {
           return reply.status(400).send({
@@ -120,10 +137,21 @@ export async function authRoutes(fastify: FastifyInstance) {
           });
         }
 
-        const { refreshToken } = parsed.data;
-        const result = await authService.refresh(refreshToken);
+        const refreshToken = parsed.data.refreshToken || getRefreshTokenFromRequest(request);
+        if (!refreshToken) {
+          return reply.status(400).send({
+            error: 'Validation Error',
+            message: 'Refresh token jest wymagany',
+          });
+        }
 
-        return reply.send(result);
+        const result = await authService.refresh(refreshToken);
+        setAuthCookies(reply, {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+        });
+
+        return reply.send({ success: true });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Błąd odświeżania tokenu';
         return reply.status(401).send({
@@ -146,9 +174,9 @@ export async function authRoutes(fastify: FastifyInstance) {
         },
       },
     },
-  }, async (_request: FastifyRequest, reply: FastifyReply) => {
-    // W JWT stateless, logout jest po stronie klienta (usunięcie tokenu)
-    // Tutaj możemy dodać blacklistowanie tokenu w Redis w przyszłości
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    await authService.logout(getRefreshTokenFromRequest(request));
+    clearAuthCookies(reply);
     return reply.send({ message: 'Wylogowano pomyślnie' });
   });
 
@@ -190,7 +218,14 @@ export async function authRoutes(fastify: FastifyInstance) {
       preHandler: [authMiddleware(fastify)],
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const jwtUser = request.user as any;
+      const jwtUser = request.user;
+      if (!jwtUser) {
+        return reply.status(401).send({
+          error: 'Unauthorized',
+          message: 'Brak autoryzacji',
+        });
+      }
+
       const user = await prisma.user.findUnique({
         where: { id: jwtUser.userId },
         select: {

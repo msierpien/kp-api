@@ -1,5 +1,8 @@
 import { Queue } from 'bullmq';
 import { config } from '../../config';
+import { createLogger } from '../../lib/logger';
+
+const logger = createLogger('email-queue');
 
 /**
  * Email job data interfaces
@@ -60,7 +63,7 @@ export async function queuePersonalizationEmail(data: PersonalizationEmailJob) {
     jobId: data.caseId ? `personalization-${data.caseId}` : undefined,
   });
 
-  console.log(`[EmailQueue] Queued personalization email: ${job.id} → ${data.to}`);
+  logger.info({ jobId: job.id, to: data.to }, 'Queued personalization email');
   return job;
 }
 
@@ -70,7 +73,7 @@ export async function queuePersonalizationEmail(data: PersonalizationEmailJob) {
 export async function queueTestEmail(data: TestEmailJob) {
   const job = await emailQueue.add('test', data);
   
-  console.log(`[EmailQueue] Queued test email: ${job.id} → ${data.to}`);
+  logger.info({ jobId: job.id, to: data.to }, 'Queued test email');
   return job;
 }
 
@@ -79,7 +82,7 @@ export async function queueTestEmail(data: TestEmailJob) {
  */
 export async function closeEmailQueue() {
   await emailQueue.close();
-  console.log('[EmailQueue] Queue closed');
+  logger.info('Queue closed');
 }
 
 /**

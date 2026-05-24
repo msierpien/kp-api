@@ -6,6 +6,8 @@ import { saveFile, fileExists, buildStorageUrl } from '../../services/storage/lo
 import { addFinalPdfJob } from '../../services/queue/render.queue';
 import { listFonts } from '../../services/admin/fonts.service';
 import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
+import { MAX_PREVIEW_UPLOAD_BYTES, assertAllowedPngUpload, isUploadValidationError } from '../../lib/upload-validation';
+import { RATE_LIMITS } from '../../lib/rate-limits';
 
 interface PersonalizationParams {
   token: string;
@@ -397,6 +399,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: PersonalizationParams; Body: SaveDesignBody }>(
     '/:token/preview',
     {
+      config: {
+        rateLimit: RATE_LIMITS.personalizationPreview,
+      },
       schema: {
         tags: ['personalization'],
         summary: 'Waliduj odpowiedzi i pobierz URL podglądu',
@@ -807,6 +812,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: PersonalizationParams }>(
     '/:token/upload-preview',
     {
+      config: {
+        rateLimit: RATE_LIMITS.publicPreviewUpload,
+      },
       schema: {
         tags: ['personalization'],
         summary: 'Wgraj podgląd PNG wygenerowany przez frontend',
@@ -893,18 +901,11 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
-        // Sprawdź typ pliku
-        if (!data.mimetype.startsWith('image/')) {
-          return reply.status(400).send({
-            error: 'Bad Request',
-            message: 'Plik musi być obrazem',
-          });
-        }
-
         fastify.log.info(`[UploadPreview] File received: ${data.filename}, size: ${data.file.bytesRead} bytes`);
 
         // Konwertuj stream na buffer
         const buffer = await data.toBuffer();
+        assertAllowedPngUpload(buffer, data.mimetype, { maxBytes: MAX_PREVIEW_UPLOAD_BYTES });
 
         // Zapisz plik
         const savedFile = await saveFile(buffer, {
@@ -957,6 +958,13 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         });
       } catch (error) {
         fastify.log.error({ err: error }, '[UploadPreview] Failed');
+        if (isUploadValidationError(error)) {
+          return reply.status(400).send({
+            error: 'Upload Failed',
+            message: error.message,
+          });
+        }
+
         return reply.status(500).send({
           error: 'Internal Server Error',
           message: 'Nie udało się zapisać podglądu',

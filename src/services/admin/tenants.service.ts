@@ -4,7 +4,7 @@ import type { Tenant, TenantStatus } from '@prisma/client';
 import { ensureDefaultCatalog } from './warehouse-catalogs.service';
 import bcrypt from 'bcrypt';
 import { encrypt } from '../../lib/encryption';
-import { normalizeFeatures, type TenantFeatures } from '../../lib/features';
+import { clearTenantFeaturesCache, normalizeFeatures, type TenantFeatures } from '../../lib/features';
 
 export interface TenantItem {
   id: string;
@@ -195,6 +195,8 @@ export async function createTenant(input: CreateTenantInput): Promise<TenantItem
     return createdTenant;
   });
 
+  clearTenantFeaturesCache(tenant.id);
+
   return mapTenant(tenant);
 }
 
@@ -298,6 +300,8 @@ export async function setupTenant(input: SetupTenantInput): Promise<SetupTenantR
     return { tenant, admin, shop };
   });
 
+  clearTenantFeaturesCache(result.tenant.id);
+
   return {
     tenant: mapTenant(result.tenant),
     admin: result.admin as SetupTenantResult['admin'],
@@ -348,6 +352,8 @@ export async function updateTenant(id: string, input: UpdateTenantInput): Promis
     },
   });
 
+  clearTenantFeaturesCache(id);
+
   return mapTenant(tenant);
 }
 
@@ -363,4 +369,6 @@ export async function deleteTenant(id: string): Promise<void> {
     where: { id },
     data: { status: 'DELETED' },
   });
+
+  clearTenantFeaturesCache(id);
 }

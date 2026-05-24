@@ -1,32 +1,46 @@
 import crypto from 'crypto';
 import { config } from '../config';
+import { createLogger } from './logger';
+
+const logger = createLogger('encryption');
 
 // Pobierz klucz szyfrowania z config (32 bajty dla AES-256)
 const ENCRYPTION_KEY = config.encryption.key;
-const ALGORITHM = 'aes-256-cbc';
-const IV_LENGTH = 16;
+const ALGORITHM = 'aes-256-gcm';
+const LEGACY_ALGORITHM = 'aes-256-cbc';
+const IV_LENGTH = 12;
+const LEGACY_IV_LENGTH = 16;
+const AUTH_TAG_LENGTH = 16;
+const VERSION_PREFIX = 'v2';
+
+function getKey() {
+  return Buffer.from(ENCRYPTION_KEY, 'utf8');
+}
 
 /**
- * Szyfruje tekst używając AES-256-CBC
+ * Szyfruje tekst używając AES-256-GCM.
  */
 export function encrypt(text: string): string {
   if (!text) return '';
 
   try {
-    // Upewnij się że klucz ma 32 bajty
-    const key = Buffer.from(ENCRYPTION_KEY.padEnd(32, '0').slice(0, 32));
+    const key = getKey();
     const iv = crypto.randomBytes(IV_LENGTH);
     const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
 
     let encrypted = cipher.update(text, 'utf8', 'hex');
     encrypted += cipher.final('hex');
+    const authTag = cipher.getAuthTag();
 
-    // Zwróć IV + encrypted (IV potrzebny do deszyfrowania)
-    return iv.toString('hex') + ':' + encrypted;
+    return [
+      VERSION_PREFIX,
+      iv.toString('hex'),
+      authTag.toString('hex'),
+      encrypted,
+    ].join(':');
   } catch (error) {
-    console.error('Encryption failed:', error);
-    // Fallback: zwróć plain text (lepsze niż crash)
-    return text;
+    logger.error({ err: error }, 'Encryption failed');
+    throw new Error('Encryption failed');
   }
 }
 
@@ -37,25 +51,54 @@ export function decrypt(text: string): string {
   if (!text) return '';
 
   try {
-    const key = Buffer.from(ENCRYPTION_KEY.padEnd(32, '0').slice(0, 32));
     const parts = text.split(':');
 
-    if (parts.length !== 2) {
-      // Fallback: jeśli nie ma IV (stare dane niezaszyfrowane), zwróć oryginalny tekst
-      return text;
+    if (parts[0] === VERSION_PREFIX) {
+      if (parts.length !== 4) {
+        throw new Error('Invalid encrypted payload');
+      }
+
+      const key = getKey();
+      const iv = Buffer.from(parts[1], 'hex');
+      const authTag = Buffer.from(parts[2], 'hex');
+      const encryptedText = parts[3];
+
+      if (iv.length !== IV_LENGTH || authTag.length !== AUTH_TAG_LENGTH) {
+        throw new Error('Invalid encrypted payload');
+      }
+
+      const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+      decipher.setAuthTag(authTag);
+
+      let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+      decrypted += decipher.final('utf8');
+
+      return decrypted;
     }
 
-    const iv = Buffer.from(parts[0], 'hex');
-    const encryptedText = parts[1];
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+    if (parts.length === 2) {
+      const key = getKey();
+      const iv = Buffer.from(parts[0], 'hex');
+      const encryptedText = parts[1];
+      if (iv.length !== LEGACY_IV_LENGTH) return text;
 
-    let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
+      const decipher = crypto.createDecipheriv(LEGACY_ALGORITHM, key, iv);
+      let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+      decrypted += decipher.final('utf8');
 
-    return decrypted;
+      return decrypted;
+    }
+
+    // Backward compatibility for old plaintext values.
+    return text;
   } catch (error) {
-    // Jeśli deszyfrowanie nie powiodło się (stare dane niezaszyfrowane), zwróć oryginalny tekst
-    console.warn('Decryption failed, returning original text:', error);
+    if (text.startsWith(`${VERSION_PREFIX}:`)) {
+      logger.warn({ err: error }, 'Authenticated decryption failed');
+      throw new Error('Decryption failed');
+    }
+
+    // Backward compatibility for old plaintext or legacy broken values.
+    logger.warn({ err: error }, 'Legacy decryption failed, returning original text');
     return text;
   }
 }

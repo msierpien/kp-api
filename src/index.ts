@@ -34,12 +34,14 @@ import swaggerDocsPlugin from './plugins/swagger-docs.plugin';
 import { errorHandlerPlugin } from './plugins/error-handler.plugin';
 import { validationPlugin } from './plugins/validation.plugin';
 import type { JwtPayload } from './types';
+import { getAccessTokenFromRequest } from './lib/auth-cookies';
 
 type TenantContextData = Pick<JwtPayload, 'tenantId' | 'userId' | 'role'> & {
   overrideTenantId?: string;
 };
 
 const server = Fastify({
+  trustProxy: config.app.trustProxy,
   routerOptions: {
     ignoreTrailingSlash: true,
   },
@@ -70,9 +72,8 @@ server.addHook('onRequest', async (request) => {
   let contextData: TenantContextData = { tenantId: '', userId: '', role: 'ADMIN' };
 
   try {
-    const authHeader = request.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7);
+    const token = getAccessTokenFromRequest(request);
+    if (token) {
       const decoded = (await server.jwt.verify(token)) as JwtPayload;
 
       // Build context with user data
@@ -122,6 +123,11 @@ const allowedOrigins = [
   config.frontend.publicPortalBaseUrl,
 ];
 
+function isAllowedOrigin(origin: string) {
+  if (allowedOrigins.includes(origin)) return true;
+  return config.app.isDevelopment && origin.includes('localhost');
+}
+
 server.register(cors, {
   origin: (origin, cb) => {
     // Pozwól na requesty bez origin (np. curl, Postman)
@@ -130,12 +136,7 @@ server.register(cors, {
       return;
     }
     // Sprawdź czy origin jest na liście dozwolonych
-    if (allowedOrigins.includes(origin)) {
-      cb(null, true);
-      return;
-    }
-    // W trybie dev pozwól na wszystkie localhost
-    if (config.app.isDevelopment && origin.includes('localhost')) {
+    if (isAllowedOrigin(origin)) {
       cb(null, true);
       return;
     }
@@ -168,6 +169,17 @@ server.register(multipart, {
   },
 });
 
+server.addHook('onRequest', async (request, reply) => {
+  if (!request.url.startsWith('/storage/')) return;
+
+  const origin = request.headers.origin;
+  if (origin && isAllowedOrigin(origin)) {
+    reply.header('Access-Control-Allow-Origin', origin);
+    reply.header('Vary', 'Origin');
+    reply.header('Access-Control-Allow-Credentials', 'true');
+  }
+});
+
 // Static files - storage (z CORS dla cross-origin requests)
 const storagePath = path.isAbsolute(config.storage.path)
   ? config.storage.path
@@ -179,11 +191,12 @@ server.register(fastifyStatic, {
   decorateReply: false,
   setHeaders: (res) => {
     // Dodaj nagłówki CORS dla plików statycznych
-    res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
     // Pozwól na cross-origin embedding (dla <img>, <video> etc.)
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
     // Cache dla obrazów (1 godzina)
     res.setHeader('Cache-Control', 'public, max-age=3600');
   },
@@ -301,49 +314,57 @@ const start = async () => {
       server.log.warn({ err: error }, '⚠️  Failed to load tenant email settings');
     }
 
-    // Zainicjalizuj scheduler automatycznej synchronizacji
-    try {
-      await initializeScheduler();
-      server.log.info('📅 Order synchronization scheduler initialized');
-    } catch (error) {
-      server.log.warn({ err: error }, '⚠️  Failed to initialize scheduler');
+    if (config.runtime.schedulerEnabled) {
+      // Zainicjalizuj scheduler automatycznej synchronizacji
+      try {
+        await initializeScheduler();
+        server.log.info('📅 Order synchronization scheduler initialized');
+      } catch (error) {
+        server.log.warn({ err: error }, '⚠️  Failed to initialize scheduler');
+      }
+    } else {
+      server.log.info('Scheduler disabled by SCHEDULER_ENABLED=false');
     }
 
-    // Uruchom BullMQ render worker
-    try {
-      startRenderWorker();
-      server.log.info('🎨 Render worker started (Fabric.js + BullMQ)');
-    } catch (error) {
-      server.log.error({ err: error }, '❌ Failed to start render worker');
-    }
+    if (config.runtime.workersEnabled) {
+      // Uruchom BullMQ render worker
+      try {
+        startRenderWorker();
+        server.log.info('🎨 Render worker started (Fabric.js + BullMQ)');
+      } catch (error) {
+        server.log.error({ err: error }, '❌ Failed to start render worker');
+      }
 
-    // Uruchom BullMQ email worker
-    try {
-      startEmailWorker();
-      server.log.info('📧 Email worker started (BullMQ)');
-    } catch (error) {
-      server.log.error({ err: error }, '❌ Failed to start email worker');
-    }
+      // Uruchom BullMQ email worker
+      try {
+        startEmailWorker();
+        server.log.info('📧 Email worker started (BullMQ)');
+      } catch (error) {
+        server.log.error({ err: error }, '❌ Failed to start email worker');
+      }
 
-    try {
-      startStockSyncWorker();
-      server.log.info('Stock sync worker started (BullMQ)');
-    } catch (error) {
-      server.log.error({ err: error }, 'Failed to start stock sync worker');
-    }
+      try {
+        startStockSyncWorker();
+        server.log.info('Stock sync worker started (BullMQ)');
+      } catch (error) {
+        server.log.error({ err: error }, 'Failed to start stock sync worker');
+      }
 
-    try {
-      startPriceSyncWorker();
-      server.log.info('Price sync worker started (BullMQ)');
-    } catch (error) {
-      server.log.error({ err: error }, 'Failed to start price sync worker');
-    }
+      try {
+        startPriceSyncWorker();
+        server.log.info('Price sync worker started (BullMQ)');
+      } catch (error) {
+        server.log.error({ err: error }, 'Failed to start price sync worker');
+      }
 
-    try {
-      startWholesaleSyncWorker();
-      server.log.info('Wholesale sync worker started (BullMQ)');
-    } catch (error) {
-      server.log.error({ err: error }, 'Failed to start wholesale sync worker');
+      try {
+        startWholesaleSyncWorker();
+        server.log.info('Wholesale sync worker started (BullMQ)');
+      } catch (error) {
+        server.log.error({ err: error }, 'Failed to start wholesale sync worker');
+      }
+    } else {
+      server.log.info('Workers disabled by WORKERS_ENABLED=false');
     }
 
     await server.listen({ port, host });

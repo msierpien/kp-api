@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { getStats } from '../../services/admin/stats.service';
+import { InternalServerError } from '../../lib/errors';
 
 export async function statsRoutes(fastify: FastifyInstance) {
   // GET /admin/stats
@@ -13,12 +14,8 @@ export async function statsRoutes(fastify: FastifyInstance) {
     try {
       const stats = await getStats();
       return reply.send(stats);
-    } catch (error) {
-      fastify.log.error(error);
-      return reply.status(500).send({
-        error: 'Internal Server Error',
-        message: 'Nie udało się pobrać statystyk',
-      });
+    } catch {
+      throw new InternalServerError('Nie udało się pobrać statystyk');
     }
   });
 }

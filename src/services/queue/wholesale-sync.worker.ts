@@ -1,8 +1,11 @@
 import { Worker, Job } from 'bullmq';
+import { createLogger } from '../../lib/logger';
 import prisma from '../../lib/prisma';
 import { runWholesaleSyncJob } from '../admin/wholesale.service';
 import { getRedisConnection } from './render.queue';
 import { WHOLESALE_SYNC_QUEUE_NAME, type WholesaleSyncJobData } from './wholesale-sync.queue';
+
+const logger = createLogger('wholesale-sync-worker');
 
 let wholesaleSyncWorker: Worker<WholesaleSyncJobData> | null = null;
 
@@ -12,7 +15,7 @@ async function processWholesaleSyncJob(job: Job<WholesaleSyncJobData>) {
 
 export function startWholesaleSyncWorker() {
   if (wholesaleSyncWorker) {
-    console.log('[WholesaleSyncWorker] Worker already running');
+    logger.info('Worker already running');
     return;
   }
 
@@ -26,11 +29,11 @@ export function startWholesaleSyncWorker() {
   );
 
   wholesaleSyncWorker.on('completed', (job) => {
-    console.log(`[WholesaleSyncWorker] Job ${job.id} completed`);
+    logger.info({ jobId: job.id }, 'Job completed');
   });
 
   wholesaleSyncWorker.on('failed', async (job, err) => {
-    console.error(`[WholesaleSyncWorker] Job ${job?.id} failed:`, err.message);
+    logger.error({ err, jobId: job?.id }, 'Job failed');
 
     if (job?.data.logId) {
       await prisma.wholesaleSyncLog.update({
@@ -45,16 +48,16 @@ export function startWholesaleSyncWorker() {
   });
 
   wholesaleSyncWorker.on('error', (err) => {
-    console.error('[WholesaleSyncWorker] Worker error:', err);
+    logger.error({ err }, 'Worker error');
   });
 
-  console.log('[WholesaleSyncWorker] Worker started');
+  logger.info('Worker started');
 }
 
 export async function stopWholesaleSyncWorker() {
   if (wholesaleSyncWorker) {
     await wholesaleSyncWorker.close();
     wholesaleSyncWorker = null;
-    console.log('[WholesaleSyncWorker] Worker stopped');
+    logger.info('Worker stopped');
   }
 }

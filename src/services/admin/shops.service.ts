@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { encrypt, decrypt } from '../../lib/encryption';
 import { config as appConfig } from '../../config';
+import { ForbiddenError, NotFoundError, ValidationError } from '../../lib/errors';
 import type { CreateShopInput, UpdateShopInput } from '../../schemas/admin.schema';
 import type { ShopItem, UserRole } from '../../types';
 import { removeShopFromScheduler } from '../scheduler/scheduler.service';
@@ -21,7 +22,7 @@ export function resolveShopTenantWhereForContext(context: ShopTenantScopeContext
   }
 
   if (!context?.tenantId) {
-    throw new Error('Brak kontekstu tenanta');
+    throw new ForbiddenError('Brak kontekstu tenanta');
   }
 
   return { tenantId: context.tenantId };
@@ -41,7 +42,7 @@ export async function assertShopAdminAccess(id: string) {
   });
 
   if (!shop) {
-    throw new Error('Shop not found');
+    throw new NotFoundError('Shop not found');
   }
 
   return shop;
@@ -121,7 +122,7 @@ export async function createShop(input: CreateShopInput): Promise<ShopItem> {
   const targetTenantId = context?.role === 'SUPER_ADMIN' ? input.tenantId : context?.tenantId;
 
   if (!targetTenantId) {
-    throw new Error('Brak tenanta dla integracji');
+    throw new ValidationError('Brak tenanta dla integracji');
   }
 
   const tenant = await prisma.tenant.findUnique({
@@ -130,7 +131,7 @@ export async function createShop(input: CreateShopInput): Promise<ShopItem> {
   });
 
   if (!tenant || tenant.status !== 'ACTIVE') {
-    throw new Error('Wybrany tenant nie istnieje lub jest nieaktywny');
+    throw new ValidationError('Wybrany tenant nie istnieje lub jest nieaktywny');
   }
 
   const shop = await prisma.shop.create({
@@ -178,7 +179,7 @@ export async function deleteShop(id: string): Promise<void> {
   });
 
   if (!shop) {
-    throw new Error('Integracja nie istnieje');
+    throw new NotFoundError('Integracja nie istnieje');
   }
 
   if (shop.syncEnabled) {
@@ -193,7 +194,7 @@ export async function deleteShop(id: string): Promise<void> {
 export async function testShopConnection(id: string) {
   const shop = await prisma.shop.findFirst({ where: getShopAdminWhere(id) });
   if (!shop) {
-    throw new Error('Shop not found');
+    throw new NotFoundError('Shop not found');
   }
 
   // Odszyfruj klucze przed użyciem
@@ -316,7 +317,7 @@ export async function getShopImportReadiness(id: string) {
   const shop = await prisma.shop.findFirst({
     where: getShopAdminWhere(id),
   });
-  if (!shop) throw new Error('Sklep nie znaleziony');
+  if (!shop) throw new NotFoundError('Sklep nie znaleziony');
 
   const tenantId = shop.tenantId;
   const mappingWhere = {
@@ -380,9 +381,9 @@ export async function getPrestaShopCategories(id: string) {
   const shop = await prisma.shop.findFirst({
     where: getShopAdminWhere(id),
   });
-  if (!shop) throw new Error('Sklep nie znaleziony');
-  if (shop.status !== 'ACTIVE') throw new Error('Sklep jest nieaktywny');
-  if (shop.platform !== 'PRESTASHOP') throw new Error(`Kategorie PrestaShop nie obsługują platformy ${shop.platform}`);
+  if (!shop) throw new NotFoundError('Sklep nie znaleziony');
+  if (shop.status !== 'ACTIVE') throw new ValidationError('Sklep jest nieaktywny');
+  if (shop.platform !== 'PRESTASHOP') throw new ValidationError(`Kategorie PrestaShop nie obsługują platformy ${shop.platform}`);
 
   const shopConfig = (shop.configJson || {}) as {
     authType?: string;

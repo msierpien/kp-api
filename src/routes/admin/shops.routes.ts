@@ -1,6 +1,4 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import prisma from '../../lib/prisma';
-import { decrypt, encrypt } from '../../lib/encryption';
 import {
   createShopSchema,
   updateShopSchema,
@@ -9,25 +7,8 @@ import {
   type UpdateShopInput,
   type ShopIdParamsInput,
 } from '../../schemas/admin.schema';
-import {
-  assertShopAdminAccess,
-  createShop,
-  deleteShop,
-  getShopAdminWhere,
-  getPrestaShopCategories,
-  getShopImportReadiness,
-  listShops,
-  testShopConnection,
-  updateShop,
-} from '../../services/admin/shops.service';
-import {
-  triggerManualSync,
-  enableShopSync,
-  disableShopSync,
-  updateShopSyncInterval,
-} from '../../services/scheduler/scheduler.service';
-import { buildBulkStockUrl } from '../../services/shops/prestashop-stock-client';
-import * as stockSyncService from '../../services/stock/stock-sync.service';
+import { ValidationError } from '../../lib/errors';
+import { shopsUseCases } from '../../modules/shops/shops.use-cases';
 import * as shopWebhookService from '../../services/webhooks/prestashop-order-webhook.service';
 
 const shopResponseSchema = {
@@ -86,23 +67,6 @@ const bulkStockDiagnosticsResponseSchema = {
   },
 };
 
-function normalizeOptionalString(value: unknown) {
-  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  return trimmed || null;
-}
-
-function normalizeOptionalLeadTimeDays(value: unknown) {
-  if (value === undefined) return null;
-  if (value === null || value === '') return null;
-  const days = Number(value);
-  if (!Number.isInteger(days) || days < 0 || days > 365) {
-    throw new Error('Domyślny czas wysyłki musi być liczbą całkowitą od 0 do 365 dni');
-  }
-  return days;
-}
-
 const webhookSettingsResponseSchema = {
   type: 'object',
   properties: {
@@ -137,9 +101,28 @@ const webhookEventSchema = {
   additionalProperties: true,
 };
 
-function shopNotFoundResponse(error: unknown) {
-  const message = error instanceof Error ? error.message : '';
-  return message === 'Shop not found' || message === 'Integracja nie istnieje' || message.includes('nie znalezion');
+function parseShopParams(params: unknown) {
+  const parsed = shopIdParamsSchema.safeParse(params);
+  if (!parsed.success) {
+    throw new ValidationError(parsed.error.errors[0].message, parsed.error.flatten());
+  }
+  return parsed.data;
+}
+
+function parseCreateShopBody(body: unknown) {
+  const parsed = createShopSchema.safeParse(body);
+  if (!parsed.success) {
+    throw new ValidationError(parsed.error.errors[0].message, parsed.error.flatten());
+  }
+  return parsed.data;
+}
+
+function parseUpdateShopBody(body: unknown) {
+  const parsed = updateShopSchema.safeParse(body);
+  if (!parsed.success) {
+    throw new ValidationError(parsed.error.errors[0].message, parsed.error.flatten());
+  }
+  return parsed.data;
 }
 
 export async function shopsRoutes(fastify: FastifyInstance) {
@@ -153,16 +136,8 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       },
     },
   }, async (_request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const shops = await listShops();
-      return reply.send(shops);
-    } catch (error) {
-      fastify.log.error(error);
-      return reply.status(500).send({
-        error: 'Internal Server Error',
-        message: 'Nie udało się pobrać listy integracji',
-      });
-    }
+    const shops = await shopsUseCases.list();
+    return reply.send(shops);
   });
 
   fastify.get('/:id/prestashop-categories', {
@@ -185,14 +160,8 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       },
     },
   }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-    try {
-      const categories = await getPrestaShopCategories(request.params.id);
-      return reply.send(categories);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Nie udało się pobrać kategorii PrestaShop';
-      const status = message.includes('nie znalezion') ? 404 : 400;
-      return reply.status(status).send({ error: 'Error', message });
-    }
+    const categories = await shopsUseCases.getPrestaShopCategories(request.params.id);
+    return reply.send(categories);
   });
 
   // POST /admin/shops
@@ -213,24 +182,8 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       },
     },
     async (request: FastifyRequest<{ Body: CreateShopInput }>, reply: FastifyReply) => {
-      const parsed = createShopSchema.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.status(400).send({
-          error: 'Validation Error',
-          message: parsed.error.errors[0].message,
-        });
-      }
-
-      try {
-        const shop = await createShop(parsed.data);
-        return reply.status(201).send(shop);
-      } catch (error) {
-        fastify.log.error(error);
-        return reply.status(500).send({
-          error: 'Internal Server Error',
-          message: 'Nie udało się utworzyć integracji',
-        });
-      }
+      const shop = await shopsUseCases.create(parseCreateShopBody(request.body));
+      return reply.status(201).send(shop);
     }
   );
 
@@ -256,38 +209,10 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       request: FastifyRequest<{ Params: ShopIdParamsInput; Body: UpdateShopInput }>,
       reply: FastifyReply
     ) => {
-      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
-      if (!paramsParsed.success) {
-        return reply.status(400).send({
-          error: 'Validation Error',
-          message: paramsParsed.error.errors[0].message,
-        });
-      }
-
-      const bodyParsed = updateShopSchema.safeParse(request.body);
-      if (!bodyParsed.success) {
-        return reply.status(400).send({
-          error: 'Validation Error',
-          message: bodyParsed.error.errors[0].message,
-        });
-      }
-
-      try {
-        const shop = await updateShop(paramsParsed.data.id, bodyParsed.data);
-        return reply.send(shop);
-      } catch (error) {
-        fastify.log.error(error);
-        if (shopNotFoundResponse(error)) {
-          return reply.status(404).send({
-            error: 'Not Found',
-            message: error instanceof Error ? error.message : 'Integracja nie istnieje',
-          });
-        }
-        return reply.status(500).send({
-          error: 'Internal Server Error',
-          message: 'Nie udało się zaktualizować integracji',
-        });
-      }
+      const params = parseShopParams(request.params);
+      const body = parseUpdateShopBody(request.body);
+      const shop = await shopsUseCases.update(params.id, body);
+      return reply.send(shop);
     }
   );
 
@@ -310,49 +235,8 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const shopId = request.params.id;
-      const { bulkStockUrl, bulkStockApiKey, defaultLeadTimeDays } = request.body ?? {};
-      try {
-        const shop = await prisma.shop.findFirst({ where: getShopAdminWhere(shopId), select: { id: true, configJson: true } });
-        if (!shop) return reply.status(404).send({ error: 'Not Found', message: 'Sklep nie znaleziony' });
-
-        const existing = (shop.configJson && typeof shop.configJson === 'object' && !Array.isArray(shop.configJson))
-          ? shop.configJson as Record<string, unknown>
-          : {};
-
-        const nextBulkStockUrl = normalizeOptionalString(bulkStockUrl);
-        const providedBulkStockApiKey = normalizeOptionalString(bulkStockApiKey);
-        const existingBulkStockApiKey = typeof existing.bulkStockApiKey === 'string'
-          ? existing.bulkStockApiKey
-          : null;
-        const nextBulkStockApiKey = bulkStockApiKey === undefined
-          ? existingBulkStockApiKey
-          : providedBulkStockApiKey
-            ? encrypt(providedBulkStockApiKey)
-            : null;
-        const nextDefaultLeadTimeDays = defaultLeadTimeDays === undefined
-          ? normalizeOptionalLeadTimeDays(existing.defaultLeadTimeDays)
-          : normalizeOptionalLeadTimeDays(defaultLeadTimeDays);
-        const defaultLeadTimeChanged = nextDefaultLeadTimeDays !== normalizeOptionalLeadTimeDays(existing.defaultLeadTimeDays);
-
-        const updated = {
-          ...existing,
-          bulkStockUrl: nextBulkStockUrl,
-          bulkStockApiKey: nextBulkStockApiKey,
-          defaultLeadTimeDays: nextDefaultLeadTimeDays,
-        };
-
-        await prisma.shop.update({ where: { id: shopId }, data: { configJson: updated } });
-        if (defaultLeadTimeChanged) {
-          stockSyncService.syncStockForShop(shopId, 'LEAD_TIME_UPDATE').catch((error) => {
-            fastify.log.error({ err: error, shopId }, 'Failed to enqueue lead time sync after bulk stock config change');
-          });
-        }
-        return reply.send({ success: true, hasBulkStock: Boolean(updated.bulkStockApiKey) });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Błąd zapisu konfiguracji bulk';
-        return reply.status(500).send({ error: 'Error', message });
-      }
+      const result = await shopsUseCases.updateBulkStockConfig(request.params.id, request.body ?? {}, fastify.log);
+      return reply.send(result);
     },
   );
 
@@ -368,78 +252,8 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const shopId = request.params.id;
-      const shop = await prisma.shop.findFirst({
-        where: getShopAdminWhere(shopId),
-        select: { id: true, baseUrl: true, configJson: true },
-      });
-      if (!shop) {
-        return reply.status(404).send({ error: 'Not Found', message: 'Sklep nie znaleziony' });
-      }
-
-      const config = (shop.configJson && typeof shop.configJson === 'object' && !Array.isArray(shop.configJson))
-        ? shop.configJson as Record<string, unknown>
-        : {};
-      const configuredUrl = normalizeOptionalString(config.bulkStockUrl);
-      const url = configuredUrl ?? buildBulkStockUrl(shop.baseUrl.replace(/\/+$/, '').replace(/\/api$/, ''));
-      const apiKey = typeof config.bulkStockApiKey === 'string' && config.bulkStockApiKey
-        ? decrypt(config.bulkStockApiKey)
-        : null;
-
-      const startedAt = Date.now();
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000);
-
-      try {
-        const headers: Record<string, string> = { Accept: 'application/json' };
-        if (apiKey) headers['X-Api-Key'] = apiKey;
-
-        const res = await fetch(url, {
-          method: 'GET',
-          headers,
-          signal: controller.signal,
-        });
-        const text = await res.text().catch(() => '');
-        const contentType = res.headers.get('content-type') ?? '';
-        const bodyPreview = text.slice(0, 400);
-        const looksJson = contentType.includes('application/json') || bodyPreview.trim().startsWith('{');
-        const expectedGet405 = res.status === 405 && looksJson;
-        const ok = looksJson && res.status !== 503;
-        const message = expectedGet405
-          ? 'Endpoint modułu jest osiągalny. GET zwrócił oczekiwane HTTP 405 JSON.'
-          : res.status === 503 && !looksJson
-            ? 'Endpoint zwraca HTML 503 przed kontrolerem modułu. Sprawdź maintenance/CDN/IP whitelist lub URL sklepu multistore.'
-            : ok
-              ? `Endpoint zwraca JSON HTTP ${res.status}; moduł prawdopodobnie odpowiada, ale oczekiwany test GET to HTTP 405.`
-              : `Endpoint nie zwrócił odpowiedzi JSON modułu. HTTP ${res.status}.`;
-
-        return reply.send({
-          ok,
-          expectedGet405,
-          status: res.status,
-          latencyMs: Date.now() - startedAt,
-          contentType,
-          url,
-          message,
-          bodyPreview,
-        });
-      } catch (error) {
-        const message = error instanceof Error
-          ? error.message
-          : 'Nie udało się połączyć z endpointem kp_bulkstock';
-        return reply.send({
-          ok: false,
-          expectedGet405: false,
-          status: 0,
-          latencyMs: Date.now() - startedAt,
-          contentType: '',
-          url,
-          message,
-          bodyPreview: '',
-        });
-      } finally {
-        clearTimeout(timeout);
-      }
+      const result = await shopsUseCases.getBulkStockDiagnostics(request.params.id);
+      return reply.send(result);
     },
   );
 
@@ -458,35 +272,9 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       },
     },
     async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
-      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
-      if (!paramsParsed.success) {
-        return reply.status(400).send({
-          error: 'Validation Error',
-          message: paramsParsed.error.errors[0].message,
-        });
-      }
-
-      try {
-        await deleteShop(paramsParsed.data.id);
-        return reply.send({
-          success: true,
-          message: 'Integracja została usunięta',
-        });
-      } catch (error) {
-        fastify.log.error(error);
-
-        if (error instanceof Error && error.message === 'Integracja nie istnieje') {
-          return reply.status(404).send({
-            error: 'Not Found',
-            message: error.message,
-          });
-        }
-
-        return reply.status(500).send({
-          error: 'Internal Server Error',
-          message: error instanceof Error ? error.message : 'Nie udało się usunąć integracji',
-        });
-      }
+      const params = parseShopParams(request.params);
+      const result = await shopsUseCases.remove(params.id);
+      return reply.send(result);
     }
   );
 
@@ -501,22 +289,9 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       },
     },
     async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
-      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
-      if (!paramsParsed.success) {
-        return reply.status(400).send({
-          error: 'Validation Error',
-          message: paramsParsed.error.errors[0].message,
-        });
-      }
-
-      try {
-        const result = await getShopImportReadiness(paramsParsed.data.id);
-        return reply.send(result);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Nie udało się sprawdzić gotowości importu';
-        const status = message.includes('nie znalezion') ? 404 : 400;
-        return reply.status(status).send({ error: 'Error', message });
-      }
+      const params = parseShopParams(request.params);
+      const result = await shopsUseCases.getImportReadiness(params.id);
+      return reply.send(result);
     }
   );
 
@@ -531,24 +306,9 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       },
     },
     async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
-      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
-      if (!paramsParsed.success) {
-        return reply.status(400).send({
-          error: 'Validation Error',
-          message: paramsParsed.error.errors[0].message,
-        });
-      }
-
-      try {
-        const result = await shopWebhookService.getShopWebhookSettings(paramsParsed.data.id);
-        return reply.send(result);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Nie udało się pobrać konfiguracji webhooka';
-        return reply.status(message === 'Shop not found' ? 404 : 500).send({
-          error: message === 'Shop not found' ? 'Not Found' : 'Internal Server Error',
-          message,
-        });
-      }
+      const params = parseShopParams(request.params);
+      const result = await shopsUseCases.getWebhookSettings(params.id);
+      return reply.send(result);
     }
   );
 
@@ -572,24 +332,9 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       request: FastifyRequest<{ Params: ShopIdParamsInput; Body: { enabled?: boolean } }>,
       reply: FastifyReply
     ) => {
-      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
-      if (!paramsParsed.success) {
-        return reply.status(400).send({
-          error: 'Validation Error',
-          message: paramsParsed.error.errors[0].message,
-        });
-      }
-
-      try {
-        const result = await shopWebhookService.updateShopWebhookSettings(paramsParsed.data.id, request.body || {});
-        return reply.send(result);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Nie udało się zapisać konfiguracji webhooka';
-        return reply.status(message === 'Shop not found' ? 404 : 500).send({
-          error: message === 'Shop not found' ? 'Not Found' : 'Internal Server Error',
-          message,
-        });
-      }
+      const params = parseShopParams(request.params);
+      const result = await shopsUseCases.updateWebhookSettings(params.id, request.body || {});
+      return reply.send(result);
     }
   );
 
@@ -604,24 +349,9 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       },
     },
     async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
-      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
-      if (!paramsParsed.success) {
-        return reply.status(400).send({
-          error: 'Validation Error',
-          message: paramsParsed.error.errors[0].message,
-        });
-      }
-
-      try {
-        const result = await shopWebhookService.rotateShopWebhookSecret(paramsParsed.data.id);
-        return reply.send(result);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Nie udało się wygenerować sekretu webhooka';
-        return reply.status(message === 'Shop not found' ? 404 : 500).send({
-          error: message === 'Shop not found' ? 'Not Found' : 'Internal Server Error',
-          message,
-        });
-      }
+      const params = parseShopParams(request.params);
+      const result = await shopsUseCases.rotateWebhookSecret(params.id);
+      return reply.send(result);
     }
   );
 
@@ -658,24 +388,9 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       request: FastifyRequest<{ Params: ShopIdParamsInput; Querystring: shopWebhookService.ShopWebhookEventsQuery }>,
       reply: FastifyReply
     ) => {
-      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
-      if (!paramsParsed.success) {
-        return reply.status(400).send({
-          error: 'Validation Error',
-          message: paramsParsed.error.errors[0].message,
-        });
-      }
-
-      try {
-        const result = await shopWebhookService.listShopWebhookEvents(paramsParsed.data.id, request.query);
-        return reply.send(result);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Nie udało się pobrać zdarzeń webhooka';
-        return reply.status(message === 'Shop not found' ? 404 : 500).send({
-          error: message === 'Shop not found' ? 'Not Found' : 'Internal Server Error',
-          message,
-        });
-      }
+      const params = parseShopParams(request.params);
+      const result = await shopsUseCases.listWebhookEvents(params.id, request.query);
+      return reply.send(result);
     }
   );
 
@@ -699,24 +414,12 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       request: FastifyRequest<{ Params: ShopIdParamsInput & { eventId: string } }>,
       reply: FastifyReply
     ) => {
-      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
-      if (!paramsParsed.success || !request.params.eventId) {
-        return reply.status(400).send({
-          error: 'Validation Error',
-          message: paramsParsed.success ? 'eventId is required' : paramsParsed.error.errors[0].message,
-        });
+      const params = parseShopParams(request.params);
+      if (!request.params.eventId) {
+        throw new ValidationError('eventId is required');
       }
-
-      try {
-        const result = await shopWebhookService.reprocessShopWebhookEvent(paramsParsed.data.id, request.params.eventId);
-        return reply.send(result);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Nie udało się ponowić zdarzenia webhooka';
-        return reply.status(message.includes('not found') ? 404 : 500).send({
-          error: message.includes('not found') ? 'Not Found' : 'Internal Server Error',
-          message,
-        });
-      }
+      const result = await shopsUseCases.reprocessWebhookEvent(params.id, request.params.eventId);
+      return reply.send(result);
     }
   );
 
@@ -734,30 +437,9 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       },
     },
     async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
-      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
-      if (!paramsParsed.success) {
-        return reply.status(400).send({
-          error: 'Validation Error',
-          message: paramsParsed.error.errors[0].message,
-        });
-      }
-
-      try {
-        const result = await testShopConnection(paramsParsed.data.id);
-        return reply.send(result);
-      } catch (error) {
-        fastify.log.error(error);
-        if (shopNotFoundResponse(error)) {
-          return reply.status(404).send({
-            error: 'Not Found',
-            message: error instanceof Error ? error.message : 'Integracja nie istnieje',
-          });
-        }
-        return reply.status(500).send({
-          error: 'Internal Server Error',
-          message: error instanceof Error ? error.message : 'Nie udało się przetestować połączenia',
-        });
-      }
+      const params = parseShopParams(request.params);
+      const result = await shopsUseCases.testConnection(params.id);
+      return reply.send(result);
     }
   );
 
@@ -798,39 +480,12 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       }>,
       reply: FastifyReply
     ) => {
-      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
-      if (!paramsParsed.success) {
-        return reply.status(400).send({
-          error: 'Validation Error',
-          message: paramsParsed.error.errors[0].message,
-        });
-      }
-
-      try {
-        await assertShopAdminAccess(paramsParsed.data.id);
-        const wait = request.query.wait === true || request.query.wait === 'true';
-        const body = request.body ?? {};
-        fastify.log.info({ shopId: paramsParsed.data.id, wait, ...body }, 'Manual sync triggered');
-        const result = await triggerManualSync(paramsParsed.data.id, {
-          wait,
-          fromDate: body.fromDate,
-          fromOrderId: body.fromOrderId,
-          limit: body.limit,
-        });
-        return reply.send(result);
-      } catch (error) {
-        fastify.log.error(error);
-        if (shopNotFoundResponse(error)) {
-          return reply.status(404).send({
-            error: 'Not Found',
-            message: error instanceof Error ? error.message : 'Integracja nie istnieje',
-          });
-        }
-        return reply.status(500).send({
-          error: 'Internal Server Error',
-          message: error instanceof Error ? error.message : 'Nie udało się zsynchronizować zamówień',
-        });
-      }
+      const params = parseShopParams(request.params);
+      const result = await shopsUseCases.triggerManualSync(params.id, {
+        wait: request.query.wait,
+        ...request.body,
+      }, fastify.log);
+      return reply.send(result);
     }
   );
 
@@ -846,34 +501,9 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       },
     },
     async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
-      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
-      if (!paramsParsed.success) {
-        return reply.status(400).send({
-          error: 'Validation Error',
-          message: paramsParsed.error.errors[0].message,
-        });
-      }
-
-      try {
-        await assertShopAdminAccess(paramsParsed.data.id);
-        await enableShopSync(paramsParsed.data.id);
-        return reply.send({
-          success: true,
-          message: 'Auto-sync włączona dla sklepu',
-        });
-      } catch (error) {
-        fastify.log.error(error);
-        if (shopNotFoundResponse(error)) {
-          return reply.status(404).send({
-            error: 'Not Found',
-            message: error instanceof Error ? error.message : 'Integracja nie istnieje',
-          });
-        }
-        return reply.status(500).send({
-          error: 'Internal Server Error',
-          message: error instanceof Error ? error.message : 'Nie udało się włączyć auto-sync',
-        });
-      }
+      const params = parseShopParams(request.params);
+      const result = await shopsUseCases.enableSync(params.id);
+      return reply.send(result);
     }
   );
 
@@ -889,34 +519,9 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       },
     },
     async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
-      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
-      if (!paramsParsed.success) {
-        return reply.status(400).send({
-          error: 'Validation Error',
-          message: paramsParsed.error.errors[0].message,
-        });
-      }
-
-      try {
-        await assertShopAdminAccess(paramsParsed.data.id);
-        await disableShopSync(paramsParsed.data.id);
-        return reply.send({
-          success: true,
-          message: 'Auto-sync wyłączona dla sklepu',
-        });
-      } catch (error) {
-        fastify.log.error(error);
-        if (shopNotFoundResponse(error)) {
-          return reply.status(404).send({
-            error: 'Not Found',
-            message: error instanceof Error ? error.message : 'Integracja nie istnieje',
-          });
-        }
-        return reply.status(500).send({
-          error: 'Internal Server Error',
-          message: error instanceof Error ? error.message : 'Nie udało się wyłączyć auto-sync',
-        });
-      }
+      const params = parseShopParams(request.params);
+      const result = await shopsUseCases.disableSync(params.id);
+      return reply.send(result);
     }
   );
 
@@ -942,42 +547,9 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       request: FastifyRequest<{ Params: ShopIdParamsInput; Body: { intervalMinutes: number } }>,
       reply: FastifyReply
     ) => {
-      const paramsParsed = shopIdParamsSchema.safeParse(request.params);
-      if (!paramsParsed.success) {
-        return reply.status(400).send({
-          error: 'Validation Error',
-          message: paramsParsed.error.errors[0].message,
-        });
-      }
-
-      const { intervalMinutes } = request.body;
-      if (typeof intervalMinutes !== 'number' || intervalMinutes < 5 || intervalMinutes > 1440) {
-        return reply.status(400).send({
-          error: 'Validation Error',
-          message: 'Interval musi być liczbą między 5 a 1440 minut',
-        });
-      }
-
-      try {
-        await assertShopAdminAccess(paramsParsed.data.id);
-        await updateShopSyncInterval(paramsParsed.data.id, intervalMinutes);
-        return reply.send({
-          success: true,
-          message: `Interwał synchronizacji zmieniony na ${intervalMinutes} minut`,
-        });
-      } catch (error) {
-        fastify.log.error(error);
-        if (shopNotFoundResponse(error)) {
-          return reply.status(404).send({
-            error: 'Not Found',
-            message: error instanceof Error ? error.message : 'Integracja nie istnieje',
-          });
-        }
-        return reply.status(500).send({
-          error: 'Internal Server Error',
-          message: error instanceof Error ? error.message : 'Nie udało się zmienić interwału',
-        });
-      }
+      const params = parseShopParams(request.params);
+      const result = await shopsUseCases.updateSyncInterval(params.id, request.body.intervalMinutes);
+      return reply.send(result);
     }
   );
 }

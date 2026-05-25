@@ -44,6 +44,8 @@ export async function authRoutes(fastify: FastifyInstance) {
           200: {
             type: 'object',
             properties: {
+              accessToken: { type: 'string' },
+              refreshToken: { type: 'string' },
               user: {
                 type: 'object',
                 properties: {
@@ -87,7 +89,11 @@ export async function authRoutes(fastify: FastifyInstance) {
           refreshToken: result.refreshToken,
         });
 
-        return reply.send({ user: result.user });
+        return reply.send({
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+          user: result.user,
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Błąd logowania';
         return reply.status(401).send({
@@ -120,6 +126,8 @@ export async function authRoutes(fastify: FastifyInstance) {
             type: 'object',
             properties: {
               success: { type: 'boolean' },
+              accessToken: { type: 'string' },
+              refreshToken: { type: 'string' },
             },
           },
           401: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
@@ -151,7 +159,11 @@ export async function authRoutes(fastify: FastifyInstance) {
           refreshToken: result.refreshToken,
         });
 
-        return reply.send({ success: true });
+        return reply.send({
+          success: true,
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Błąd odświeżania tokenu';
         return reply.status(401).send({

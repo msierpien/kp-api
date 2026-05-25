@@ -10,8 +10,10 @@ import {
   type ShopIdParamsInput,
 } from '../../schemas/admin.schema';
 import {
+  assertShopAdminAccess,
   createShop,
   deleteShop,
+  getShopAdminWhere,
   getPrestaShopCategories,
   getShopImportReadiness,
   listShops,
@@ -134,6 +136,11 @@ const webhookEventSchema = {
   },
   additionalProperties: true,
 };
+
+function shopNotFoundResponse(error: unknown) {
+  const message = error instanceof Error ? error.message : '';
+  return message === 'Shop not found' || message === 'Integracja nie istnieje' || message.includes('nie znalezion');
+}
 
 export async function shopsRoutes(fastify: FastifyInstance) {
   // GET /admin/shops
@@ -270,6 +277,12 @@ export async function shopsRoutes(fastify: FastifyInstance) {
         return reply.send(shop);
       } catch (error) {
         fastify.log.error(error);
+        if (shopNotFoundResponse(error)) {
+          return reply.status(404).send({
+            error: 'Not Found',
+            message: error instanceof Error ? error.message : 'Integracja nie istnieje',
+          });
+        }
         return reply.status(500).send({
           error: 'Internal Server Error',
           message: 'Nie udało się zaktualizować integracji',
@@ -300,7 +313,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       const shopId = request.params.id;
       const { bulkStockUrl, bulkStockApiKey, defaultLeadTimeDays } = request.body ?? {};
       try {
-        const shop = await prisma.shop.findUnique({ where: { id: shopId }, select: { id: true, configJson: true } });
+        const shop = await prisma.shop.findFirst({ where: getShopAdminWhere(shopId), select: { id: true, configJson: true } });
         if (!shop) return reply.status(404).send({ error: 'Not Found', message: 'Sklep nie znaleziony' });
 
         const existing = (shop.configJson && typeof shop.configJson === 'object' && !Array.isArray(shop.configJson))
@@ -356,8 +369,8 @@ export async function shopsRoutes(fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const shopId = request.params.id;
-      const shop = await prisma.shop.findUnique({
-        where: { id: shopId },
+      const shop = await prisma.shop.findFirst({
+        where: getShopAdminWhere(shopId),
         select: { id: true, baseUrl: true, configJson: true },
       });
       if (!shop) {
@@ -734,6 +747,12 @@ export async function shopsRoutes(fastify: FastifyInstance) {
         return reply.send(result);
       } catch (error) {
         fastify.log.error(error);
+        if (shopNotFoundResponse(error)) {
+          return reply.status(404).send({
+            error: 'Not Found',
+            message: error instanceof Error ? error.message : 'Integracja nie istnieje',
+          });
+        }
         return reply.status(500).send({
           error: 'Internal Server Error',
           message: error instanceof Error ? error.message : 'Nie udało się przetestować połączenia',
@@ -788,6 +807,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       }
 
       try {
+        await assertShopAdminAccess(paramsParsed.data.id);
         const wait = request.query.wait === true || request.query.wait === 'true';
         const body = request.body ?? {};
         fastify.log.info({ shopId: paramsParsed.data.id, wait, ...body }, 'Manual sync triggered');
@@ -800,6 +820,12 @@ export async function shopsRoutes(fastify: FastifyInstance) {
         return reply.send(result);
       } catch (error) {
         fastify.log.error(error);
+        if (shopNotFoundResponse(error)) {
+          return reply.status(404).send({
+            error: 'Not Found',
+            message: error instanceof Error ? error.message : 'Integracja nie istnieje',
+          });
+        }
         return reply.status(500).send({
           error: 'Internal Server Error',
           message: error instanceof Error ? error.message : 'Nie udało się zsynchronizować zamówień',
@@ -829,6 +855,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       }
 
       try {
+        await assertShopAdminAccess(paramsParsed.data.id);
         await enableShopSync(paramsParsed.data.id);
         return reply.send({
           success: true,
@@ -836,6 +863,12 @@ export async function shopsRoutes(fastify: FastifyInstance) {
         });
       } catch (error) {
         fastify.log.error(error);
+        if (shopNotFoundResponse(error)) {
+          return reply.status(404).send({
+            error: 'Not Found',
+            message: error instanceof Error ? error.message : 'Integracja nie istnieje',
+          });
+        }
         return reply.status(500).send({
           error: 'Internal Server Error',
           message: error instanceof Error ? error.message : 'Nie udało się włączyć auto-sync',
@@ -865,6 +898,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       }
 
       try {
+        await assertShopAdminAccess(paramsParsed.data.id);
         await disableShopSync(paramsParsed.data.id);
         return reply.send({
           success: true,
@@ -872,6 +906,12 @@ export async function shopsRoutes(fastify: FastifyInstance) {
         });
       } catch (error) {
         fastify.log.error(error);
+        if (shopNotFoundResponse(error)) {
+          return reply.status(404).send({
+            error: 'Not Found',
+            message: error instanceof Error ? error.message : 'Integracja nie istnieje',
+          });
+        }
         return reply.status(500).send({
           error: 'Internal Server Error',
           message: error instanceof Error ? error.message : 'Nie udało się wyłączyć auto-sync',
@@ -919,6 +959,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       }
 
       try {
+        await assertShopAdminAccess(paramsParsed.data.id);
         await updateShopSyncInterval(paramsParsed.data.id, intervalMinutes);
         return reply.send({
           success: true,
@@ -926,6 +967,12 @@ export async function shopsRoutes(fastify: FastifyInstance) {
         });
       } catch (error) {
         fastify.log.error(error);
+        if (shopNotFoundResponse(error)) {
+          return reply.status(404).send({
+            error: 'Not Found',
+            message: error instanceof Error ? error.message : 'Integracja nie istnieje',
+          });
+        }
         return reply.status(500).send({
           error: 'Internal Server Error',
           message: error instanceof Error ? error.message : 'Nie udało się zmienić interwału',

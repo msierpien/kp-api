@@ -1,12 +1,51 @@
 /// <reference lib="dom" />
+import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { encrypt, decrypt } from '../../lib/encryption';
 import { config as appConfig } from '../../config';
 import type { CreateShopInput, UpdateShopInput } from '../../schemas/admin.schema';
-import type { ShopItem } from '../../types';
+import type { ShopItem, UserRole } from '../../types';
 import { removeShopFromScheduler } from '../scheduler/scheduler.service';
-import { getTenantContext, getTenantId } from '../../lib/tenant-context';
+import { getTenantContext } from '../../lib/tenant-context';
 import { PrestaShopClient } from '../prestashop/prestashop-client';
+
+type ShopTenantScopeContext = {
+  tenantId?: string | null;
+  role?: UserRole | null;
+  overrideTenantId?: string | null;
+};
+
+export function resolveShopTenantWhereForContext(context: ShopTenantScopeContext | null): Prisma.ShopWhereInput {
+  if (context?.role === 'SUPER_ADMIN') {
+    return context.overrideTenantId ? { tenantId: context.overrideTenantId } : {};
+  }
+
+  if (!context?.tenantId) {
+    throw new Error('Brak kontekstu tenanta');
+  }
+
+  return { tenantId: context.tenantId };
+}
+
+export function getShopAdminWhere(id?: string): Prisma.ShopWhereInput {
+  return {
+    ...(id ? { id } : {}),
+    ...resolveShopTenantWhereForContext(getTenantContext()),
+  };
+}
+
+export async function assertShopAdminAccess(id: string) {
+  const shop = await prisma.shop.findFirst({
+    where: getShopAdminWhere(id),
+    select: { id: true },
+  });
+
+  if (!shop) {
+    throw new Error('Shop not found');
+  }
+
+  return shop;
+}
 
 const mapShop = (shop: any): ShopItem => {
   const configJson = (shop.configJson as any) || {};
@@ -70,6 +109,7 @@ function resolvePrestaShopShopId(configJson: Record<string, any>) {
 
 export async function listShops(): Promise<ShopItem[]> {
   const shops = await prisma.shop.findMany({
+    where: getShopAdminWhere(),
     orderBy: { createdAt: 'desc' },
   });
 
@@ -110,6 +150,8 @@ export async function createShop(input: CreateShopInput): Promise<ShopItem> {
 }
 
 export async function updateShop(id: string, input: UpdateShopInput): Promise<ShopItem> {
+  await assertShopAdminAccess(id);
+
   const shop = await prisma.shop.update({
     where: { id },
     data: {
@@ -127,8 +169,8 @@ export async function updateShop(id: string, input: UpdateShopInput): Promise<Sh
 }
 
 export async function deleteShop(id: string): Promise<void> {
-  const shop = await prisma.shop.findUnique({
-    where: { id },
+  const shop = await prisma.shop.findFirst({
+    where: getShopAdminWhere(id),
     select: {
       id: true,
       syncEnabled: true,
@@ -149,7 +191,7 @@ export async function deleteShop(id: string): Promise<void> {
 }
 
 export async function testShopConnection(id: string) {
-  const shop = await prisma.shop.findUnique({ where: { id } });
+  const shop = await prisma.shop.findFirst({ where: getShopAdminWhere(id) });
   if (!shop) {
     throw new Error('Shop not found');
   }
@@ -271,21 +313,15 @@ export async function testShopConnection(id: string) {
 }
 
 export async function getShopImportReadiness(id: string) {
-  const tenantId = getTenantId();
-  const context = getTenantContext();
-  if (!tenantId && context?.role !== 'SUPER_ADMIN') throw new Error('Brak kontekstu tenanta');
-
   const shop = await prisma.shop.findFirst({
-    where: {
-      id,
-      ...(tenantId ? { tenantId } : {}),
-    },
+    where: getShopAdminWhere(id),
   });
   if (!shop) throw new Error('Sklep nie znaleziony');
 
+  const tenantId = shop.tenantId;
   const mappingWhere = {
     shopId: shop.id,
-    ...(tenantId ? { tenantId } : {}),
+    tenantId,
   };
 
   const [
@@ -341,15 +377,8 @@ export async function getShopImportReadiness(id: string) {
 }
 
 export async function getPrestaShopCategories(id: string) {
-  const tenantId = getTenantId();
-  const context = getTenantContext();
-  if (!tenantId && context?.role !== 'SUPER_ADMIN') throw new Error('Brak kontekstu tenanta');
-
   const shop = await prisma.shop.findFirst({
-    where: {
-      id,
-      ...(tenantId ? { tenantId } : {}),
-    },
+    where: getShopAdminWhere(id),
   });
   if (!shop) throw new Error('Sklep nie znaleziony');
   if (shop.status !== 'ACTIVE') throw new Error('Sklep jest nieaktywny');

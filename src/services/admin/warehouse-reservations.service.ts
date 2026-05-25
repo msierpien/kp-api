@@ -138,6 +138,10 @@ async function getWarehouseSettings(tx: Tx, tenantId: string) {
   };
 }
 
+async function lockOrderForReservation(tx: Tx, orderId: string) {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`order-reservation:${orderId}`}, 0))`;
+}
+
 async function adjustProductStock(tx: Tx, productId: string, delta: Prisma.Decimal) {
   if (delta.equals(0)) return;
 
@@ -212,6 +216,8 @@ export async function createReservation(input: CreateReservationInput) {
   const quantity = toPositiveDecimal(input.quantity);
 
   return prisma.$transaction(async (tx) => {
+    await lockOrderForReservation(tx, input.orderId);
+
     const product = await tx.warehouseProduct.findFirst({
       where: {
         id: input.warehouseProductId,
@@ -269,6 +275,8 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
   const contextTenantId = getTenantId();
 
   const result = await prisma.$transaction(async (tx) => {
+    await lockOrderForReservation(tx, orderId);
+
     const order = await tx.order.findFirst({
       where: {
         id: orderId,
@@ -502,6 +510,8 @@ export async function releaseOrderReservations(orderId: string): Promise<OrderRe
   const contextTenantId = getTenantId();
 
   const result = await prisma.$transaction(async (tx) => {
+    await lockOrderForReservation(tx, orderId);
+
     const order = await tx.order.findFirst({
       where: {
         id: orderId,

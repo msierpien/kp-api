@@ -325,6 +325,59 @@ async function getProductShippingPreview(productId: string, tenantId: string | n
   };
 }
 
+export async function getInventorySnapshot(productId: string) {
+  const tenantId = getTenantId();
+  const where: any = { id: productId };
+  if (tenantId) where.tenantId = tenantId;
+
+  const product = await prisma.warehouseProduct.findFirst({
+    where,
+    select: { id: true, sku: true, name: true, unit: true, currentStock: true, tenantId: true },
+  });
+  if (!product) return null;
+
+  const activeReservations = await prisma.warehouseReservation.findMany({
+    where: {
+      tenantId: product.tenantId,
+      warehouseProductId: product.id,
+      status: 'ACTIVE',
+    },
+    orderBy: { createdAt: 'asc' },
+    include: {
+      order: { select: { id: true, orderReference: true, externalOrderId: true } },
+      orderItem: { select: { id: true, productNameSnapshot: true } },
+    },
+  });
+
+  const totalReserved = activeReservations.reduce(
+    (sum, reservation) => sum.plus(reservation.quantity),
+    new Prisma.Decimal(0),
+  );
+
+  const currentStock = new Prisma.Decimal(product.currentStock);
+  const availableStock = currentStock.minus(totalReserved);
+
+  return {
+    productId: product.id,
+    sku: product.sku,
+    name: product.name,
+    unit: product.unit,
+    currentStock: Number(currentStock),
+    totalReserved: Number(totalReserved),
+    availableStock: Number(availableStock),
+    activeReservations: activeReservations.map((reservation) => ({
+      id: reservation.id,
+      orderId: reservation.orderId,
+      orderReference: reservation.order.orderReference,
+      externalOrderId: reservation.order.externalOrderId,
+      orderItemId: reservation.orderItemId,
+      orderItemName: reservation.orderItem?.productNameSnapshot ?? null,
+      quantity: Number(reservation.quantity),
+      createdAt: reservation.createdAt,
+    })),
+  };
+}
+
 export async function createProduct(input: CreateProductInput) {
   const tenantId = getTenantId();
   if (!tenantId) throw new Error('Brak kontekstu tenanta');

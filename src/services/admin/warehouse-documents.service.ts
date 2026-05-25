@@ -6,13 +6,15 @@ import { consumeDocumentReservations, releaseDocumentReservations, reserveOrder 
 
 // ─── Documents ───────────────────────────────────────────────────────────────
 
-export type DocumentType = 'PZ' | 'PW' | 'WZ' | 'RW';
+export type DocumentType = 'PZ' | 'PW' | 'WZ' | 'RW' | 'INW';
 const STOCK_INCOMING_TYPES: DocumentType[] = ['PZ', 'PW'];
 const STOCK_OUTGOING_TYPES: DocumentType[] = ['WZ', 'RW'];
 
 export interface DocumentItemInput {
   productId: string;
   quantity?: number;
+  /** Wymagany tylko dla INW: snapshot stanu systemowego z momentu wpisania pozycji. Jeśli null, serwis bierze bieżący `currentStock`. */
+  systemQuantity?: number | null;
   barcodeId?: string;
   scannedEan?: string;
   baseQuantity?: number;
@@ -41,6 +43,8 @@ export interface UpdateDocumentInput {
 
 export interface UpdateDocumentItemInput {
   quantity?: number;
+  /** Tylko INW: aktualizacja snapshotu stanu systemowego (np. po wyborze "odśwież snapshot"). */
+  systemQuantity?: number | null;
   baseQuantity?: number | null;
   quantityMultiplier?: number | null;
   unitPrice?: number | null;
@@ -69,6 +73,7 @@ export interface DocumentsQuery {
 interface PreparedDocumentItem {
   productId: string;
   quantity: number;
+  systemQuantity?: number | null;
   barcodeId?: string;
   scannedEan?: string;
   baseQuantity?: number;
@@ -122,7 +127,7 @@ export async function createDocument(input: CreateDocumentInput) {
   const tenantId = getTenantId();
   if (!tenantId) throw new Error('Brak kontekstu tenanta');
 
-  const preparedItems = await prepareDocumentItems(tenantId, input.items, true);
+  const preparedItems = await prepareDocumentItems(tenantId, input.items, true, input.type);
   const context = getTenantContext();
 
   return prisma.$transaction(async (tx) => {
@@ -144,6 +149,7 @@ export async function createDocument(input: CreateDocumentInput) {
           create: preparedItems.map((item) => ({
             productId: item.productId,
             quantity: item.quantity,
+            systemQuantity: item.systemQuantity ?? null,
             barcodeId: item.barcodeId,
             scannedEan: item.scannedEan,
             baseQuantity: item.baseQuantity,
@@ -285,23 +291,24 @@ export async function updateDocument(id: string, input: UpdateDocumentInput) {
   if (input.orderId !== undefined) data.orderId = input.orderId;
 
   if (input.items) {
-    const preparedItems = await prepareDocumentItems(tenantId ?? doc.tenantId, input.items, true);
+    const preparedItems = await prepareDocumentItems(tenantId ?? doc.tenantId, input.items, true, doc.type as DocumentType);
 
     await prisma.warehouseDocumentItem.deleteMany({ where: { documentId: id } });
     data.items = {
       create: preparedItems.map((item) => ({
         productId: item.productId,
         quantity: item.quantity,
+        systemQuantity: item.systemQuantity ?? null,
         barcodeId: item.barcodeId,
         scannedEan: item.scannedEan,
         baseQuantity: item.baseQuantity,
-            quantityMultiplier: item.quantityMultiplier,
-            unitPrice: item.unitPrice,
-            notes: item.notes,
-            reservationId: item.reservationId,
-          })),
-        };
-      }
+        quantityMultiplier: item.quantityMultiplier,
+        unitPrice: item.unitPrice,
+        notes: item.notes,
+        reservationId: item.reservationId,
+      })),
+    };
+  }
 
   return prisma.warehouseDocument.update({
     where: { id },
@@ -319,39 +326,54 @@ export async function mergeDocumentItem(documentId: string, input: DocumentItemI
   if (!doc) throw new Error('Dokument nie znaleziony');
   if (doc.status !== 'DRAFT') throw new Error('Można edytować tylko dokumenty w statusie DRAFT');
 
-  const [preparedItem] = await prepareDocumentItems(tenantId ?? doc.tenantId, [input], true);
+  const [preparedItem] = await prepareDocumentItems(tenantId ?? doc.tenantId, [input], true, doc.type as DocumentType);
   if (!preparedItem) throw new Error('Pozycja dokumentu jest wymagana');
+
+  const isInventory = doc.type === 'INW';
 
   const updatedDocument = await prisma.$transaction(async (tx) => {
     const existingItem = await tx.warehouseDocumentItem.findFirst({
       where: {
         documentId,
         productId: preparedItem.productId,
-        barcodeId: preparedItem.barcodeId ?? null,
+        ...(isInventory ? {} : { barcodeId: preparedItem.barcodeId ?? null }),
       },
     });
 
     if (existingItem) {
-      await tx.warehouseDocumentItem.update({
-        where: { id: existingItem.id },
-        data: {
-          quantity: new Prisma.Decimal(existingItem.quantity).plus(preparedItem.quantity),
-          baseQuantity:
-            existingItem.baseQuantity || preparedItem.baseQuantity
-              ? new Prisma.Decimal(existingItem.baseQuantity ?? 0).plus(preparedItem.baseQuantity ?? 0)
-              : null,
-          quantityMultiplier: existingItem.quantityMultiplier ?? preparedItem.quantityMultiplier,
-          scannedEan: existingItem.scannedEan ?? preparedItem.scannedEan,
-          unitPrice: existingItem.unitPrice ?? preparedItem.unitPrice,
-          notes: existingItem.notes || preparedItem.notes,
-        },
-      });
+      if (isInventory) {
+        await tx.warehouseDocumentItem.update({
+          where: { id: existingItem.id },
+          data: {
+            quantity: preparedItem.quantity,
+            systemQuantity: preparedItem.systemQuantity ?? null,
+            scannedEan: preparedItem.scannedEan ?? existingItem.scannedEan,
+            notes: preparedItem.notes ?? existingItem.notes,
+          },
+        });
+      } else {
+        await tx.warehouseDocumentItem.update({
+          where: { id: existingItem.id },
+          data: {
+            quantity: new Prisma.Decimal(existingItem.quantity).plus(preparedItem.quantity),
+            baseQuantity:
+              existingItem.baseQuantity || preparedItem.baseQuantity
+                ? new Prisma.Decimal(existingItem.baseQuantity ?? 0).plus(preparedItem.baseQuantity ?? 0)
+                : null,
+            quantityMultiplier: existingItem.quantityMultiplier ?? preparedItem.quantityMultiplier,
+            scannedEan: existingItem.scannedEan ?? preparedItem.scannedEan,
+            unitPrice: existingItem.unitPrice ?? preparedItem.unitPrice,
+            notes: existingItem.notes || preparedItem.notes,
+          },
+        });
+      }
     } else {
       await tx.warehouseDocumentItem.create({
         data: {
           documentId,
           productId: preparedItem.productId,
           quantity: preparedItem.quantity,
+          systemQuantity: preparedItem.systemQuantity ?? null,
           barcodeId: preparedItem.barcodeId,
           scannedEan: preparedItem.scannedEan,
           baseQuantity: preparedItem.baseQuantity,
@@ -384,10 +406,21 @@ export async function updateDocumentItem(documentId: string, itemId: string, inp
   const item = await prisma.warehouseDocumentItem.findFirst({ where: { id: itemId, documentId } });
   if (!item) throw new Error('Pozycja dokumentu nie znaleziona');
 
+  const isInventory = doc.type === 'INW';
+
   const data: Prisma.WarehouseDocumentItemUpdateInput = {};
   if (input.quantity !== undefined) {
-    if (input.quantity <= 0) throw new Error('Ilość pozycji musi być większa od 0');
+    if (isInventory) {
+      if (input.quantity < 0) throw new Error('Stan policzony nie może być ujemny');
+    } else if (input.quantity <= 0) {
+      throw new Error('Ilość pozycji musi być większa od 0');
+    }
     data.quantity = input.quantity;
+  }
+  if (input.systemQuantity !== undefined) {
+    if (!isInventory) throw new Error('Stan systemowy można aktualizować tylko w dokumencie INW');
+    if (input.systemQuantity !== null && input.systemQuantity < 0) throw new Error('Stan systemowy nie może być ujemny');
+    data.systemQuantity = input.systemQuantity;
   }
   if (input.baseQuantity !== undefined) {
     if (input.baseQuantity !== null && input.baseQuantity <= 0) throw new Error('Ilość bazowa musi być większa od 0');
@@ -478,8 +511,17 @@ export async function confirmDocument(id: string) {
 async function assertCanConfirmWithoutNegativeStock(
   tenantId: string,
   type: DocumentType,
-  items: Array<{ productId: string; quantity: Prisma.Decimal; reservationId?: string | null; product: { name: string; unit: string } }>,
+  items: Array<{ productId: string; quantity: Prisma.Decimal; systemQuantity?: Prisma.Decimal | null; reservationId?: string | null; product: { name: string; unit: string } }>,
 ) {
+  if (type === 'INW') {
+    for (const item of items) {
+      if (Number(item.quantity) < 0) {
+        throw new Error(`Stan policzony produktu "${item.product.name}" nie może być ujemny`);
+      }
+    }
+    return;
+  }
+
   if (!['WZ', 'RW'].includes(type)) return;
 
   const settings = await getWarehouseSettings(tenantId);
@@ -564,6 +606,10 @@ async function calculateProductStock(tenantId: string, productId: string) {
     const quantity = Number(item.quantity);
     if (['PZ', 'PW'].includes(item.document.type)) return stock + quantity;
     if (['WZ', 'RW'].includes(item.document.type)) return stock - quantity;
+    if (item.document.type === 'INW') {
+      const systemQuantity = item.systemQuantity != null ? Number(item.systemQuantity) : 0;
+      return stock + (quantity - systemQuantity);
+    }
     return stock;
   }, 0);
   const reservedStock = activeReservations.reduce((sum, reservation) => sum + Number(reservation.quantity), 0);
@@ -628,15 +674,31 @@ async function prepareDocumentItems(
   tenantId: string,
   items: DocumentItemInput[],
   requireActiveProduct: boolean,
+  type?: DocumentType,
 ): Promise<PreparedDocumentItem[]> {
+  const isInventory = type === 'INW';
   const preparedItems: PreparedDocumentItem[] = [];
   const productIds = Array.from(new Set(items.map((item) => item.productId).filter(Boolean)));
   const barcodeIds = Array.from(new Set(items.map((item) => item.barcodeId).filter(Boolean) as string[]));
 
+  if (isInventory) {
+    const seen = new Set<string>();
+    for (const item of items) {
+      if (seen.has(item.productId)) {
+        throw new Error('W dokumencie INW każdy produkt może wystąpić tylko raz');
+      }
+      seen.add(item.productId);
+    }
+  }
+
+  const productSelect = isInventory
+    ? { id: true, name: true, isActive: true, currentStock: true }
+    : { id: true, name: true, isActive: true };
+
   const [products, barcodes] = await Promise.all([
     prisma.warehouseProduct.findMany({
       where: { id: { in: productIds }, tenantId },
-      select: { id: true, name: true, isActive: true },
+      select: productSelect,
     }),
     barcodeIds.length > 0
       ? prisma.warehouseProductBarcode.findMany({
@@ -652,7 +714,7 @@ async function prepareDocumentItems(
       : Promise.resolve([]),
   ]);
 
-  const productById = new Map(products.map((product) => [product.id, product]));
+  const productById = new Map(products.map((product) => [product.id, product as typeof product & { currentStock?: Prisma.Decimal }]));
   const barcodeById = new Map(barcodes.map((barcode) => [barcode.id, barcode]));
 
   for (const item of items) {
@@ -675,18 +737,38 @@ async function prepareDocumentItems(
       quantityMultiplier = quantityMultiplier ?? Number(barcode.quantityMultiplier);
     }
 
+    const minQuantity = isInventory ? 0 : 0; // próg dolny włącznie — INW dopuszcza 0
+    const requireStrictPositive = !isInventory;
+
     const baseQuantity = item.baseQuantity ?? item.quantity;
-    if (baseQuantity === undefined || baseQuantity <= 0) throw new Error('Ilość pozycji musi być większa od 0');
+    if (baseQuantity === undefined || (requireStrictPositive ? baseQuantity <= 0 : baseQuantity < minQuantity)) {
+      throw new Error(isInventory ? 'Stan policzony nie może być ujemny' : 'Ilość pozycji musi być większa od 0');
+    }
 
     quantityMultiplier = quantityMultiplier ?? 1;
     if (quantityMultiplier <= 0) throw new Error('Przelicznik EAN musi być większy od 0');
 
     const quantity = item.quantity ?? baseQuantity * quantityMultiplier;
-    if (quantity <= 0) throw new Error('Ilość pozycji musi być większa od 0');
+    if (requireStrictPositive ? quantity <= 0 : quantity < minQuantity) {
+      throw new Error(isInventory ? 'Stan policzony nie może być ujemny' : 'Ilość pozycji musi być większa od 0');
+    }
+
+    let systemQuantity: number | null | undefined;
+    if (isInventory) {
+      if (item.systemQuantity === null || item.systemQuantity === undefined) {
+        systemQuantity = Number(product.currentStock ?? 0);
+      } else {
+        systemQuantity = Number(item.systemQuantity);
+        if (!Number.isFinite(systemQuantity)) {
+          throw new Error('Stan systemowy jest nieprawidłowy');
+        }
+      }
+    }
 
     preparedItems.push({
       productId: item.productId,
       quantity,
+      systemQuantity,
       barcodeId,
       scannedEan,
       baseQuantity,
@@ -703,9 +785,27 @@ async function prepareDocumentItems(
 async function applyStockDeltas(
   tx: Prisma.TransactionClient,
   type: DocumentType,
-  items: Array<{ productId: string; quantity: Prisma.Decimal; reservationId?: string | null }>,
+  items: Array<{ productId: string; quantity: Prisma.Decimal; systemQuantity?: Prisma.Decimal | null; reservationId?: string | null }>,
   reverse = false,
 ) {
+  if (type === 'INW') {
+    const deltas = new Map<string, Prisma.Decimal>();
+    for (const item of items) {
+      const counted = new Prisma.Decimal(item.quantity);
+      const system = new Prisma.Decimal(item.systemQuantity ?? 0);
+      const delta = reverse ? system.minus(counted) : counted.minus(system);
+      deltas.set(item.productId, (deltas.get(item.productId) ?? new Prisma.Decimal(0)).plus(delta));
+    }
+    for (const [productId, delta] of deltas) {
+      if (delta.equals(0)) continue;
+      await tx.warehouseProduct.update({
+        where: { id: productId },
+        data: { currentStock: { increment: delta } },
+      });
+    }
+    return;
+  }
+
   const baseSign = getStockDeltaSign(type);
   if (baseSign === 0) return;
 

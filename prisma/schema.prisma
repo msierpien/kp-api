@@ -601,10 +601,11 @@ model AuditLog {
 // ============================================
 
 enum WarehouseDocumentType {
-  PZ // Przyjęcie Zewnętrzne (od dostawcy)
-  PW // Przyjęcie Wewnętrzne (np. z produkcji)
-  WZ // Wydanie Zewnętrzne (do klienta)
-  RW // Rozchód Wewnętrzny (zużycie)
+  PZ  // Przyjęcie Zewnętrzne (od dostawcy)
+  PW  // Przyjęcie Wewnętrzne (np. z produkcji)
+  WZ  // Wydanie Zewnętrzne (do klienta)
+  RW  // Rozchód Wewnętrzny (zużycie)
+  INW // Inwentaryzacja (korekta stanu na bazie spisu)
 }
 
 enum WarehouseDocumentStatus {
@@ -864,6 +865,7 @@ model WarehouseDocumentItem {
   scannedEan         String?  @map("scanned_ean")
   baseQuantity       Decimal? @map("base_quantity") @db.Decimal(10, 3)
   quantityMultiplier Decimal? @map("quantity_multiplier") @db.Decimal(10, 3)
+  systemQuantity     Decimal? @map("system_quantity") @db.Decimal(10, 3)
   notes              String?
   reservationId      String?  @map("reservation_id")
 

@@ -706,6 +706,27 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.get('/products/:id/inventory-snapshot', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Snapshot stanu produktu z aktywnymi rezerwacjami (na potrzeby dokumentu INW)',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const snapshot = await warehouseProductService.getInventorySnapshot(request.params.id);
+      if (!snapshot) return reply.status(404).send({ error: 'Not Found', message: 'Produkt nie znaleziony' });
+      return reply.send(snapshot);
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ error: 'Internal Server Error', message: 'Błąd pobierania snapshotu inwentaryzacji' });
+    }
+  });
+
   fastify.get('/products/:id/movements', {
     schema: {
       tags: ['warehouse-diagnostics'],

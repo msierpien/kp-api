@@ -2,7 +2,12 @@ import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
 import { syncProductPrice } from '../price/price-sync.service';
-import { syncStockForProducts } from '../stock/stock-sync.service';
+import {
+  getInventoryPublicationDecision,
+  resolveInventoryPublishedLeadTime,
+  syncStockForProducts,
+  type InventoryLeadTimeSource,
+} from '../stock/stock-sync.service';
 import { resolveCatalogForProduct } from './warehouse-catalogs.service';
 
 export interface CreateProductInput {
@@ -56,6 +61,26 @@ export interface BulkDeleteProductsResult {
   blockedByDocuments: number;
   failed: number;
   errors: Array<{ productId: string; message: string }>;
+}
+
+export interface ProductShippingPreview {
+  availabilityPolicy: string;
+  localStock: Prisma.Decimal;
+  publishedQuantity: Prisma.Decimal;
+  publishedLeadTimeDays: number | null;
+  leadTimeSource: InventoryLeadTimeSource;
+  warehouseAvailableAt: Date | null;
+  latestShopSyncs: Array<{
+    shopId: string;
+    shopName: string;
+    status: string | null;
+    publishedLeadTimeDays: number | null;
+    remoteLeadTimeDays: number | null;
+    publishedQuantity: Prisma.Decimal | null;
+    remoteQuantity: Prisma.Decimal | null;
+    syncedAt: Date | null;
+    createdAt: Date | null;
+  }>;
 }
 
 export interface ProductsQuery {
@@ -204,7 +229,7 @@ export async function getProductById(id: string) {
   const where: any = { id };
   if (tenantId) where.tenantId = tenantId;
 
-  return prisma.warehouseProduct.findFirst({
+  const product = await prisma.warehouseProduct.findFirst({
     where,
     include: {
       catalog: true,
@@ -218,6 +243,86 @@ export async function getProductById(id: string) {
       },
     },
   });
+  if (!product) return null;
+
+  const shippingPreview = await getProductShippingPreview(product.id, tenantId);
+  return {
+    ...product,
+    shippingPreview,
+  };
+}
+
+async function getProductShippingPreview(productId: string, tenantId: string | null): Promise<ProductShippingPreview> {
+  const [decision, activeShopMappings, latestLogs] = await Promise.all([
+    getInventoryPublicationDecision(productId),
+    prisma.shopProductMapping.findMany({
+      where: {
+        warehouseProductId: productId,
+        isActive: true,
+        ...(tenantId ? { tenantId } : {}),
+        shop: { status: 'ACTIVE', platform: 'PRESTASHOP' },
+      },
+      include: {
+        shop: { select: { id: true, name: true, configJson: true } },
+      },
+      orderBy: { updatedAt: 'desc' },
+    }),
+    prisma.stockSyncLog.findMany({
+      where: {
+        warehouseProductId: productId,
+        ...(tenantId ? { tenantId } : {}),
+      },
+      include: {
+        shop: { select: { id: true, name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    }),
+  ]);
+
+  const primaryShopConfig = activeShopMappings[0]?.shop.configJson;
+  const publishedLeadTime = resolveInventoryPublishedLeadTime(decision, primaryShopConfig);
+  const latestLogByShopId = new Map<string, typeof latestLogs[number]>();
+  for (const log of latestLogs) {
+    if (!latestLogByShopId.has(log.shopId)) latestLogByShopId.set(log.shopId, log);
+  }
+
+  const latestShopSyncs = activeShopMappings.length > 0
+    ? activeShopMappings.map((mapping) => {
+        const log = latestLogByShopId.get(mapping.shopId);
+        return {
+          shopId: mapping.shopId,
+          shopName: mapping.shop.name,
+          status: log?.status ?? null,
+          publishedLeadTimeDays: log?.publishedLeadTimeDays ?? null,
+          remoteLeadTimeDays: log?.remoteLeadTimeDays ?? null,
+          publishedQuantity: log?.publishedQuantity ?? null,
+          remoteQuantity: log?.remoteQuantity ?? null,
+          syncedAt: log?.syncedAt ?? null,
+          createdAt: log?.createdAt ?? null,
+        };
+      })
+    : Array.from(latestLogByShopId.values()).map((log) => ({
+        shopId: log.shopId,
+        shopName: log.shop.name,
+        status: log.status,
+        publishedLeadTimeDays: log.publishedLeadTimeDays ?? null,
+        remoteLeadTimeDays: log.remoteLeadTimeDays ?? null,
+        publishedQuantity: log.publishedQuantity ?? null,
+        remoteQuantity: log.remoteQuantity ?? null,
+        syncedAt: log.syncedAt ?? null,
+        createdAt: log.createdAt ?? null,
+      }));
+
+  return {
+    availabilityPolicy: decision.availabilityPolicy,
+    localStock: decision.stockAfter,
+    publishedQuantity: decision.publishedQuantity,
+    publishedLeadTimeDays: publishedLeadTime.leadTimeDays,
+    leadTimeSource: publishedLeadTime.source,
+    warehouseAvailableAt: decision.warehouseAvailableAt ?? null,
+    latestShopSyncs,
+  };
 }
 
 export async function createProduct(input: CreateProductInput) {

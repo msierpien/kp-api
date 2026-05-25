@@ -5,11 +5,19 @@ import { addStockSyncBatchJobs, type StockSyncBatchItem, type StockSyncTriggered
 
 export type InventoryAvailabilityPolicy = 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
 export type PrestaShopOutOfStockBehavior = 0 | 1;
+export type InventoryLeadTimeSource =
+  | 'LOCAL_STOCK'
+  | 'PRODUCT_OVERRIDE'
+  | 'PRODUCT_GROUP'
+  | 'WHOLESALE_PROVIDER'
+  | 'SHOP_DEFAULT'
+  | 'NONE';
 
 export interface InventoryPublicationDecision {
   stockAfter: Prisma.Decimal;
   publishedQuantity: Prisma.Decimal;
   leadTimeDays?: number | null;
+  leadTimeSource?: InventoryLeadTimeSource;
   warehouseAvailableAt?: Date | null;
   availabilityPolicy: InventoryAvailabilityPolicy;
   outOfStockBehavior: PrestaShopOutOfStockBehavior;
@@ -33,6 +41,11 @@ type ProductForPublication = {
   currentStock: Prisma.Decimal;
   leadTimeDaysOverride?: number | null;
   leadTimeGroup?: { leadTimeDays: number; isActive: boolean } | null;
+};
+
+type ProductLeadTimeResolution = {
+  days: number | null;
+  source: InventoryLeadTimeSource;
 };
 
 const ZERO = new Prisma.Decimal(0);
@@ -91,13 +104,14 @@ export async function getInventoryPublicationDecisions(
   for (const product of products) {
     const hasOwnStock = product.currentStock.gt(0);
     const wholesale = wholesaleByProductId.get(product.id);
-    const productLeadTimeDays = resolveProductLeadTimeDays(product);
+    const productLeadTime = resolveProductLeadTime(product);
 
     if (hasOwnStock) {
       decisions.set(product.id, {
         stockAfter: product.currentStock,
         publishedQuantity: product.currentStock,
-        leadTimeDays: productLeadTimeDays,
+        leadTimeDays: 0,
+        leadTimeSource: 'LOCAL_STOCK',
         availabilityPolicy: 'IN_STOCK',
         outOfStockBehavior: 0,
         warningMessage: options.warningMessage,
@@ -106,10 +120,16 @@ export async function getInventoryPublicationDecisions(
     }
 
     if (wholesale) {
+      const wholesaleLeadTime = normalizeOptionalLeadTimeDays(wholesale.provider.leadTimeDays);
       decisions.set(product.id, {
         stockAfter: product.currentStock,
         publishedQuantity: ZERO,
-        leadTimeDays: productLeadTimeDays ?? normalizeOptionalLeadTimeDays(wholesale.provider.leadTimeDays),
+        leadTimeDays: productLeadTime.days ?? wholesaleLeadTime,
+        leadTimeSource: productLeadTime.days !== null
+          ? productLeadTime.source
+          : wholesaleLeadTime !== null
+            ? 'WHOLESALE_PROVIDER'
+            : 'NONE',
         warehouseAvailableAt: wholesale.warehouseAvailableAt,
         availabilityPolicy: 'BACKORDER_FROM_WHOLESALE',
         outOfStockBehavior: 1,
@@ -124,6 +144,7 @@ export async function getInventoryPublicationDecisions(
       stockAfter: product.currentStock,
       publishedQuantity: ZERO,
       leadTimeDays: null,
+      leadTimeSource: 'NONE',
       availabilityPolicy: 'OUT_OF_STOCK',
       outOfStockBehavior: 0,
       warningMessage: options.warningMessage,
@@ -200,7 +221,8 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
 
     const decision = decisions.get(product.id);
     if (!decision) continue;
-    const publishedLeadTimeDays = resolvePublishedLeadTimeDays(decision, mapping.shop.configJson);
+    const publishedLeadTime = resolveInventoryPublishedLeadTime(decision, mapping.shop.configJson);
+    const publishedLeadTimeDays = publishedLeadTime.leadTimeDays;
 
     const log = await prisma.stockSyncLog.create({
       data: {
@@ -321,22 +343,37 @@ function normalizeProductIds(productIds?: string[]) {
   return Array.from(new Set((productIds ?? []).map((id) => id.trim()).filter(Boolean)));
 }
 
-function resolveProductLeadTimeDays(product: ProductForPublication) {
+function resolveProductLeadTime(product: ProductForPublication): ProductLeadTimeResolution {
   const override = normalizeOptionalLeadTimeDays(product.leadTimeDaysOverride);
-  if (override !== null) return override;
+  if (override !== null) return { days: override, source: 'PRODUCT_OVERRIDE' };
 
   if (product.leadTimeGroup?.isActive) {
-    return normalizeOptionalLeadTimeDays(product.leadTimeGroup.leadTimeDays);
+    const groupLeadTime = normalizeOptionalLeadTimeDays(product.leadTimeGroup.leadTimeDays);
+    if (groupLeadTime !== null) return { days: groupLeadTime, source: 'PRODUCT_GROUP' };
   }
 
-  return null;
+  return { days: null, source: 'NONE' };
 }
 
-function resolvePublishedLeadTimeDays(decision: InventoryPublicationDecision, shopConfigJson: unknown) {
-  if (decision.availabilityPolicy === 'OUT_OF_STOCK') return null;
-  return normalizeOptionalLeadTimeDays(decision.leadTimeDays) ??
-    getShopDefaultLeadTimeDays(shopConfigJson) ??
-    0;
+export function resolveInventoryPublishedLeadTime(
+  decision: { leadTimeDays?: unknown; leadTimeSource?: InventoryLeadTimeSource | null; availabilityPolicy?: string | null },
+  shopConfigJson: unknown,
+): { leadTimeDays: number | null; source: InventoryLeadTimeSource } {
+  if (decision.availabilityPolicy === 'OUT_OF_STOCK') {
+    return { leadTimeDays: null, source: 'NONE' };
+  }
+
+  const decisionLeadTime = normalizeOptionalLeadTimeDays(decision.leadTimeDays);
+  if (decisionLeadTime !== null) {
+    return { leadTimeDays: decisionLeadTime, source: decision.leadTimeSource ?? 'NONE' };
+  }
+
+  const shopDefaultLeadTime = getShopDefaultLeadTimeDays(shopConfigJson);
+  if (shopDefaultLeadTime !== null) {
+    return { leadTimeDays: shopDefaultLeadTime, source: 'SHOP_DEFAULT' };
+  }
+
+  return { leadTimeDays: 0, source: 'NONE' };
 }
 
 function formatWarehouseAvailableAt(value?: Date | null) {

@@ -23,7 +23,7 @@ import { startEmailWorker, stopEmailWorker } from './services/queue/email.worker
 import { startStockSyncWorker, stopStockSyncWorker } from './services/queue/stock-sync.worker';
 import { startPriceSyncWorker, stopPriceSyncWorker } from './services/queue/price-sync.worker';
 import { startWholesaleSyncWorker, stopWholesaleSyncWorker } from './services/queue/wholesale-sync.worker';
-import { closeQueue, getQueueStats } from './services/queue/render.queue';
+import { closeQueue } from './services/queue/render.queue';
 import { closeEmailQueue } from './services/queue/email.queue';
 import { closeStockSyncQueue } from './services/queue/stock-sync.queue';
 import { closePriceSyncQueue } from './services/queue/price-sync.queue';
@@ -35,6 +35,8 @@ import { errorHandlerPlugin } from './plugins/error-handler.plugin';
 import { validationPlugin } from './plugins/validation.plugin';
 import type { JwtPayload } from './types';
 import { getAccessTokenFromRequest } from './lib/auth-cookies';
+import { getReadinessHealth } from './services/ops/health.service';
+import { getPrometheusMetrics } from './services/ops/metrics.service';
 
 type TenantContextData = Pick<JwtPayload, 'tenantId' | 'userId' | 'role'> & {
   overrideTenantId?: string;
@@ -97,6 +99,11 @@ server.addHook('onRequest', async (request) => {
   }
 
   request.requestContext.set('tenantContext', contextData);
+});
+
+server.addHook('onSend', async (request, reply, payload) => {
+  reply.header('X-Request-Id', request.id);
+  return payload;
 });
 
 // Custom content type parser to allow empty JSON bodies (Fastify v5 fix)
@@ -218,33 +225,28 @@ if (config.app.isDevelopment) {
   server.register(bullBoardPlugin);
 }
 
-// Health check
-server.get('/health', async () => {
-  try {
-    await prisma.$queryRaw`SELECT 1`;
+server.get('/health/live', async () => ({
+  status: 'ok',
+  timestamp: new Date().toISOString(),
+  uptimeSeconds: Math.round(process.uptime()),
+  runtime: config.runtime,
+}));
 
-    // Pobierz statystyki kolejki renderowania
-    let queueStats = null;
-    try {
-      queueStats = await getQueueStats();
-    } catch {
-      // Queue może nie być dostępna
-    }
+server.get('/health/ready', async (_request, reply) => {
+  const health = await getReadinessHealth();
+  return reply.status(health.status === 'ok' ? 200 : 503).send(health);
+});
 
-    return {
-      status: 'ok',
-      timestamp: new Date().toISOString(),
-      database: 'connected',
-      renderQueue: queueStats,
-    };
-  } catch (error) {
-    return {
-      status: 'error',
-      timestamp: new Date().toISOString(),
-      database: 'disconnected',
-      error: error instanceof Error ? error.message : 'Unknown error'
-    };
-  }
+server.get('/health', async (_request, reply) => {
+  const health = await getReadinessHealth();
+  return reply.status(health.status === 'ok' ? 200 : 503).send(health);
+});
+
+server.get('/metrics', async (_request, reply) => {
+  const metrics = await getPrometheusMetrics();
+  return reply
+    .header('Content-Type', 'text/plain; version=0.0.4; charset=utf-8')
+    .send(metrics);
 });
 
 // Root endpoint
@@ -289,6 +291,7 @@ process.on('SIGINT', gracefulShutdown);
 const start = async () => {
   try {
     const { port, host } = config.app;
+    server.log.info({ runtime: config.runtime }, 'Runtime role resolved');
 
     // Inicjalizuj storage
     try {
@@ -323,7 +326,7 @@ const start = async () => {
         server.log.warn({ err: error }, '⚠️  Failed to initialize scheduler');
       }
     } else {
-      server.log.info('Scheduler disabled by SCHEDULER_ENABLED=false');
+      server.log.info('Scheduler disabled for this runtime role');
     }
 
     if (config.runtime.workersEnabled) {
@@ -364,12 +367,18 @@ const start = async () => {
         server.log.error({ err: error }, 'Failed to start wholesale sync worker');
       }
     } else {
-      server.log.info('Workers disabled by WORKERS_ENABLED=false');
+      server.log.info('Workers disabled for this runtime role');
     }
 
-    await server.listen({ port, host });
-    server.log.info(`🚀 Server is running on http://${host}:${port}`);
-    server.log.info(`📊 Health check: http://${host}:${port}/health`);
+    if (config.runtime.apiEnabled) {
+      await server.listen({ port, host });
+      server.log.info(`🚀 Server is running on http://${host}:${port}`);
+      server.log.info(`📊 Health check: http://${host}:${port}/health`);
+      server.log.info(`📈 Metrics: http://${host}:${port}/metrics`);
+    } else {
+      server.log.info('API listener disabled for this runtime role');
+    }
+
     server.log.info(`🔒 Environment: ${config.app.env}`);
     if (config.app.isDevelopment) {
       server.log.info(`📋 Bull Board: http://${host}:${port}/admin/queues`);

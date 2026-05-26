@@ -22,4 +22,40 @@ describe('configuration helpers', () => {
     assert.equal(resolveTrustProxy('production', 'false'), false);
     assert.equal(resolveTrustProxy('development', 'true'), true);
   });
+
+  it('maps runtime roles to isolated process responsibilities', async () => {
+    const { resolveRuntime } = await import('../src/config');
+
+    assert.deepEqual(resolveRuntime('api'), {
+      role: 'api',
+      apiEnabled: true,
+      workersEnabled: false,
+      schedulerEnabled: false,
+    });
+
+    assert.deepEqual(resolveRuntime('worker'), {
+      role: 'worker',
+      apiEnabled: false,
+      workersEnabled: true,
+      schedulerEnabled: false,
+    });
+
+    assert.deepEqual(resolveRuntime('scheduler'), {
+      role: 'scheduler',
+      apiEnabled: false,
+      workersEnabled: false,
+      schedulerEnabled: true,
+    });
+  });
+
+  it('lets explicit runtime flags override role defaults', async () => {
+    const { resolveRuntime } = await import('../src/config');
+
+    assert.deepEqual(resolveRuntime('api', false, true, true), {
+      role: 'api',
+      apiEnabled: false,
+      workersEnabled: true,
+      schedulerEnabled: true,
+    });
+  });
 });

@@ -10,8 +10,14 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "dev:api": "RUNTIME_ROLE=api tsx watch src/index.ts",
+    "dev:worker": "RUNTIME_ROLE=worker tsx watch src/index.ts",
+    "dev:scheduler": "RUNTIME_ROLE=scheduler tsx watch src/index.ts",
     "build": "prisma generate && tsc",
     "start": "node dist/index.js",
+    "start:api": "RUNTIME_ROLE=api node dist/index.js",
+    "start:worker": "RUNTIME_ROLE=worker node dist/index.js",
+    "start:scheduler": "RUNTIME_ROLE=scheduler node dist/index.js",
     "start:dev": "tsx watch src/index.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
@@ -22,6 +28,7 @@
     "db:seed": "tsx prisma/seed.ts",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
+    "load:test": "tsx scripts/load-test.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"tests/**/*.test.ts\"",
     "test:watch": "node --import tsx --test --watch \"tests/**/*.test.ts\""

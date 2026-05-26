@@ -14,6 +14,7 @@ const envSchema = z.object({
   API_PORT: z.string().transform(Number).pipe(z.number().int().positive()).default('3001'),
   API_HOST: z.string().default('0.0.0.0'),
   APP_URL: z.string().url().default('http://localhost:3001'),
+  API_ENABLED: z.string().optional().transform(val => val === undefined ? undefined : val !== 'false'),
   TRUST_PROXY: z.enum(['true', 'false']).optional(),
   API_RATE_LIMIT_MAX: z.string().transform(Number).pipe(z.number().int().positive()).default('600'),
   API_RATE_LIMIT_WINDOW: z.string().default('1 minute'),
@@ -58,8 +59,9 @@ const envSchema = z.object({
   STORAGE_PATH: z.string().default('./storage'),
 
   // Runtime process roles
-  WORKERS_ENABLED: z.string().transform(val => val !== 'false').default('true'),
-  SCHEDULER_ENABLED: z.string().transform(val => val !== 'false').default('true'),
+  RUNTIME_ROLE: z.enum(['all', 'api', 'worker', 'scheduler']).default('all'),
+  WORKERS_ENABLED: z.string().optional().transform(val => val === undefined ? undefined : val !== 'false'),
+  SCHEDULER_ENABLED: z.string().optional().transform(val => val === undefined ? undefined : val !== 'false'),
 });
 
 type Env = z.infer<typeof envSchema>;
@@ -68,6 +70,26 @@ export function resolveTrustProxy(nodeEnv: Env['NODE_ENV'], trustProxy?: string)
   if (trustProxy === 'true') return true;
   if (trustProxy === 'false') return false;
   return nodeEnv === 'production';
+}
+
+export function resolveRuntime(
+  role: Env['RUNTIME_ROLE'],
+  apiEnabled?: boolean,
+  workersEnabled?: boolean,
+  schedulerEnabled?: boolean
+) {
+  const defaults = {
+    apiEnabled: role === 'all' || role === 'api',
+    workersEnabled: role === 'all' || role === 'worker',
+    schedulerEnabled: role === 'all' || role === 'scheduler',
+  };
+
+  return {
+    role,
+    apiEnabled: apiEnabled ?? defaults.apiEnabled,
+    workersEnabled: workersEnabled ?? defaults.workersEnabled,
+    schedulerEnabled: schedulerEnabled ?? defaults.schedulerEnabled,
+  };
 }
 
 /**
@@ -195,10 +217,7 @@ export const config = {
     publicUrl: env.PUBLIC_STORAGE_URL || `${env.APP_URL}/storage`,
   },
 
-  runtime: {
-    workersEnabled: env.WORKERS_ENABLED,
-    schedulerEnabled: env.SCHEDULER_ENABLED,
-  },
+  runtime: resolveRuntime(env.RUNTIME_ROLE, env.API_ENABLED, env.WORKERS_ENABLED, env.SCHEDULER_ENABLED),
 } as const;
 
 export type Config = typeof config;

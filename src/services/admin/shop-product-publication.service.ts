@@ -283,6 +283,50 @@ export async function createBulkShopProductsFromWarehouseProducts(
 
     try {
       const preview = await buildPreviewRow(product, item, shop.id, client, imageLimit);
+      if (preview.status === 'DUPLICATE_REMOTE' && preview.duplicateRemoteProduct) {
+        const mapping = await prisma.shopProductMapping.upsert({
+          where: {
+            shopId_externalProductId: {
+              shopId: shop.id,
+              externalProductId: String(preview.duplicateRemoteProduct.id),
+            },
+          },
+          create: {
+            tenantId,
+            shopId: shop.id,
+            warehouseProductId: product.id,
+            externalProductId: String(preview.duplicateRemoteProduct.id),
+            externalSku: product.sku,
+            externalEan: preview.ean,
+            externalName: preview.duplicateRemoteProduct.name || product.name,
+            externalPrice: preview.duplicateRemoteProduct.price ?? preview.price,
+            isActive: true,
+            lastSyncAt: new Date(),
+          },
+          update: {
+            warehouseProductId: product.id,
+            externalSku: product.sku,
+            externalEan: preview.ean,
+            externalName: preview.duplicateRemoteProduct.name || product.name,
+            externalPrice: preview.duplicateRemoteProduct.price ?? preview.price,
+            isActive: true,
+            lastSyncAt: new Date(),
+          },
+        });
+
+        resultItems.push({
+          warehouseProductId: product.id,
+          sku: product.sku,
+          status: 'CREATED',
+          previewStatus: preview.status,
+          externalProductId: String(preview.duplicateRemoteProduct.id),
+          mappingId: mapping.id,
+          warnings: [],
+          message: 'Podpięto istniejący produkt z PrestaShop zamiast tworzyć duplikat',
+        });
+        continue;
+      }
+
       if (preview.status !== 'READY') {
         resultItems.push({
           warehouseProductId: product.id,
@@ -312,7 +356,7 @@ export async function createBulkShopProductsFromWarehouseProducts(
           externalEan: preview.ean,
           externalName: product.name,
           externalPrice: preview.price,
-          isActive: false,
+          isActive: true,
           lastSyncAt: new Date(),
         },
       });
@@ -451,7 +495,7 @@ async function getProductsForPublication(tenantId: string, shopId: string, produ
         orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
       },
       shopProductMappings: {
-        where: { shopId },
+        where: { shopId, isActive: true },
       },
       wholesaleMappings: {
         where: {

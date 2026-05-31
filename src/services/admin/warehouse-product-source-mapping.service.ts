@@ -63,9 +63,14 @@ export async function bulkAutoMapProductSources(
     select: {
       id: true,
       sku: true,
+      name: true,
       barcodes: {
         where: { isActive: true },
         select: { ean: true },
+      },
+      shopProductMappings: {
+        where: { isActive: true },
+        select: { externalSku: true, externalEan: true },
       },
     },
   });
@@ -149,14 +154,49 @@ function addEanMatches(map: MatchMap, value: string | null | undefined, productI
   }
 }
 
-function buildMatchContext(products: Array<{ id: string; sku: string; barcodes: Array<{ ean: string }> }>) {
+export function normalizeSkuMatchCandidates(value?: string | null) {
+  const normalized = normalizeMatchValue(value);
+  if (!normalized) return [];
+
+  const withoutHash = normalized.startsWith('#') ? normalized.slice(1).trim() : normalized;
+  return Array.from(new Set([normalized, withoutHash].filter(Boolean)));
+}
+
+export function productNameSkuCandidates(value?: string | null) {
+  const name = (value ?? '').trim();
+  const match = name.match(/^#\s*([A-Za-z0-9][A-Za-z0-9._/-]{1,31})(?=\s|$)/);
+  if (!match) return [];
+
+  return normalizeSkuMatchCandidates(match[1]);
+}
+
+function addSkuMatches(map: MatchMap, value: string | null | undefined, productId: string) {
+  for (const key of normalizeSkuMatchCandidates(value)) {
+    addMatch(map, key, productId);
+  }
+}
+
+function buildMatchContext(products: Array<{
+  id: string;
+  sku: string;
+  name: string;
+  barcodes: Array<{ ean: string }>;
+  shopProductMappings: Array<{ externalSku: string; externalEan?: string | null }>;
+}>) {
   const productsBySku: MatchMap = new Map();
   const productsByEan: MatchMap = new Map();
 
   for (const product of products) {
-    addMatch(productsBySku, normalizeMatchValue(product.sku), product.id);
+    addSkuMatches(productsBySku, product.sku, product.id);
+    for (const key of productNameSkuCandidates(product.name)) {
+      addMatch(productsBySku, key, product.id);
+    }
     for (const barcode of product.barcodes) {
       addEanMatches(productsByEan, barcode.ean, product.id);
+    }
+    for (const mapping of product.shopProductMappings) {
+      addSkuMatches(productsBySku, mapping.externalSku, product.id);
+      addEanMatches(productsByEan, mapping.externalEan, product.id);
     }
   }
 

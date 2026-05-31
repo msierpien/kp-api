@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeEanMatchCandidates } from '../src/services/admin/warehouse-product-source-mapping.service';
+import {
+  normalizeEanMatchCandidates,
+  normalizeSkuMatchCandidates,
+  productNameSkuCandidates,
+} from '../src/services/admin/warehouse-product-source-mapping.service';
 
 test('EAN matching normalizes separators and numeric CSV decimal suffixes', () => {
   assert.deepEqual(normalizeEanMatchCandidates('590-123 456 7890'), ['5901234567890']);
@@ -17,4 +21,13 @@ test('EAN matching extracts multiple candidate codes from one supplier field', (
     normalizeEanMatchCandidates('5901234567890 / 5909876543210'),
     ['5901234567890', '5909876543210'],
   );
+});
+
+test('SKU matching accepts supplier hash-code variants', () => {
+  assert.deepEqual(normalizeSkuMatchCandidates('#ZKU'), ['#zku', 'zku']);
+  assert.deepEqual(productNameSkuCandidates('#ZKU Kubeczki papierowe'), ['zku']);
+});
+
+test('SKU matching does not extract ordinary first words from product names', () => {
+  assert.deepEqual(productNameSkuCandidates('Album na 24 zdjęcia'), []);
 });

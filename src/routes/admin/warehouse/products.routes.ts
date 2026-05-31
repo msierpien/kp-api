@@ -229,6 +229,31 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.post('/products/bulk/remove-from-shop', {
+    schema: {
+      tags: ['warehouse-shop-products'],
+      summary: 'Usuń lub dezaktywuj produkty w sklepie i lokalne mapowania',
+      body: {
+        type: 'object',
+        properties: {
+          shopId: { type: 'string' },
+          productIds: { type: 'array', maxItems: 500, items: { type: 'string' } },
+          mappingIds: { type: 'array', maxItems: 500, items: { type: 'string' } },
+          remoteAction: { type: 'string', enum: ['DELETE', 'DEACTIVATE'], default: 'DELETE' },
+          deactivateLocalProduct: { type: 'boolean', default: false },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: shopProductPublicationService.RemoveShopProductsInput }>, reply: FastifyReply) => {
+    try {
+      const result = await shopProductPublicationService.removeShopProducts(request.body ?? {});
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd usuwania produktów sklepowych';
+      return reply.status(400).send({ error: 'Error', message });
+    }
+  });
+
   fastify.post('/products/bulk/sync-stock', {
     schema: {
       tags: ['stock-sync'],
@@ -666,6 +691,40 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
       const message = error instanceof Error ? error.message : 'Błąd tworzenia produktu sklepowego';
       const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.delete('/products/:id/shop-products', {
+    schema: {
+      tags: ['warehouse-shop-products'],
+      summary: 'Usuń lub dezaktywuj produkt w sklepie',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        properties: {
+          shopId: { type: 'string' },
+          remoteAction: { type: 'string', enum: ['DELETE', 'DEACTIVATE'], default: 'DELETE' },
+          deactivateLocalProduct: { type: 'boolean', default: false },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: Omit<shopProductPublicationService.RemoveShopProductsInput, 'productIds'>;
+  }>, reply: FastifyReply) => {
+    try {
+      const result = await shopProductPublicationService.removeShopProducts({
+        ...request.body,
+        productIds: [request.params.id],
+      });
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd usuwania produktu sklepowego';
+      return reply.status(400).send({ error: 'Error', message });
     }
   });
 

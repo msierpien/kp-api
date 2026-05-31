@@ -312,6 +312,35 @@ export class PrestaShopClient {
     };
   }
 
+  async deleteProduct(productId: string): Promise<void> {
+    const id = productId.trim();
+    if (!id) throw new Error('PrestaShop product id is required');
+
+    await this.fetchWebServiceText(`products/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { Accept: 'application/xml' },
+    });
+  }
+
+  async setProductActive(productId: string, active: boolean): Promise<void> {
+    const id = productId.trim();
+    if (!id) throw new Error('PrestaShop product id is required');
+
+    const { text: productXml } = await this.fetchWebServiceText(`products/${encodeURIComponent(id)}`, {
+      headers: { Accept: 'application/xml' },
+    });
+    const payload = replaceSimpleXmlTag(productXml, 'active', active ? '1' : '0');
+
+    await this.fetchWebServiceText(`products/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/xml',
+        Accept: 'application/xml',
+      },
+      body: payload,
+    });
+  }
+
   async uploadProductImage(productId: string, imageUrl: string): Promise<void> {
     const imageResponse = await fetch(imageUrl);
     if (!imageResponse.ok) {
@@ -478,6 +507,12 @@ function buildProductXml(input: CreatePrestaShopProductInput) {
 function extractXmlTagValue(xml: string, tagName: string) {
   const match = xml.match(new RegExp(`<${tagName}\\b[^>]*>\\s*(?:<!\\[CDATA\\[)?([^<\\]]+)`, 'i'));
   return match?.[1]?.trim();
+}
+
+function replaceSimpleXmlTag(xml: string, tagName: string, value: string) {
+  const pattern = new RegExp(`(<${tagName}\\b[^>]*>)([\\s\\S]*?)(</${tagName}>)`, 'i');
+  if (!pattern.test(xml)) throw new Error(`PrestaShop product XML missing <${tagName}>`);
+  return xml.replace(pattern, (_match, openTag, _currentValue, closeTag) => `${openTag}${escapeXml(value)}${closeTag}`);
 }
 
 function normalizeEan13(value?: string | null) {

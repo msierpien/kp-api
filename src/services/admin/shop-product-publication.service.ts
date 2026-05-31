@@ -46,6 +46,14 @@ export interface BulkShopProductPublicationInput {
   items: ShopProductPublicationItemInput[];
 }
 
+export interface RemoveShopProductsInput {
+  shopId?: string;
+  productIds?: string[];
+  mappingIds?: string[];
+  remoteAction?: 'DELETE' | 'DEACTIVATE';
+  deactivateLocalProduct?: boolean;
+}
+
 export interface ShopProductPublicationSourcePreview {
   mappingId: string;
   providerId: string;
@@ -105,6 +113,22 @@ export interface BulkShopProductPublicationResult {
   skipped: number;
   failed: number;
   items: ShopProductPublicationResultItem[];
+}
+
+export interface RemoveShopProductResultItem {
+  warehouseProductId: string | null;
+  mappingId: string;
+  externalProductId: string;
+  status: 'REMOVED' | 'FAILED';
+  remoteAction: 'DELETE' | 'DEACTIVATE';
+  message?: string;
+}
+
+export interface RemoveShopProductsResult {
+  requested: number;
+  removed: number;
+  failed: number;
+  items: RemoveShopProductResultItem[];
 }
 
 type ProductForPublication = Prisma.WarehouseProductGetPayload<{
@@ -319,6 +343,78 @@ export async function createBulkShopProductsFromWarehouseProducts(
     requested: items.length,
     created: resultItems.filter((item) => item.status === 'CREATED').length,
     skipped: resultItems.filter((item) => item.status === 'SKIPPED').length,
+    failed: resultItems.filter((item) => item.status === 'FAILED').length,
+    items: resultItems,
+  };
+}
+
+export async function removeShopProducts(input: RemoveShopProductsInput): Promise<RemoveShopProductsResult> {
+  const tenantId = requireTenantId();
+  const remoteAction = input.remoteAction ?? 'DELETE';
+  const where: Prisma.ShopProductMappingWhereInput = {
+    tenantId,
+    isActive: true,
+  };
+
+  if (input.shopId) where.shopId = input.shopId;
+  if (input.mappingIds?.length) where.id = { in: input.mappingIds };
+  if (input.productIds?.length) where.warehouseProductId = { in: input.productIds };
+  if (!input.mappingIds?.length && !input.productIds?.length) {
+    throw new Error('Wybierz produkty lub mapowania do usunięcia ze sklepu');
+  }
+
+  const mappings = await prisma.shopProductMapping.findMany({
+    where,
+    include: { shop: true },
+    take: 500,
+  });
+
+  const resultItems: RemoveShopProductResultItem[] = [];
+
+  for (const mapping of mappings) {
+    try {
+      const client = buildPrestaShopClient(mapping.shop);
+      if (remoteAction === 'DEACTIVATE') {
+        await client.setProductActive(mapping.externalProductId, false);
+      } else {
+        await client.deleteProduct(mapping.externalProductId);
+      }
+
+      await prisma.$transaction([
+        prisma.shopProductMapping.update({
+          where: { id: mapping.id },
+          data: { isActive: false, lastSyncAt: new Date() },
+        }),
+        ...(input.deactivateLocalProduct && mapping.warehouseProductId
+          ? [prisma.warehouseProduct.update({
+              where: { id: mapping.warehouseProductId },
+              data: { isActive: false },
+            })]
+          : []),
+      ]);
+
+      resultItems.push({
+        warehouseProductId: mapping.warehouseProductId,
+        mappingId: mapping.id,
+        externalProductId: mapping.externalProductId,
+        status: 'REMOVED',
+        remoteAction,
+      });
+    } catch (error) {
+      resultItems.push({
+        warehouseProductId: mapping.warehouseProductId,
+        mappingId: mapping.id,
+        externalProductId: mapping.externalProductId,
+        status: 'FAILED',
+        remoteAction,
+        message: error instanceof Error ? error.message : 'Nieznany błąd usuwania produktu sklepowego',
+      });
+    }
+  }
+
+  return {
+    requested: mappings.length,
+    removed: resultItems.filter((item) => item.status === 'REMOVED').length,
     failed: resultItems.filter((item) => item.status === 'FAILED').length,
     items: resultItems,
   };

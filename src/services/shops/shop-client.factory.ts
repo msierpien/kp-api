@@ -20,6 +20,7 @@ export function createShopStockClient(shop: Shop): ShopStockClient {
       apiKey: decrypt(shop.apiKey),
       bulkStockUrl: typeof config.bulkStockUrl === 'string' ? config.bulkStockUrl : null,
       bulkStockApiKey,
+      bulkStockBatchSize: config.bulkStockBatchSize as number | string | null | undefined,
       prestashopShopId: getPrestaShopShopId(config),
     });
   }

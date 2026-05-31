@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { replaceProductOrderAvailabilityXml } from '../src/services/shops/prestashop-stock-client';
+import {
+  normalizeBulkStockBatchSize,
+  replaceProductOrderAvailabilityXml,
+} from '../src/services/shops/prestashop-stock-client';
 
 const PRODUCT_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop>
@@ -41,4 +44,11 @@ test('PrestaShop product update disables ordering when product is out of stock e
   assert.match(xml, /<available_for_order>0<\/available_for_order>/);
   assert.match(xml, /<show_price>1<\/show_price>/);
   assert.match(xml, /<language id="1"><!\[CDATA\[\]\]><\/language>/);
+});
+
+test('bulk stock client defaults invalid batch sizes to 500', () => {
+  assert.equal(normalizeBulkStockBatchSize(undefined), 500);
+  assert.equal(normalizeBulkStockBatchSize(250), 250);
+  assert.equal(normalizeBulkStockBatchSize(0), 500);
+  assert.equal(normalizeBulkStockBatchSize(501), 500);
 });

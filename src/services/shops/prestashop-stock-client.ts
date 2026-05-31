@@ -2,7 +2,9 @@
 import { Buffer } from 'node:buffer';
 import type { ShopProductInventorySnapshot, ShopStockClient, ShopStockUpdateOptions } from './shop-stock-client.interface';
 
-const BULK_BATCH_SIZE = 500;
+export const DEFAULT_BULK_STOCK_BATCH_SIZE = 500;
+export const MIN_BULK_STOCK_BATCH_SIZE = 1;
+export const MAX_BULK_STOCK_BATCH_SIZE = 500;
 
 export interface BulkStockItem {
   productId: number;
@@ -35,6 +37,7 @@ export class PrestaShopStockClient implements ShopStockClient {
   private apiKey: string;
   private bulkStockUrl: string | null;
   private bulkStockApiKey: string | null;
+  private bulkStockBatchSize: number;
   private prestashopShopId: string | null;
 
   constructor(config: {
@@ -42,12 +45,14 @@ export class PrestaShopStockClient implements ShopStockClient {
     apiKey: string;
     bulkStockUrl?: string | null;
     bulkStockApiKey?: string | null;
+    bulkStockBatchSize?: number | string | null;
     prestashopShopId?: string | number | null;
   }) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '').replace(/\/api$/, '');
     this.apiKey = config.apiKey;
     this.bulkStockUrl = normalizeNullableString(config.bulkStockUrl) ?? buildBulkStockUrl(this.baseUrl);
     this.bulkStockApiKey = normalizeNullableString(config.bulkStockApiKey);
+    this.bulkStockBatchSize = normalizeBulkStockBatchSize(config.bulkStockBatchSize);
     this.prestashopShopId = normalizeNullableString(config.prestashopShopId);
   }
 
@@ -66,8 +71,8 @@ export class PrestaShopStockClient implements ShopStockClient {
 
     const combined: BulkStockResult = { updated: 0, errors: [], results: [] };
 
-    for (let i = 0; i < items.length; i += BULK_BATCH_SIZE) {
-      const batch = items.slice(i, i + BULK_BATCH_SIZE);
+    for (let i = 0; i < items.length; i += this.bulkStockBatchSize) {
+      const batch = items.slice(i, i + this.bulkStockBatchSize);
       const payloadItems = batch.map((item) => ({
         productId: item.productId,
         ...(item.quantity === undefined ? {} : { quantity: item.quantity }),
@@ -111,7 +116,10 @@ export class PrestaShopStockClient implements ShopStockClient {
       combined.results.push(...(Array.isArray(result.results) ? result.results : []));
     }
 
-    console.log(`[PrestaShopStockClient] bulk update: ${combined.updated} updated, ${combined.errors.length} errors`);
+    console.log(
+      `[PrestaShopStockClient] bulk update: ${combined.updated} updated, ` +
+      `${combined.errors.length} errors, batchSize=${this.bulkStockBatchSize}`,
+    );
     return combined;
   }
 
@@ -355,6 +363,19 @@ function normalizeNullableString(value: unknown) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed || null;
+}
+
+export function normalizeBulkStockBatchSize(value: unknown): number {
+  if (value === undefined || value === null || value === '') return DEFAULT_BULK_STOCK_BATCH_SIZE;
+  const size = Number(value);
+  if (
+    !Number.isInteger(size) ||
+    size < MIN_BULK_STOCK_BATCH_SIZE ||
+    size > MAX_BULK_STOCK_BATCH_SIZE
+  ) {
+    return DEFAULT_BULK_STOCK_BATCH_SIZE;
+  }
+  return size;
 }
 
 function normalizeLeadTimeDays(value: unknown) {

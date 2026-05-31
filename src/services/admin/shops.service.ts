@@ -9,6 +9,7 @@ import type { ShopItem, UserRole } from '../../types';
 import { removeShopFromScheduler } from '../scheduler/scheduler.service';
 import { getTenantContext } from '../../lib/tenant-context';
 import { PrestaShopClient } from '../prestashop/prestashop-client';
+import { normalizeBulkStockBatchSize } from '../shops/prestashop-stock-client';
 
 type ShopTenantScopeContext = {
   tenantId?: string | null;
@@ -52,6 +53,7 @@ const MANAGED_SHOP_CONFIG_KEYS = [
   'bulkStockUrl',
   'bulkStockApiKey',
   'defaultLeadTimeDays',
+  'bulkStockBatchSize',
 ] as const;
 
 function normalizeShopConfig(value: unknown): Record<string, any> {
@@ -112,6 +114,7 @@ const mapShop = (shop: any): ShopItem => {
     hasBulkStock: Boolean(configJson.bulkStockApiKey),
     bulkStockUrl: typeof configJson.bulkStockUrl === 'string' ? configJson.bulkStockUrl : null,
     defaultLeadTimeDays: normalizeLeadTimeDays(configJson.defaultLeadTimeDays),
+    bulkStockBatchSize: normalizeBulkStockBatchSize(configJson.bulkStockBatchSize),
     prestashopShopId: resolvePrestaShopShopId(configJson),
     tenantId: shop.tenantId,
   };

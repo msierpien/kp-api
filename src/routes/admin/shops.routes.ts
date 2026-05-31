@@ -217,7 +217,15 @@ export async function shopsRoutes(fastify: FastifyInstance) {
   );
 
   // PATCH /admin/shops/:id/bulk-stock-config
-  fastify.patch<{ Params: ShopIdParamsInput; Body: { bulkStockUrl?: string | null; bulkStockApiKey?: string | null; defaultLeadTimeDays?: number | null } }>(
+  fastify.patch<{
+    Params: ShopIdParamsInput;
+    Body: {
+      bulkStockUrl?: string | null;
+      bulkStockApiKey?: string | null;
+      defaultLeadTimeDays?: number | null;
+      bulkStockBatchSize?: number | null;
+    };
+  }>(
     '/:id/bulk-stock-config',
     {
       schema: {
@@ -230,6 +238,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
             bulkStockUrl: { type: 'string', nullable: true },
             bulkStockApiKey: { type: 'string', nullable: true },
             defaultLeadTimeDays: { type: ['integer', 'null'], minimum: 0, maximum: 365 },
+            bulkStockBatchSize: { type: ['integer', 'null'], minimum: 1, maximum: 500 },
           },
         },
       },

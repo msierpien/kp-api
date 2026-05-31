@@ -20,7 +20,12 @@ import {
   triggerManualSync,
   updateShopSyncInterval,
 } from '../../services/scheduler/scheduler.service';
-import { buildBulkStockUrl } from '../../services/shops/prestashop-stock-client';
+import {
+  buildBulkStockUrl,
+  DEFAULT_BULK_STOCK_BATCH_SIZE,
+  MAX_BULK_STOCK_BATCH_SIZE,
+  MIN_BULK_STOCK_BATCH_SIZE,
+} from '../../services/shops/prestashop-stock-client';
 import * as stockSyncService from '../../services/stock/stock-sync.service';
 import * as shopWebhookService from '../../services/webhooks/prestashop-order-webhook.service';
 
@@ -33,6 +38,7 @@ export type UpdateBulkStockConfigInput = {
   bulkStockUrl?: string | null;
   bulkStockApiKey?: string | null;
   defaultLeadTimeDays?: number | null;
+  bulkStockBatchSize?: number | null;
 };
 
 export type ManualSyncInput = {
@@ -75,6 +81,21 @@ function normalizeOptionalLeadTimeDays(value: unknown) {
     throw new ValidationError('Domyślny czas wysyłki musi być liczbą całkowitą od 0 do 365 dni');
   }
   return days;
+}
+
+export function normalizeOptionalBulkStockBatchSize(value: unknown) {
+  if (value === undefined || value === null || value === '') return null;
+  const size = Number(value);
+  if (
+    !Number.isInteger(size) ||
+    size < MIN_BULK_STOCK_BATCH_SIZE ||
+    size > MAX_BULK_STOCK_BATCH_SIZE
+  ) {
+    throw new ValidationError(
+      `Rozmiar paczki bulk stock musi być liczbą całkowitą od ${MIN_BULK_STOCK_BATCH_SIZE} do ${MAX_BULK_STOCK_BATCH_SIZE}`,
+    );
+  }
+  return size;
 }
 
 async function translateShopErrors<T>(operation: () => Promise<T>): Promise<T> {
@@ -136,6 +157,9 @@ export const shopsUseCases = {
     const nextDefaultLeadTimeDays = input.defaultLeadTimeDays === undefined
       ? normalizeOptionalLeadTimeDays(existing.defaultLeadTimeDays)
       : normalizeOptionalLeadTimeDays(input.defaultLeadTimeDays);
+    const nextBulkStockBatchSize = input.bulkStockBatchSize === undefined
+      ? normalizeOptionalBulkStockBatchSize(existing.bulkStockBatchSize) ?? DEFAULT_BULK_STOCK_BATCH_SIZE
+      : normalizeOptionalBulkStockBatchSize(input.bulkStockBatchSize) ?? DEFAULT_BULK_STOCK_BATCH_SIZE;
     const defaultLeadTimeChanged = nextDefaultLeadTimeDays !== normalizeOptionalLeadTimeDays(existing.defaultLeadTimeDays);
 
     const updated = {
@@ -143,6 +167,7 @@ export const shopsUseCases = {
       bulkStockUrl: nextBulkStockUrl,
       bulkStockApiKey: nextBulkStockApiKey,
       defaultLeadTimeDays: nextDefaultLeadTimeDays,
+      bulkStockBatchSize: nextBulkStockBatchSize,
     };
 
     await prisma.shop.update({ where: { id }, data: { configJson: updated } });

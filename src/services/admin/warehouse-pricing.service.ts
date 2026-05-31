@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
 import { syncProductPrice } from '../price/price-sync.service';
+import type { PriceSyncTriggeredBy } from '../queue/price-sync.queue';
 
 export type PricingRuleLevel = 'GLOBAL' | 'SHOP' | 'CATALOG' | 'PRODUCT';
 export type PricingRoundingMode = 'END_99' | 'TENTH' | 'CENT';
@@ -34,6 +35,7 @@ export interface PricingProductsInput {
   productIds?: string[];
   shopIds?: string[];
   catalogId?: string;
+  triggeredBy?: PriceSyncTriggeredBy;
 }
 
 export interface BulkUpdatePricesInput extends PricingProductsInput {
@@ -411,7 +413,11 @@ export async function syncPricing(input: PricingProductsInput = {}) {
       continue;
     }
     try {
-      const result = await syncProductPrice(item.warehouseProductId, { shopId: item.shopId, price: item.netPrice, triggeredBy: 'MANUAL' });
+      const result = await syncProductPrice(item.warehouseProductId, {
+        shopId: item.shopId,
+        price: item.netPrice,
+        triggeredBy: input.triggeredBy ?? 'MANUAL',
+      });
       enqueued += result.enqueued;
     } catch (error) {
       errors.push({

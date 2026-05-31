@@ -7,6 +7,8 @@ import {
   type CreatePrestaShopProductInput,
   type PrestaShopProductDetails,
 } from '../prestashop/prestashop-client';
+import { publishInventoryToShops } from '../stock/stock-sync.service';
+import { syncPricing } from './warehouse-pricing.service';
 
 export type ShopProductPublicationPreviewStatus =
   | 'READY'
@@ -112,6 +114,8 @@ export interface BulkShopProductPublicationResult {
   created: number;
   skipped: number;
   failed: number;
+  priceSync: { enqueued: number; errors: number; message?: string };
+  stockSync: { enqueued: number; batchJobs: number; message?: string };
   items: ShopProductPublicationResultItem[];
 }
 
@@ -267,6 +271,7 @@ export async function createBulkShopProductsFromWarehouseProducts(
   const products = await getProductsForPublication(tenantId, shop.id, items.map((item) => item.warehouseProductId));
   const productsById = new Map(products.map((product) => [product.id, product]));
   const resultItems: ShopProductPublicationResultItem[] = [];
+  const publishedProductIds = new Set<string>();
 
   for (const item of items) {
     const product = productsById.get(item.warehouseProductId);
@@ -324,6 +329,7 @@ export async function createBulkShopProductsFromWarehouseProducts(
           warnings: [],
           message: 'Podpięto istniejący produkt z PrestaShop zamiast tworzyć duplikat',
         });
+        publishedProductIds.add(product.id);
         continue;
       }
 
@@ -370,6 +376,7 @@ export async function createBulkShopProductsFromWarehouseProducts(
         mappingId: mapping.id,
         warnings,
       });
+      publishedProductIds.add(product.id);
     } catch (error) {
       resultItems.push({
         warehouseProductId: product.id,
@@ -381,6 +388,12 @@ export async function createBulkShopProductsFromWarehouseProducts(
     }
   }
 
+  const syncResult = await enqueuePostPublicationSync({
+    tenantId,
+    shopId: shop.id,
+    productIds: Array.from(publishedProductIds),
+  });
+
   return {
     shopId: shop.id,
     categoryId,
@@ -388,7 +401,57 @@ export async function createBulkShopProductsFromWarehouseProducts(
     created: resultItems.filter((item) => item.status === 'CREATED').length,
     skipped: resultItems.filter((item) => item.status === 'SKIPPED').length,
     failed: resultItems.filter((item) => item.status === 'FAILED').length,
+    priceSync: syncResult.priceSync,
+    stockSync: syncResult.stockSync,
     items: resultItems,
+  };
+}
+
+async function enqueuePostPublicationSync(input: { tenantId: string; shopId: string; productIds: string[] }) {
+  if (input.productIds.length === 0) {
+    return {
+      priceSync: { enqueued: 0, errors: 0 },
+      stockSync: { enqueued: 0, batchJobs: 0 },
+    };
+  }
+
+  let priceSync: { enqueued: number; errors: unknown[]; message?: string };
+  let stockSync: { enqueued: number; batchJobs: number; message?: string };
+
+  try {
+    const result = await syncPricing({
+      productIds: input.productIds,
+      shopIds: [input.shopId],
+      triggeredBy: 'SHOP_PUBLICATION',
+    });
+    priceSync = { enqueued: result.enqueued, errors: result.errors };
+  } catch (error) {
+    priceSync = {
+      enqueued: 0,
+      errors: [error],
+      message: error instanceof Error ? error.message : 'Błąd kolejkowania synchronizacji ceny po publikacji',
+    };
+  }
+
+  try {
+    const result = await publishInventoryToShops({
+      tenantId: input.tenantId,
+      shopId: input.shopId,
+      warehouseProductIds: input.productIds,
+      triggeredBy: 'SHOP_PUBLICATION',
+    });
+    stockSync = { enqueued: result.enqueued, batchJobs: result.batchJobs };
+  } catch (error) {
+    stockSync = {
+      enqueued: 0,
+      batchJobs: 0,
+      message: error instanceof Error ? error.message : 'Błąd kolejkowania synchronizacji stanu po publikacji',
+    };
+  }
+
+  return {
+    priceSync: { enqueued: priceSync.enqueued, errors: priceSync.errors.length, message: priceSync.message },
+    stockSync: { enqueued: stockSync.enqueued, batchJobs: stockSync.batchJobs, message: stockSync.message },
   };
 }
 

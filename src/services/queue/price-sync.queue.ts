@@ -3,7 +3,7 @@ import { getRedisConnection } from './render.queue';
 
 export const PRICE_SYNC_QUEUE_NAME = 'price-sync';
 
-export type PriceSyncTriggeredBy = 'MANUAL' | 'PRODUCT_PRICE_UPDATE';
+export type PriceSyncTriggeredBy = 'MANUAL' | 'PRODUCT_PRICE_UPDATE' | 'SHOP_PUBLICATION';
 
 export interface PriceSyncJobData {
   logId: string;

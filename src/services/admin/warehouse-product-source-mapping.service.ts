@@ -112,11 +112,41 @@ function normalizeMatchValue(value?: string | null) {
   return (value ?? '').trim().toLowerCase();
 }
 
+export function normalizeEanMatchCandidates(value?: string | null) {
+  const raw = (value ?? '').trim();
+  if (!raw) return [];
+
+  const candidates = new Set<string>();
+  const compact = raw.replace(/[\s-]+/g, '');
+  const decimalMatch = compact.match(/^(\d+)[,.]0+$/);
+  const compactDigits = decimalMatch?.[1] ?? (/^\d{8,14}$/.test(compact) ? compact : null);
+
+  if (compactDigits) addEanCandidate(candidates, compactDigits);
+
+  const digitRuns = raw.match(/\d{8,14}/g) ?? [];
+  for (const run of digitRuns) addEanCandidate(candidates, run);
+
+  return Array.from(candidates);
+}
+
+function addEanCandidate(candidates: Set<string>, value: string) {
+  if (!/^\d{8,14}$/.test(value)) return;
+  candidates.add(value);
+  if (value.length === 12) candidates.add(`0${value}`);
+  if (value.length === 13 && value.startsWith('0')) candidates.add(value.slice(1));
+}
+
 function addMatch(map: MatchMap, key: string, productId: string) {
   if (!key) return;
   const current = map.get(key);
   if (current === undefined) map.set(key, productId);
   else if (current !== productId) map.set(key, null);
+}
+
+function addEanMatches(map: MatchMap, value: string | null | undefined, productId: string) {
+  for (const key of normalizeEanMatchCandidates(value)) {
+    addMatch(map, key, productId);
+  }
 }
 
 function buildMatchContext(products: Array<{ id: string; sku: string; barcodes: Array<{ ean: string }> }>) {
@@ -126,11 +156,24 @@ function buildMatchContext(products: Array<{ id: string; sku: string; barcodes: 
   for (const product of products) {
     addMatch(productsBySku, normalizeMatchValue(product.sku), product.id);
     for (const barcode of product.barcodes) {
-      addMatch(productsByEan, normalizeMatchValue(barcode.ean), product.id);
+      addEanMatches(productsByEan, barcode.ean, product.id);
     }
   }
 
   return { productsBySku, productsByEan };
+}
+
+function resolveEanMatch(value: string | null | undefined, productsByEan: MatchMap) {
+  const matches = new Set<string>();
+
+  for (const key of normalizeEanMatchCandidates(value)) {
+    const match = productsByEan.get(key);
+    if (match === null) return { conflict: true };
+    if (match) matches.add(match);
+  }
+
+  if (matches.size > 1) return { conflict: true };
+  return { productId: Array.from(matches)[0] };
 }
 
 function resolveMappingMatch(
@@ -138,14 +181,13 @@ function resolveMappingMatch(
   context: ReturnType<typeof buildMatchContext>,
 ): { productId?: string; matchType?: MatchType; conflict?: boolean } {
   const skuKey = normalizeMatchValue(mapping.externalSku);
-  const eanKey = normalizeMatchValue(mapping.externalEan);
   const skuMatch = skuKey ? context.productsBySku.get(skuKey) : undefined;
-  const eanMatch = eanKey ? context.productsByEan.get(eanKey) : undefined;
+  const eanMatch = resolveEanMatch(mapping.externalEan, context.productsByEan);
 
-  if (skuMatch === null || eanMatch === null) return { conflict: true };
-  if (skuMatch && eanMatch && skuMatch !== eanMatch) return { conflict: true };
+  if (skuMatch === null || eanMatch.conflict) return { conflict: true };
+  if (skuMatch && eanMatch.productId && skuMatch !== eanMatch.productId) return { conflict: true };
   if (skuMatch) return { productId: skuMatch, matchType: 'SKU' };
-  if (eanMatch) return { productId: eanMatch, matchType: 'EAN' };
+  if (eanMatch.productId) return { productId: eanMatch.productId, matchType: 'EAN' };
   return {};
 }
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { preserveManagedShopConfig } from '../src/services/admin/shops.service';
+import { normalizeBulkStockUrl } from '../src/modules/shops/shops.use-cases';
 
 test('shop update preserves bulk stock config when generic config form does not submit it', () => {
   const config = preserveManagedShopConfig(
@@ -32,4 +33,11 @@ test('shop update allows explicit bulk stock config changes', () => {
   assert.equal(config.bulkStockUrl, null);
   assert.equal(config.bulkStockApiKey, null);
   assert.equal(config.defaultLeadTimeDays, null);
+});
+
+test('bulk stock config rejects non-url endpoint values before saving', () => {
+  assert.throws(
+    () => normalizeBulkStockUrl('sierpien.michal@gmail.com'),
+    /URL endpointu kp_bulkstock/,
+  );
 });

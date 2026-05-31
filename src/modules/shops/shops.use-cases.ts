@@ -49,6 +49,24 @@ function normalizeOptionalString(value: unknown) {
   return trimmed || null;
 }
 
+export function normalizeBulkStockUrl(value: unknown) {
+  const url = normalizeOptionalString(value);
+  if (!url) return null;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new ValidationError('URL endpointu kp_bulkstock musi być poprawnym adresem http(s)');
+  }
+
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new ValidationError('URL endpointu kp_bulkstock musi zaczynać się od http:// lub https://');
+  }
+
+  return url;
+}
+
 function normalizeOptionalLeadTimeDays(value: unknown) {
   if (value === undefined) return null;
   if (value === null || value === '') return null;
@@ -105,7 +123,7 @@ export const shopsUseCases = {
       ? shop.configJson as Record<string, unknown>
       : {};
 
-    const nextBulkStockUrl = normalizeOptionalString(input.bulkStockUrl);
+    const nextBulkStockUrl = normalizeBulkStockUrl(input.bulkStockUrl);
     const providedBulkStockApiKey = normalizeOptionalString(input.bulkStockApiKey);
     const existingBulkStockApiKey = typeof existing.bulkStockApiKey === 'string'
       ? existing.bulkStockApiKey

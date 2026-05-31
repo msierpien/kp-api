@@ -174,6 +174,21 @@ async function processBulkBatch(
         continue;
       }
 
+      if (item.availabilityPolicy) {
+        try {
+          await client.updateProductOrderAvailability(item.externalProductId, {
+            availabilityPolicy: item.availabilityPolicy,
+            leadTimeDays: item.leadTimeDays,
+            warehouseAvailableAt: item.warehouseAvailableAt,
+          });
+        } catch (error) {
+          failed++;
+          const message = error instanceof Error ? error.message : 'unknown product availability sync error';
+          await markLogsFailed([item.logId], message, meta);
+          continue;
+        }
+      }
+
       await prisma.stockSyncLog.update({
         where: { id: item.logId },
         data: {
@@ -213,6 +228,9 @@ async function processWebserviceBatch(
     try {
       await client.updateStockQuantity(item.externalProductId, item.quantity, {
         outOfStockBehavior: item.outOfStockBehavior,
+        leadTimeDays: item.leadTimeDays,
+        warehouseAvailableAt: item.warehouseAvailableAt,
+        availabilityPolicy: item.availabilityPolicy,
       });
       const remote = await confirmRemoteStock({
         client,

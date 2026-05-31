@@ -10,6 +10,9 @@ export interface ShopStockClient {
 
 export interface ShopStockUpdateOptions {
   outOfStockBehavior?: 0 | 1 | 2;
+  leadTimeDays?: number | null;
+  warehouseAvailableAt?: string | null;
+  availabilityPolicy?: 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
 }
 
 export interface ShopProductInventorySnapshot {

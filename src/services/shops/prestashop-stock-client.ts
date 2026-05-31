@@ -156,6 +156,10 @@ export class PrestaShopStockClient implements ShopStockClient {
       `[PrestaShopStockClient] PUT result for product ${externalProductId}: ` +
       `confirmed qty=${confirmedQty ?? 'unknown'}`,
     );
+
+    if (options.availabilityPolicy) {
+      await this.updateProductOrderAvailability(externalProductId, options);
+    }
   }
 
   async updateProductPrice(externalProductId: string, price: number): Promise<void> {
@@ -168,6 +172,26 @@ export class PrestaShopStockClient implements ShopStockClient {
     });
 
     const payload = replaceProductPriceXml(productXml, price);
+
+    await this.fetchWebServiceText(`products/${encodeURIComponent(externalProductId)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/xml',
+        Accept: 'application/xml',
+      },
+      body: payload,
+    });
+  }
+
+  async updateProductOrderAvailability(
+    externalProductId: string,
+    options: Pick<ShopStockUpdateOptions, 'availabilityPolicy' | 'leadTimeDays' | 'warehouseAvailableAt'>,
+  ): Promise<void> {
+    const productXml = await this.fetchWebServiceText(`products/${encodeURIComponent(externalProductId)}`, {
+      headers: { Accept: 'application/xml' },
+    });
+
+    const payload = replaceProductOrderAvailabilityXml(productXml, options);
 
     await this.fetchWebServiceText(`products/${encodeURIComponent(externalProductId)}`, {
       method: 'PUT',
@@ -380,7 +404,7 @@ export function buildBulkStockUrl(baseUrl: string) {
   return `${baseUrl}/index.php?fc=module&module=kp_bulkstock&controller=bulkupdate`;
 }
 
-function buildStockAvailableXml(input: {
+export function buildStockAvailableXml(input: {
   id: string;
   idProduct: string;
   idProductAttribute: string;
@@ -414,11 +438,13 @@ function escapeXml(value: string) {
     .replace(/'/g, '&apos;');
 }
 
-function replaceProductPriceXml(xml: string, price: number) {
+function cdata(value: string) {
+  return value.replace(/\]\]>/g, ']]]]><![CDATA[>');
+}
+
+export function replaceProductPriceXml(xml: string, price: number) {
   const normalizedPrice = price.toFixed(2);
-  const withoutReadonlyFields = xml
-    .replace(/\s*<manufacturer_name\b[^>]*>[\s\S]*?<\/manufacturer_name>/g, '')
-    .replace(/\s*<quantity\b[^>]*>[\s\S]*?<\/quantity>/g, '');
+  const withoutReadonlyFields = stripProductReadonlyFields(xml);
 
   if (!/<price\b[^>]*>[\s\S]*?<\/price>/.test(withoutReadonlyFields)) {
     throw new Error('PrestaShop product XML does not contain a price field');
@@ -428,4 +454,77 @@ function replaceProductPriceXml(xml: string, price: number) {
     /<price\b([^>]*)>[\s\S]*?<\/price>/,
     `<price$1>${normalizedPrice}</price>`,
   );
+}
+
+export function replaceProductOrderAvailabilityXml(
+  xml: string,
+  options: Pick<ShopStockUpdateOptions, 'availabilityPolicy' | 'leadTimeDays' | 'warehouseAvailableAt'>,
+) {
+  const availableForOrder = options.availabilityPolicy === 'OUT_OF_STOCK' ? 0 : 1;
+  const showPrice = 1;
+  const availableLater = buildAvailableLaterMessage(options);
+
+  return replaceLocalizedTextField(
+    replaceSimpleProductField(
+      replaceSimpleProductField(
+        stripProductReadonlyFields(xml),
+        'available_for_order',
+        String(availableForOrder),
+      ),
+      'show_price',
+      String(showPrice),
+    ),
+    'available_later',
+    availableLater,
+  );
+}
+
+function stripProductReadonlyFields(xml: string) {
+  return xml
+    .replace(/\s*<manufacturer_name\b[^>]*>[\s\S]*?<\/manufacturer_name>/g, '')
+    .replace(/\s*<quantity\b[^>]*>[\s\S]*?<\/quantity>/g, '');
+}
+
+function replaceSimpleProductField(xml: string, field: string, value: string) {
+  const replacement = `<${field}>${escapeXml(value)}</${field}>`;
+  const fieldPattern = new RegExp(`<${field}\\b[^>]*>[\\s\\S]*?<\\/${field}>`);
+  if (fieldPattern.test(xml)) return xml.replace(fieldPattern, replacement);
+
+  if (field === 'available_for_order' && /<show_price\b[^>]*>/.test(xml)) {
+    return xml.replace(/<show_price\b[^>]*>/, `${replacement}\n    $&`);
+  }
+
+  if (/<visibility\b[^>]*>/.test(xml)) {
+    return xml.replace(/<visibility\b[^>]*>/, `${replacement}\n    $&`);
+  }
+
+  return xml.replace('</product>', `    ${replacement}\n  </product>`);
+}
+
+function replaceLocalizedTextField(xml: string, field: string, value: string) {
+  const fieldPattern = new RegExp(`<${field}\\b[^>]*>[\\s\\S]*?<\\/${field}>`);
+  if (!fieldPattern.test(xml)) return xml;
+
+  return xml.replace(fieldPattern, (fieldXml) => {
+    if (!/<language\b[^>]*>/.test(fieldXml)) {
+      return `<${field}>${escapeXml(value)}</${field}>`;
+    }
+
+    return fieldXml.replace(
+      /<language\b([^>]*)>[\s\S]*?<\/language>/g,
+      `<language$1><![CDATA[${cdata(value)}]]></language>`,
+    );
+  });
+}
+
+function buildAvailableLaterMessage(
+  options: Pick<ShopStockUpdateOptions, 'availabilityPolicy' | 'leadTimeDays' | 'warehouseAvailableAt'>,
+) {
+  if (options.availabilityPolicy !== 'BACKORDER_FROM_WHOLESALE') return '';
+  if (options.warehouseAvailableAt) return `Dostawa z hurtowni od ${options.warehouseAvailableAt}`;
+  if (options.leadTimeDays === 0) return 'Dostawa z hurtowni';
+  if (options.leadTimeDays !== undefined && options.leadTimeDays !== null) {
+    return `Wysyłka w ${options.leadTimeDays} dni`;
+  }
+  return 'Dostępne u dostawcy';
 }

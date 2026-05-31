@@ -5,6 +5,7 @@ import { registerWarehouseScannerRoutes } from './warehouse/scanner.routes';
 import { registerWarehouseStockRoutes } from './warehouse/stock.routes';
 import { registerWarehouseDocumentRoutes } from './warehouse/documents.routes';
 import { registerWarehouseProductRoutes } from './warehouse/products.routes';
+import { registerWarehousePricingRoutes } from './warehouse/pricing.routes';
 
 export async function warehouseRoutes(fastify: FastifyInstance) {
   // ─── Dashboard ────────────────────────────────────────────────────────────
@@ -22,6 +23,10 @@ export async function warehouseRoutes(fastify: FastifyInstance) {
   // ─── Products ─────────────────────────────────────────────────────────────
 
   await registerWarehouseProductRoutes(fastify);
+
+  // ─── Pricing ──────────────────────────────────────────────────────────────
+
+  await registerWarehousePricingRoutes(fastify);
 
   // ─── Documents ────────────────────────────────────────────────────────────
 

@@ -24,9 +24,12 @@ async function processPriceSyncJob(job: Job<PriceSyncJobData>) {
   if (!shop) throw new Error(`Shop not found: ${shopId}`);
   if (!mapping) throw new Error(`Shop product mapping not found: ${shopProductMappingId}`);
   if (!log) throw new Error(`Price sync log not found: ${logId}`);
-  if (product.retailPrice === null) throw new Error(`Warehouse product has no retail price: ${warehouseProductId}`);
+  if (log.priceAfter === null) throw new Error(`Price sync log has no target price: ${logId}`);
 
-  const retailPrice = Number(product.retailPrice);
+  const targetPrice = Number(log.priceAfter);
+  if (!Number.isFinite(targetPrice) || targetPrice < 0) {
+    throw new Error(`Invalid target price for price sync log: ${logId}`);
+  }
 
   await prisma.priceSyncLog.update({
     where: { id: logId },
@@ -34,7 +37,7 @@ async function processPriceSyncJob(job: Job<PriceSyncJobData>) {
       status: 'PROCESSING',
       attemptCount: { increment: 1 },
       priceBefore: mapping.externalPrice,
-      priceAfter: product.retailPrice,
+      priceAfter: log.priceAfter,
     },
   });
 
@@ -43,7 +46,7 @@ async function processPriceSyncJob(job: Job<PriceSyncJobData>) {
     throw new Error(`Price sync is not implemented for platform ${shop.platform}`);
   }
 
-  await client.updateProductPrice(externalProductId, retailPrice);
+  await client.updateProductPrice(externalProductId, targetPrice);
 
   await prisma.$transaction([
     prisma.priceSyncLog.update({
@@ -51,7 +54,7 @@ async function processPriceSyncJob(job: Job<PriceSyncJobData>) {
       data: {
         status: 'SUCCESS',
         priceBefore: mapping.externalPrice,
-        priceAfter: product.retailPrice,
+        priceAfter: log.priceAfter,
         errorMessage: null,
         syncedAt: new Date(),
       },
@@ -59,13 +62,13 @@ async function processPriceSyncJob(job: Job<PriceSyncJobData>) {
     prisma.shopProductMapping.update({
       where: { id: shopProductMappingId },
       data: {
-        externalPrice: product.retailPrice,
+        externalPrice: log.priceAfter,
         lastSyncAt: new Date(),
       },
     }),
   ]);
 
-  return { success: true, price: retailPrice };
+  return { success: true, price: targetPrice };
 }
 
 export function startPriceSyncWorker() {

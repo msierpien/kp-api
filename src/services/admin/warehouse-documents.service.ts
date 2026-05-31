@@ -485,6 +485,7 @@ export async function confirmDocument(id: string) {
   await assertCanConfirmWithoutNegativeStock(doc.tenantId, doc.type, doc.items);
 
   const confirmedDocument = await prisma.$transaction(async (tx) => {
+    await applyIncomingPurchaseCosts(tx, doc.type, doc.items);
     await applyStockDeltas(tx, doc.type, doc.items);
     await consumeDocumentReservations(tx, doc.items);
 
@@ -823,6 +824,50 @@ async function applyStockDeltas(
     await tx.warehouseProduct.update({
       where: { id: productId },
       data: { currentStock: { increment: delta } },
+    });
+  }
+}
+
+async function applyIncomingPurchaseCosts(
+  tx: Prisma.TransactionClient,
+  type: DocumentType,
+  items: Array<{ productId: string; quantity: Prisma.Decimal; unitPrice?: Prisma.Decimal | null }>,
+) {
+  if (type !== 'PZ') return;
+
+  const incomingByProduct = new Map<string, { quantity: Prisma.Decimal; value: Prisma.Decimal }>();
+  for (const item of items) {
+    if (item.unitPrice === null || item.unitPrice === undefined) continue;
+    const quantity = new Prisma.Decimal(item.quantity);
+    if (quantity.lte(0)) continue;
+    const value = quantity.mul(item.unitPrice);
+    const current = incomingByProduct.get(item.productId) ?? {
+      quantity: new Prisma.Decimal(0),
+      value: new Prisma.Decimal(0),
+    };
+    incomingByProduct.set(item.productId, {
+      quantity: current.quantity.plus(quantity),
+      value: current.value.plus(value),
+    });
+  }
+
+  for (const [productId, incoming] of incomingByProduct) {
+    const product = await tx.warehouseProduct.findUnique({
+      where: { id: productId },
+      select: { currentStock: true, averagePurchaseCost: true, purchasePrice: true },
+    });
+    if (!product) continue;
+
+    const currentStock = Prisma.Decimal.max(new Prisma.Decimal(product.currentStock), new Prisma.Decimal(0));
+    const currentCost = new Prisma.Decimal(product.averagePurchaseCost ?? product.purchasePrice ?? 0);
+    const nextStock = currentStock.plus(incoming.quantity);
+    const nextCost = currentStock.gt(0) && currentCost.gt(0)
+      ? currentStock.mul(currentCost).plus(incoming.value).div(nextStock)
+      : incoming.value.div(incoming.quantity);
+
+    await tx.warehouseProduct.update({
+      where: { id: productId },
+      data: { averagePurchaseCost: new Prisma.Decimal(nextCost.toFixed(2)) },
     });
   }
 }

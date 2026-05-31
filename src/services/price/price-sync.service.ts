@@ -17,6 +17,7 @@ export interface PriceSyncLogsQuery {
 
 export interface SyncProductPriceOptions {
   shopId?: string;
+  price?: number;
   triggeredBy?: PriceSyncTriggeredBy;
 }
 
@@ -78,7 +79,9 @@ export async function syncProductPrice(
     where: { id: warehouseProductId, tenantId },
   });
   if (!product) throw new Error('Produkt magazynowy nie znaleziony');
-  if (product.retailPrice === null) throw new Error('Produkt nie ma ustawionej ceny sprzedaży');
+  const targetPrice = options.price ?? (product.retailPrice === null ? null : Number(product.retailPrice));
+  if (targetPrice === null) throw new Error('Produkt nie ma ustawionej ceny sprzedaży');
+  if (!Number.isFinite(targetPrice) || targetPrice < 0) throw new Error('Cena sprzedaży jest nieprawidłowa');
 
   const where: Prisma.ShopProductMappingWhereInput = {
     tenantId,
@@ -109,7 +112,7 @@ export async function syncProductPrice(
         shopProductMappingId: mapping.id,
         triggeredBy,
         priceBefore: mapping.externalPrice,
-        priceAfter: product.retailPrice,
+        priceAfter: targetPrice,
         status: 'PENDING',
       },
     });
@@ -139,7 +142,7 @@ export async function retryPriceSyncLog(id: string) {
   });
 
   if (!log) throw new Error('Log synchronizacji ceny nie znaleziony');
-  if (log.warehouseProduct.retailPrice === null) throw new Error('Produkt nie ma ustawionej ceny sprzedaży');
+  if (log.priceAfter === null) throw new Error('Log synchronizacji nie ma ceny docelowej');
 
   const mapping = await prisma.shopProductMapping.findFirst({
     where: {
@@ -164,7 +167,7 @@ export async function retryPriceSyncLog(id: string) {
       shopProductMappingId: mapping.id,
       triggeredBy: 'MANUAL',
       priceBefore: mapping.externalPrice,
-      priceAfter: log.warehouseProduct.retailPrice,
+      priceAfter: log.priceAfter,
       status: 'PENDING',
     },
   });

@@ -7,6 +7,8 @@ import * as reservationService from '../../../services/admin/warehouse-reservati
 import * as priceSyncService from '../../../services/price/price-sync.service';
 import * as stockSyncService from '../../../services/stock/stock-sync.service';
 import * as shopProductPublicationService from '../../../services/admin/shop-product-publication.service';
+import * as pricingService from '../../../services/admin/warehouse-pricing.service';
+import { pricingProductsBodySchema } from './pricing.routes';
 import { getProductStock } from '../../../services/admin/warehouse-stock.service';
 
 export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
@@ -134,6 +136,34 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
       const message = error instanceof Error ? error.message : 'Błąd masowego usuwania produktów';
       const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/products/bulk/update-prices', {
+    schema: {
+      tags: ['warehouse-pricing'],
+      summary: 'Masowo ustaw reguły cenowe produktów i przelicz ceny',
+      body: {
+        ...pricingProductsBodySchema(),
+        required: ['productIds'],
+        properties: {
+          ...pricingProductsBodySchema().properties,
+          marginPercent: { type: ['number', 'null'], minimum: 0 },
+          minProfit: { type: ['number', 'null'], minimum: 0 },
+          fixedNetPrice: { type: ['number', 'null'], minimum: 0 },
+          vatRate: { type: ['number', 'null'], minimum: 0 },
+          roundingMode: { type: 'string', enum: ['END_99', 'TENTH', 'CENT'] },
+          syncMode: { type: 'string', enum: ['AUTO', 'CONFIRM', 'MANUAL'] },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: pricingService.BulkUpdatePricesInput }>, reply: FastifyReply) => {
+    try {
+      const result = await pricingService.bulkUpdateProductPrices(request.body);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd masowej aktualizacji cen';
+      return reply.status(400).send({ error: 'Error', message });
     }
   });
 
@@ -509,6 +539,7 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
         type: 'object',
         properties: {
           shopId: { type: 'string' },
+          price: { type: 'number', minimum: 0 },
         },
       },
       response: {

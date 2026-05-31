@@ -43,6 +43,8 @@ model Tenant {
   shopProductMappings   ShopProductMapping[]
   stockSyncLogs         StockSyncLog[]
   priceSyncLogs         PriceSyncLog[]
+  pricingRules          WarehousePricingRule[]
+  productShopPrices     WarehouseProductShopPrice[]
   shopProductImportLogs ShopProductImportLog[]
   wholesaleProviders    WholesaleProvider[]
   wholesaleMappings     WholesaleProductMapping[]
@@ -97,6 +99,8 @@ model Shop {
   productMappings      ShopProductMapping[]
   stockSyncLogs        StockSyncLog[]
   priceSyncLogs        PriceSyncLog[]
+  pricingRules         WarehousePricingRule[]
+  productShopPrices    WarehouseProductShopPrice[]
   productImportLogs    ShopProductImportLog[]
   webhookEvents        ShopWebhookEvent[]
 
@@ -636,6 +640,7 @@ model WarehouseProduct {
   unit          String   @default("szt")
   description   String?
   purchasePrice Decimal? @map("purchase_price") @db.Decimal(10, 2)
+  averagePurchaseCost Decimal? @map("average_purchase_cost") @db.Decimal(10, 2)
   retailPrice   Decimal? @map("retail_price") @db.Decimal(10, 2)
   currentStock  Decimal  @default(0) @map("current_stock") @db.Decimal(10, 3)
   leadTimeDaysOverride Int? @map("lead_time_days_override")
@@ -652,6 +657,8 @@ model WarehouseProduct {
   shopProductMappings   ShopProductMapping[]
   stockSyncLogs         StockSyncLog[]
   priceSyncLogs         PriceSyncLog[]
+  pricingRules          WarehousePricingRule[]
+  shopPrices            WarehouseProductShopPrice[]
   wholesaleMappings     WholesaleProductMapping[]
   warehouseReservations WarehouseReservation[]
   orderItems            OrderItem[]
@@ -662,6 +669,69 @@ model WarehouseProduct {
   @@index([leadTimeGroupId])
   @@index([tenantId, isActive])
   @@map("warehouse_products")
+}
+
+model WarehousePricingRule {
+  id                 String   @id @default(cuid())
+  tenantId           String   @map("tenant_id")
+  level              String
+  shopId             String?  @map("shop_id")
+  catalogId          String?  @map("catalog_id")
+  warehouseProductId String?  @map("warehouse_product_id")
+  marginPercent      Decimal? @map("margin_percent") @db.Decimal(7, 3)
+  minProfit          Decimal? @map("min_profit") @db.Decimal(10, 2)
+  fixedNetPrice      Decimal? @map("fixed_net_price") @db.Decimal(10, 2)
+  vatRate            Decimal  @default(23) @map("vat_rate") @db.Decimal(5, 2)
+  roundingMode       String   @default("END_99") @map("rounding_mode")
+  syncMode           String   @default("CONFIRM") @map("sync_mode")
+  isActive           Boolean  @default(true) @map("is_active")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shop             Shop?            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  catalog          WarehouseCatalog? @relation(fields: [catalogId], references: [id], onDelete: Cascade)
+  warehouseProduct WarehouseProduct? @relation(fields: [warehouseProductId], references: [id], onDelete: Cascade)
+  shopPrices       WarehouseProductShopPrice[]
+
+  @@index([tenantId])
+  @@index([tenantId, level])
+  @@index([shopId])
+  @@index([catalogId])
+  @@index([warehouseProductId])
+  @@index([tenantId, isActive])
+  @@map("warehouse_pricing_rules")
+}
+
+model WarehouseProductShopPrice {
+  id                 String   @id @default(cuid())
+  tenantId           String   @map("tenant_id")
+  warehouseProductId String   @map("warehouse_product_id")
+  shopId             String   @map("shop_id")
+  pricingRuleId      String?  @map("pricing_rule_id")
+  costBasis          Decimal? @map("cost_basis") @db.Decimal(10, 2)
+  netPrice           Decimal? @map("net_price") @db.Decimal(10, 2)
+  grossPrice         Decimal? @map("gross_price") @db.Decimal(10, 2)
+  marginPercent      Decimal? @map("margin_percent") @db.Decimal(7, 3)
+  profitAmount       Decimal? @map("profit_amount") @db.Decimal(10, 2)
+  warningCode        String?  @map("warning_code")
+  warningMessage     String?  @map("warning_message") @db.Text
+  calculatedAt       DateTime @default(now()) @map("calculated_at")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  tenant           Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseProduct WarehouseProduct      @relation(fields: [warehouseProductId], references: [id], onDelete: Cascade)
+  shop             Shop                  @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  pricingRule      WarehousePricingRule? @relation(fields: [pricingRuleId], references: [id], onDelete: SetNull)
+
+  @@unique([warehouseProductId, shopId])
+  @@index([tenantId])
+  @@index([warehouseProductId])
+  @@index([shopId])
+  @@index([pricingRuleId])
+  @@index([tenantId, calculatedAt])
+  @@map("warehouse_product_shop_prices")
 }
 
 model WarehouseCatalog {
@@ -677,6 +747,7 @@ model WarehouseCatalog {
 
   tenant   Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   products WarehouseProduct[]
+  pricingRules WarehousePricingRule[]
 
   @@unique([tenantId, code])
   @@index([tenantId])

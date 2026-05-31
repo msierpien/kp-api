@@ -216,6 +216,12 @@ export async function getProducts(query: ProductsQuery = {}) {
           orderBy: { updatedAt: 'desc' },
           take: shopId ? 10 : 5,
         },
+        shopPrices: {
+          where: shopId ? { shopId } : undefined,
+          include: { shop: { select: { id: true, name: true } } },
+          orderBy: { calculatedAt: 'desc' },
+          take: shopId ? 10 : 5,
+        },
       },
     }),
     prisma.warehouseProduct.count({ where }),
@@ -240,6 +246,11 @@ export async function getProductById(id: string) {
           shopProductMappings: { where: { isActive: true } },
           wholesaleMappings: { where: { isActive: true } },
         },
+      },
+      shopPrices: {
+        include: { shop: { select: { id: true, name: true } } },
+        orderBy: { calculatedAt: 'desc' },
+        take: 20,
       },
     },
   });

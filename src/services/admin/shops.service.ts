@@ -48,6 +48,54 @@ export async function assertShopAdminAccess(id: string) {
   return shop;
 }
 
+const MANAGED_SHOP_CONFIG_KEYS = [
+  'bulkStockUrl',
+  'bulkStockApiKey',
+  'defaultLeadTimeDays',
+] as const;
+
+function normalizeShopConfig(value: unknown): Record<string, any> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, any>
+    : {};
+}
+
+export function preserveManagedShopConfig(
+  inputConfig: unknown,
+  existingConfig: unknown,
+): Record<string, any> {
+  const next = { ...normalizeShopConfig(inputConfig) };
+  const existing = normalizeShopConfig(existingConfig);
+
+  for (const key of MANAGED_SHOP_CONFIG_KEYS) {
+    if (!(key in next) && key in existing) {
+      next[key] = existing[key];
+    }
+  }
+
+  return next;
+}
+
+function publicShopConfig(configJson: Record<string, any>) {
+  const { bulkStockApiKey: _bulkStockApiKey, ...safeConfig } = configJson;
+  return safeConfig.orderSync ? safeConfig : {
+    ...safeConfig,
+    orderSync: {
+      enabled: true,
+      intervalMinutes: 10,
+      orderStatus: 'PAID',
+    },
+    adminApi: {
+      clientId: null,
+      clientSecret: null,
+      scopes: [],
+      ...(safeConfig.adminApi && typeof safeConfig.adminApi === 'object' && !Array.isArray(safeConfig.adminApi)
+        ? safeConfig.adminApi
+        : {}),
+    },
+  };
+}
+
 const mapShop = (shop: any): ShopItem => {
   const configJson = (shop.configJson as any) || {};
   return {
@@ -60,18 +108,7 @@ const mapShop = (shop: any): ShopItem => {
     apiKey: decrypt(shop.apiKey),
     apiSecret: shop.apiSecret ? decrypt(shop.apiSecret) : null,
     authType: configJson.authType || 'WEB_SERVICE',
-    config: configJson.orderSync ? configJson : {
-      orderSync: {
-        enabled: true,
-        intervalMinutes: 10,
-        orderStatus: 'PAID',
-      },
-      adminApi: {
-        clientId: null,
-        clientSecret: null,
-        scopes: [],
-      },
-    },
+    config: publicShopConfig(configJson),
     hasBulkStock: Boolean(configJson.bulkStockApiKey),
     bulkStockUrl: typeof configJson.bulkStockUrl === 'string' ? configJson.bulkStockUrl : null,
     defaultLeadTimeDays: normalizeLeadTimeDays(configJson.defaultLeadTimeDays),
@@ -151,7 +188,14 @@ export async function createShop(input: CreateShopInput): Promise<ShopItem> {
 }
 
 export async function updateShop(id: string, input: UpdateShopInput): Promise<ShopItem> {
-  await assertShopAdminAccess(id);
+  const existingShop = await prisma.shop.findFirst({
+    where: getShopAdminWhere(id),
+    select: { configJson: true },
+  });
+
+  if (!existingShop) {
+    throw new NotFoundError('Shop not found');
+  }
 
   const shop = await prisma.shop.update({
     where: { id },
@@ -162,7 +206,7 @@ export async function updateShop(id: string, input: UpdateShopInput): Promise<Sh
       apiKey: input.apiKey ? encrypt(input.apiKey) : '', // Szyfruj przed zapisem
       apiSecret: input.apiSecret ? encrypt(input.apiSecret) : null, // Szyfruj jeśli istnieje
       status: input.status,
-      configJson: input.config || {},
+      configJson: preserveManagedShopConfig(input.config || {}, existingShop.configJson),
     },
   });
 

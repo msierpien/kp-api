@@ -17,6 +17,8 @@ export interface ProductSourceMappingStats {
   mappedByEan: number;
   skippedConflict: number;
   skippedNoMatch: number;
+  skippedUpdateFailed: number;
+  errors: Array<{ mappingId: string; message: string }>;
 }
 
 export interface BulkAutoMapProductSourcesResult {
@@ -42,6 +44,8 @@ const EMPTY_STATS: ProductSourceMappingStats = {
   mappedByEan: 0,
   skippedConflict: 0,
   skippedNoMatch: 0,
+  skippedUpdateFailed: 0,
+  errors: [],
 };
 
 function requireTenantId() {
@@ -313,19 +317,25 @@ async function applyMappingOperations(
 ) {
   for (let offset = 0; offset < operations.length; offset += UPDATE_BATCH_SIZE) {
     const batch = operations.slice(offset, offset + UPDATE_BATCH_SIZE);
-    const updates = await prisma.$transaction(
-      batch.map((operation) => updateMappingOperation(source, tenantId, operation)),
-    );
+    for (const operation of batch) {
+      try {
+        const update = await updateMappingOperation(source, tenantId, operation);
+        const count = update.count;
+        if (count === 0) continue;
 
-    updates.forEach((update, index) => {
-      const count = update.count;
-      if (count === 0) return;
-
-      const operation = batch[index];
-      stats.mapped += count;
-      if (operation.matchType === 'SKU') stats.mappedBySku += count;
-      if (operation.matchType === 'EAN') stats.mappedByEan += count;
-    });
+        stats.mapped += count;
+        if (operation.matchType === 'SKU') stats.mappedBySku += count;
+        if (operation.matchType === 'EAN') stats.mappedByEan += count;
+      } catch (error) {
+        stats.skippedUpdateFailed++;
+        if (stats.errors.length < 20) {
+          stats.errors.push({
+            mappingId: operation.id,
+            message: error instanceof Error ? error.message : 'Błąd zapisu mapowania',
+          });
+        }
+      }
+    }
   }
 }
 

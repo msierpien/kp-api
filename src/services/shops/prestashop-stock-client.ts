@@ -503,7 +503,12 @@ export function replaceProductOrderAvailabilityXml(
 function stripProductReadonlyFields(xml: string) {
   return xml
     .replace(/\s*<manufacturer_name\b[^>]*>[\s\S]*?<\/manufacturer_name>/g, '')
-    .replace(/\s*<quantity\b[^>]*>[\s\S]*?<\/quantity>/g, '');
+    .replace(/\s*<quantity\b[^>]*>[\s\S]*?<\/quantity>/g, '')
+    // position_in_category is a virtual webservice field whose getter is 0-based
+    // while setWsPositionInCategory() requires >= 1, so round-tripping it on PUT
+    // throws PrestaShop errors 134 ("0 or negative position") / 135 ("greater than
+    // total in category"). We never change positions here, so strip it.
+    .replace(/\s*<position_in_category\b[^>]*>[\s\S]*?<\/position_in_category>/g, '');
 }
 
 function replaceSimpleProductField(xml: string, field: string, value: string) {

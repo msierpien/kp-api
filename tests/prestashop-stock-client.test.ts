@@ -11,6 +11,7 @@ const PRODUCT_XML = `<?xml version="1.0" encoding="UTF-8"?>
     <id>123</id>
     <manufacturer_name>Readonly</manufacturer_name>
     <quantity>0</quantity>
+    <position_in_category>0</position_in_category>
     <available_for_order>0</available_for_order>
     <show_price>0</show_price>
     <available_later>
@@ -33,6 +34,7 @@ test('PrestaShop product update enables orders and publishes wholesale lead time
   assert.match(xml, /<language id="2"><!\[CDATA\[Wysyłka w 3 dni\]\]><\/language>/);
   assert.doesNotMatch(xml, /<manufacturer_name>/);
   assert.doesNotMatch(xml, /<quantity>/);
+  assert.doesNotMatch(xml, /<position_in_category>/);
 });
 
 test('PrestaShop product update disables ordering when product is out of stock everywhere', () => {

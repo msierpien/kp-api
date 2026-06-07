@@ -216,6 +216,32 @@ export async function shopsRoutes(fastify: FastifyInstance) {
     }
   );
 
+  // PATCH /admin/shops/:id/order-sync-config
+  fastify.patch<{ Params: ShopIdParamsInput; Body: { fromDate?: string | null } }>(
+    '/:id/order-sync-config',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Zapisz konfigurację synchronizacji zamówień',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        body: {
+          type: 'object',
+          properties: {
+            fromDate: {
+              anyOf: [{ type: 'string' }, { type: 'null' }],
+              description: 'Najwcześniejsza data importu zamówień (YYYY-MM-DD). Null usuwa ograniczenie.',
+            },
+          },
+        },
+        response: { 200: shopResponseSchema },
+      },
+    },
+    async (request, reply) => {
+      const result = await shopsUseCases.updateOrderSyncConfig(request.params.id, request.body ?? {});
+      return reply.send(result);
+    },
+  );
+
   // PATCH /admin/shops/:id/bulk-stock-config
   fastify.patch<{
     Params: ShopIdParamsInput;
@@ -456,7 +482,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
   fastify.post<{
     Params: ShopIdParamsInput;
     Querystring: { wait?: string | boolean };
-    Body: { fromDate?: string; fromOrderId?: string; limit?: number };
+    Body: { fromDate?: string | null; fromOrderId?: string; limit?: number };
   }>(
     '/:id/sync',
     {
@@ -473,7 +499,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
         body: {
           type: 'object',
           properties: {
-            fromDate: { type: 'string', description: 'Data od której synchronizować (YYYY-MM-DD)' },
+            fromDate: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Data od której synchronizować (YYYY-MM-DD)' },
             fromOrderId: { type: 'string', description: 'ID zamówienia od którego synchronizować (włącznie)' },
             limit: { type: 'integer', minimum: 1, maximum: 500, description: 'Maks. liczba zamówień do pobrania' },
           },
@@ -485,7 +511,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       request: FastifyRequest<{
         Params: ShopIdParamsInput;
         Querystring: { wait?: string | boolean };
-        Body: { fromDate?: string; fromOrderId?: string; limit?: number };
+        Body: { fromDate?: string | null; fromOrderId?: string; limit?: number };
       }>,
       reply: FastifyReply
     ) => {

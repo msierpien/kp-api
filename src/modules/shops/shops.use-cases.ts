@@ -13,6 +13,7 @@ import {
   listShops,
   testShopConnection,
   updateShop,
+  updateShopOrderSyncConfig,
 } from '../../services/admin/shops.service';
 import {
   disableShopSync,
@@ -28,10 +29,15 @@ import {
 } from '../../services/shops/prestashop-stock-client';
 import * as stockSyncService from '../../services/stock/stock-sync.service';
 import * as shopWebhookService from '../../services/webhooks/prestashop-order-webhook.service';
+import { assertValidOrderSyncDate } from '../../services/sync/order-sync-date';
 
 type Logger = {
   error: (payload: unknown, message?: string) => void;
   info: (payload: unknown, message?: string) => void;
+};
+
+export type UpdateOrderSyncConfigInput = {
+  fromDate?: string | null;
 };
 
 export type UpdateBulkStockConfigInput = {
@@ -43,7 +49,7 @@ export type UpdateBulkStockConfigInput = {
 
 export type ManualSyncInput = {
   wait?: string | boolean;
-  fromDate?: string;
+  fromDate?: string | null;
   fromOrderId?: string;
   limit?: number;
 };
@@ -130,6 +136,8 @@ export const shopsUseCases = {
   getImportReadiness: (id: string) => getShopImportReadiness(id),
 
   testConnection: (id: string) => testShopConnection(id),
+
+  updateOrderSyncConfig: (id: string, input: UpdateOrderSyncConfigInput) => updateShopOrderSyncConfig(id, input),
 
   updateBulkStockConfig: async (id: string, input: UpdateBulkStockConfigInput, logger: Pick<Logger, 'error'>) => {
     const shop = await prisma.shop.findFirst({
@@ -270,11 +278,12 @@ export const shopsUseCases = {
   triggerManualSync: async (id: string, input: ManualSyncInput, logger: Pick<Logger, 'info'>) => {
     await assertShopAdminAccess(id);
     const wait = input.wait === true || input.wait === 'true';
-    logger.info({ shopId: id, wait, fromDate: input.fromDate, fromOrderId: input.fromOrderId, limit: input.limit }, 'Manual sync triggered');
+    const fromDate = assertValidOrderSyncDate(input.fromDate, 'fromDate') ?? undefined;
+    logger.info({ shopId: id, wait, fromDate, fromOrderId: input.fromOrderId, limit: input.limit }, 'Manual sync triggered');
 
     return triggerManualSync(id, {
       wait,
-      fromDate: input.fromDate,
+      fromDate,
       fromOrderId: input.fromOrderId,
       limit: input.limit,
     });

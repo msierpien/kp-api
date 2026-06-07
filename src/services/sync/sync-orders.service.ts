@@ -17,11 +17,13 @@ import {
   normalizeCutoff,
   type ShippingPromise,
 } from '../orders/shipping-promise.service';
+import { resolveOrderSyncFromDate } from './order-sync-date';
 
 const DEBUG_SHOP_SYNC = process.env.DEBUG_SHOP_SYNC === 'true';
 
 export interface SyncResult {
   success: boolean;
+  fromDate?: string;
   ordersFetched: number;
   ordersCreated: number;
   ordersSkipped: number;
@@ -93,10 +95,13 @@ export async function syncShopOrders(shopId: string, options: SyncShopOrdersOpti
     const context = await createShopSyncContext(shopId);
     const autoCreateWz = await shouldAutoCreateWzForTenant(context.shop.tenantId);
 
-    const dateFrom = options.fromDate
-      ?? (context.shop.lastSyncAt
-        ? context.shop.lastSyncAt.toISOString().split('T')[0]
-        : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
+    const dateFrom = resolveOrderSyncFromDate({
+      requestedFromDate: options.fromDate,
+      lastSyncAt: context.shop.lastSyncAt,
+      config: context.config,
+      now: startTime,
+    });
+    result.fromDate = dateFrom;
 
     const syncLimit = options.limit ?? context.config.orderSync?.limit ?? 50;
 

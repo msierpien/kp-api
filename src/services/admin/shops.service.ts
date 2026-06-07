@@ -10,6 +10,7 @@ import { removeShopFromScheduler } from '../scheduler/scheduler.service';
 import { getTenantContext } from '../../lib/tenant-context';
 import { PrestaShopClient } from '../prestashop/prestashop-client';
 import { normalizeBulkStockBatchSize } from '../shops/prestashop-stock-client';
+import { assertValidOrderSyncDate, normalizeOrderSyncDate } from '../sync/order-sync-date';
 
 type ShopTenantScopeContext = {
   tenantId?: string | null;
@@ -56,17 +57,73 @@ const MANAGED_SHOP_CONFIG_KEYS = [
   'bulkStockBatchSize',
 ] as const;
 
+const DEFAULT_ORDER_SYNC_CONFIG = {
+  enabled: true,
+  intervalMinutes: 10,
+  orderStatus: 'PAID',
+  fromDate: null as string | null,
+};
+
+const DEFAULT_ADMIN_API_CONFIG = {
+  clientId: null,
+  clientSecret: null,
+  scopes: [],
+};
+
 function normalizeShopConfig(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, any>
+    ? { ...(value as Record<string, any>) }
     : {};
+}
+
+function hasOwn(value: Record<string, any>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function getRawOrderSyncFromDate(orderSync: Record<string, any>) {
+  return hasOwn(orderSync, 'fromDate')
+    ? orderSync.fromDate
+    : orderSync.dateFrom
+      ?? orderSync.syncFromDate
+      ?? orderSync.startDate;
+}
+
+function normalizeOrderSyncForStorage(orderSyncInput: unknown) {
+  const orderSync = normalizeShopConfig(orderSyncInput);
+  if (Object.keys(orderSync).length === 0) return orderSync;
+
+  const rawFromDate = getRawOrderSyncFromDate(orderSync);
+  if (rawFromDate !== undefined || hasOwn(orderSync, 'fromDate')) {
+    orderSync.fromDate = assertValidOrderSyncDate(rawFromDate, 'config.orderSync.fromDate');
+  }
+
+  return orderSync;
+}
+
+function normalizeShopConfigForStorage(config: unknown) {
+  const configJson = normalizeShopConfig(config);
+  const orderSync = normalizeOrderSyncForStorage(configJson.orderSync);
+  if (Object.keys(orderSync).length > 0) {
+    configJson.orderSync = orderSync;
+  }
+
+  return configJson;
+}
+
+function publicOrderSyncConfig(orderSyncInput: unknown) {
+  const orderSync = normalizeShopConfig(orderSyncInput);
+  return {
+    ...DEFAULT_ORDER_SYNC_CONFIG,
+    ...orderSync,
+    fromDate: normalizeOrderSyncDate(getRawOrderSyncFromDate(orderSync)),
+  };
 }
 
 export function preserveManagedShopConfig(
   inputConfig: unknown,
   existingConfig: unknown,
 ): Record<string, any> {
-  const next = { ...normalizeShopConfig(inputConfig) };
+  const next = normalizeShopConfig(inputConfig);
   const existing = normalizeShopConfig(existingConfig);
 
   for (const key of MANAGED_SHOP_CONFIG_KEYS) {
@@ -75,25 +132,28 @@ export function preserveManagedShopConfig(
     }
   }
 
-  return next;
+  const nextOrderSync = normalizeShopConfig(next.orderSync);
+  const existingOrderSync = normalizeShopConfig(existing.orderSync);
+  if (!hasOwn(nextOrderSync, 'fromDate') && hasOwn(existingOrderSync, 'fromDate')) {
+    nextOrderSync.fromDate = existingOrderSync.fromDate;
+  }
+  if (Object.keys(nextOrderSync).length > 0) {
+    next.orderSync = nextOrderSync;
+  }
+
+  return normalizeShopConfigForStorage(next);
 }
 
 function publicShopConfig(configJson: Record<string, any>) {
   const { bulkStockApiKey: _bulkStockApiKey, ...safeConfig } = configJson;
-  return safeConfig.orderSync ? safeConfig : {
+  const adminApi = normalizeShopConfig(safeConfig.adminApi);
+
+  return {
     ...safeConfig,
-    orderSync: {
-      enabled: true,
-      intervalMinutes: 10,
-      orderStatus: 'PAID',
-    },
+    orderSync: publicOrderSyncConfig(safeConfig.orderSync),
     adminApi: {
-      clientId: null,
-      clientSecret: null,
-      scopes: [],
-      ...(safeConfig.adminApi && typeof safeConfig.adminApi === 'object' && !Array.isArray(safeConfig.adminApi)
-        ? safeConfig.adminApi
-        : {}),
+      ...DEFAULT_ADMIN_API_CONFIG,
+      ...adminApi,
     },
   };
 }
@@ -182,7 +242,7 @@ export async function createShop(input: CreateShopInput): Promise<ShopItem> {
       apiKey: input.apiKey ? encrypt(input.apiKey) : '', // Szyfruj przed zapisem
       apiSecret: input.apiSecret ? encrypt(input.apiSecret) : null, // Szyfruj jeśli istnieje
       status: input.status,
-      configJson: input.config || {},
+      configJson: normalizeShopConfigForStorage(input.config),
       tenantId: targetTenantId,
     } as any,
   });
@@ -210,6 +270,39 @@ export async function updateShop(id: string, input: UpdateShopInput): Promise<Sh
       apiSecret: input.apiSecret ? encrypt(input.apiSecret) : null, // Szyfruj jeśli istnieje
       status: input.status,
       configJson: preserveManagedShopConfig(input.config || {}, existingShop.configJson),
+    },
+  });
+
+  return mapShop(shop);
+}
+
+export async function updateShopOrderSyncConfig(
+  id: string,
+  input: { fromDate?: string | null },
+): Promise<ShopItem> {
+  const existingShop = await prisma.shop.findFirst({
+    where: getShopAdminWhere(id),
+    select: { configJson: true },
+  });
+
+  if (!existingShop) {
+    throw new NotFoundError('Shop not found');
+  }
+
+  const configJson = normalizeShopConfig(existingShop.configJson);
+  const orderSync = normalizeShopConfig(configJson.orderSync);
+
+  if (hasOwn(input, 'fromDate')) {
+    orderSync.fromDate = assertValidOrderSyncDate(input.fromDate, 'fromDate');
+  }
+
+  const shop = await prisma.shop.update({
+    where: { id },
+    data: {
+      configJson: normalizeShopConfigForStorage({
+        ...configJson,
+        orderSync,
+      }),
     },
   });
 

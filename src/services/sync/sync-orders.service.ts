@@ -1,11 +1,22 @@
 import prisma from '../../lib/prisma';
-import { PrestaShopClient, type PrestaShopOrderDetails } from '../prestashop/prestashop-client';
+import {
+  PrestaShopClient,
+  type PrestaShopBundleOrderSelection,
+  type PrestaShopOrderDetails,
+} from '../prestashop/prestashop-client';
 import { decrypt } from '../../lib/encryption';
 import { emailService } from '../email/email.service';
 import { generateAccessToken } from '../../lib/token';
 import { createWzForOrder, shouldAutoCreateWzForTenant } from '../admin/warehouse-documents.service';
 import { reserveOrder } from '../admin/warehouse-reservations.service';
 import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
+import { getInventoryPublicationDecision, resolveInventoryPublishedLeadTime } from '../stock/stock-sync.service';
+import {
+  calculateShippingPromise,
+  maxShippingPromise,
+  normalizeCutoff,
+  type ShippingPromise,
+} from '../orders/shipping-promise.service';
 
 const DEBUG_SHOP_SYNC = process.env.DEBUG_SHOP_SYNC === 'true';
 
@@ -46,6 +57,19 @@ type ShopSyncContext = {
   mappingsByExternalProductId: Map<string, any>;
   mappingsBySku: Map<string, any>;
   personalizationEnabledForTenant: boolean;
+};
+
+type OrderImportItem = {
+  id: string;
+  product_id: number;
+  product_reference: string;
+  product_name: string;
+  quantity: number;
+  sourceType: 'SIMPLE' | 'BUNDLE_COMPONENT';
+  bundleGroupId?: string | null;
+  bundleName?: string | null;
+  bundleExternalItemId?: string | null;
+  bundleExternalProductId?: string | null;
 };
 
 export interface SyncShopOrdersOptions {
@@ -271,7 +295,30 @@ async function importPrestaShopOrderWithContext(
   }
 
   if (DEBUG_SHOP_SYNC) console.log(`Fetching details for order ${externalOrderId}...`);
-  const details = await context.client.fetchOrderDetails(Number(externalOrderId));
+  const bundleConfig = context.config.advancedBundle ?? context.config.kpAdvancedBundle ?? {};
+  const bundleImportEnabled = Boolean(bundleConfig.enabled ?? bundleConfig.importBundles);
+  const bundleApiKey = typeof bundleConfig.apiKey === 'string'
+    ? bundleConfig.apiKey
+    : typeof bundleConfig.token === 'string'
+      ? bundleConfig.token
+      : '';
+
+  if (bundleImportEnabled && !bundleApiKey.trim()) {
+    result.errors.push(`Order ${externalOrderId}: advanced bundle import enabled but apiKey is missing`);
+    return result;
+  }
+
+  let details: PrestaShopOrderDetails;
+  try {
+    details = await context.client.fetchOrderDetails(
+      Number(externalOrderId),
+      bundleImportEnabled ? { bundleApiKey } : {},
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown PrestaShop order error';
+    result.errors.push(`Order ${externalOrderId}: ${message}`);
+    return result;
+  }
   if (DEBUG_SHOP_SYNC) console.log(`Order ${externalOrderId} details fetched successfully`);
 
   return createOrderFromDetails(context, details, options, result);
@@ -293,6 +340,8 @@ async function createOrderFromDetails(
     });
   }
 
+  const importItems = buildImportItems(details);
+
   const getPersonalizedProduct = (item: { product_reference: string }) => {
     const ref = (item.product_reference || '').toLowerCase();
     return context.productMap.SKU.get(ref) ||
@@ -309,10 +358,11 @@ async function createOrderFromDetails(
     return ref ? context.mappingsBySku.get(ref) || null : null;
   };
 
-  const relevantItems = details.items.filter((item) => {
+  const relevantItems = importItems.filter((item) => {
     const ref = (item.product_reference || '').toLowerCase();
     const personalizedProduct = getPersonalizedProduct(item);
     const shopMapping = getShopMapping(item);
+    const isBundleComponent = item.sourceType === 'BUNDLE_COMPONENT';
     const isWarehouseMapped = Boolean(shopMapping?.warehouseProductId);
     const isPersonalizationMapped = Boolean(
       context.personalizationEnabledForTenant &&
@@ -331,7 +381,8 @@ async function createOrderFromDetails(
       if (DEBUG_SHOP_SYNC) console.log(`[Sync] No match: ${item.product_name} (reference: ${ref})`);
     }
 
-    return isPersonalizationMapped ||
+    return isBundleComponent ||
+      isPersonalizationMapped ||
       (context.personalizationEnabledForTenant && Boolean(personalizedProduct)) ||
       isWarehouseMapped;
   });
@@ -352,6 +403,16 @@ async function createOrderFromDetails(
     return result;
   }
 
+  const shippingPromisesByItemId = new Map<string, ShippingPromise>();
+  for (const item of relevantItems) {
+    const shopMapping: any = getShopMapping(item);
+    const shippingPromise = await buildItemShippingPromise(context, details, shopMapping);
+    if (shippingPromise) {
+      shippingPromisesByItemId.set(item.id, shippingPromise);
+    }
+  }
+  const orderShippingPromise = maxShippingPromise(Array.from(shippingPromisesByItemId.values()));
+
   const order = await prisma.order.create({
     data: {
       shopId: context.shop.id,
@@ -363,6 +424,8 @@ async function createOrderFromDetails(
       currency: 'PLN',
       totalPaid: parseFloat(details.order.total_paid),
       createdAtShop: new Date(details.order.date_add),
+      maxShippingDate: orderShippingPromise?.shippingDate ?? null,
+      shippingPromiseLabel: orderShippingPromise?.shippingPromiseLabel ?? null,
       payloadJson: JSON.parse(JSON.stringify(details)),
     },
   });
@@ -379,6 +442,7 @@ async function createOrderFromDetails(
   for (const item of relevantItems) {
     const shopMapping: any = getShopMapping(item);
     const personalizedProduct: any = getPersonalizedProduct(item);
+    const shippingPromise = shippingPromisesByItemId.get(item.id);
     const mappingTemplate = context.personalizationEnabledForTenant &&
       shopMapping?.warehouseProductId &&
       shopMapping?.personalizationEnabled
@@ -393,6 +457,14 @@ async function createOrderFromDetails(
         sku: item.product_reference,
         productNameSnapshot: item.product_name,
         quantity: item.quantity,
+        sourceType: item.sourceType,
+        bundleGroupId: item.bundleGroupId ?? null,
+        bundleName: item.bundleName ?? null,
+        bundleExternalItemId: item.bundleExternalItemId ?? null,
+        bundleExternalProductId: item.bundleExternalProductId ?? null,
+        shippingDate: shippingPromise?.shippingDate ?? null,
+        shippingLeadTimeDays: shippingPromise?.shippingLeadTimeDays ?? null,
+        shippingSource: shippingPromise?.shippingSource ?? null,
         personalizedProductId: personalizedProduct?.id ?? null,
         warehouseProductId: shopMapping?.warehouseProductId ?? null,
       },
@@ -494,6 +566,78 @@ async function createOrderFromDetails(
 
   result.success = result.errors.length === 0;
   return result;
+}
+
+function buildImportItems(details: PrestaShopOrderDetails): OrderImportItem[] {
+  const bundleByOrderDetailId = new Map<number, PrestaShopBundleOrderSelection>();
+  for (const selection of details.bundleSelections ?? []) {
+    bundleByOrderDetailId.set(Number(selection.id_order_detail), selection);
+  }
+
+  const items: OrderImportItem[] = [];
+  for (const row of details.items) {
+    const bundle = bundleByOrderDetailId.get(Number(row.id));
+    if (!bundle?.components?.length) {
+      items.push({
+        id: String(row.id),
+        product_id: row.product_id,
+        product_reference: row.product_reference,
+        product_name: row.product_name,
+        quantity: row.quantity,
+        sourceType: 'SIMPLE',
+      });
+      continue;
+    }
+
+    const bundleGroupId = `ps:${details.order.id}:od:${row.id}`;
+    bundle.components.forEach((component, index) => {
+      items.push({
+        id: `${row.id}:${component.id_product}:${component.id_product_attribute ?? 0}:${index}`,
+        product_id: component.id_product,
+        product_reference: component.reference || '',
+        product_name: component.name || `Produkt #${component.id_product}`,
+        quantity: Math.max(1, Number(component.quantity ?? 1)) * Math.max(1, row.quantity),
+        sourceType: 'BUNDLE_COMPONENT',
+        bundleGroupId,
+        bundleName: bundle.bundle_name || row.product_name,
+        bundleExternalItemId: String(row.id),
+        bundleExternalProductId: String(row.product_id),
+      });
+    });
+  }
+
+  return items;
+}
+
+async function buildItemShippingPromise(
+  context: ShopSyncContext,
+  details: PrestaShopOrderDetails,
+  shopMapping: any,
+): Promise<ShippingPromise | null> {
+  if (!shopMapping?.warehouseProductId) return null;
+
+  const decision = await getInventoryPublicationDecision(shopMapping.warehouseProductId);
+  if (decision.availabilityPolicy === 'OUT_OF_STOCK') {
+    return null;
+  }
+
+  const cutoff = normalizeCutoff(context.config);
+  const publishedLeadTime = resolveInventoryPublishedLeadTime(decision, context.config);
+  const promise = calculateShippingPromise({
+    baseDate: new Date(details.order.date_add),
+    leadTimeDays: publishedLeadTime.leadTimeDays,
+    cutoffHour: cutoff.hour,
+    cutoffMinute: cutoff.minute,
+    timeZone: context.config.timeZone ?? 'Europe/Warsaw',
+    notBefore: decision.warehouseAvailableAt ?? null,
+  });
+
+  return {
+    ...promise,
+    shippingSource: decision.availabilityPolicy === 'BACKORDER_FROM_WHOLESALE'
+      ? 'WHOLESALE_BACKORDER'
+      : publishedLeadTime.source,
+  };
 }
 
 async function logSync(

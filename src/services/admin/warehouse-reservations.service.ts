@@ -1,6 +1,6 @@
 import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
-import { Prisma, WarehouseReservationStatus } from '@prisma/client';
+import { Prisma, WarehouseReservationSource, WarehouseReservationStatus } from '@prisma/client';
 import { syncStockForProducts } from '../stock/stock-sync.service';
 
 type Tx = Prisma.TransactionClient;
@@ -17,6 +17,8 @@ export interface CreateReservationInput {
   orderId: string;
   orderItemId?: string | null;
   quantity: Prisma.Decimal.Value;
+  source?: WarehouseReservationSource;
+  expectedShipDate?: Date | string | null;
   reason?: string | null;
 }
 
@@ -82,9 +84,19 @@ const reservationInclude = {
       sku: true,
       productNameSnapshot: true,
       quantity: true,
+      sourceType: true,
+      bundleGroupId: true,
+      bundleName: true,
+      shippingDate: true,
+      shippingSource: true,
     },
   },
 } satisfies Prisma.WarehouseReservationInclude;
+
+type ReservationAvailability = {
+  quantity: Prisma.Decimal;
+  source: WarehouseReservationSource;
+};
 
 function normalizePage(value?: number) {
   const page = Number(value ?? 1);
@@ -155,17 +167,45 @@ async function reserveQuantityForProduct(
   tx: Tx,
   productId: string,
   requestedQuantity: Prisma.Decimal,
-  allowNegativeStock: boolean,
-) {
-  if (allowNegativeStock) return requestedQuantity;
-
+  _allowNegativeStock: boolean,
+): Promise<ReservationAvailability> {
   const product = await tx.warehouseProduct.findUnique({
     where: { id: productId },
     select: { currentStock: true },
   });
   const available = new Prisma.Decimal(product?.currentStock ?? 0);
-  if (available.lte(0)) return new Prisma.Decimal(0);
-  return Prisma.Decimal.min(available, requestedQuantity);
+  if (available.gt(0)) {
+    return {
+      quantity: Prisma.Decimal.min(available, requestedQuantity),
+      source: 'LOCAL_STOCK',
+    };
+  }
+
+  const wholesale = await tx.wholesaleProductMapping.findFirst({
+    where: {
+      warehouseProductId: productId,
+      isActive: true,
+      lastKnownStock: { gt: new Prisma.Decimal(0) },
+      provider: { isActive: true },
+    },
+    orderBy: [
+      { lastKnownPrice: 'asc' },
+      { lastSyncAt: 'desc' },
+    ],
+    select: { id: true },
+  });
+
+  if (wholesale) {
+    return {
+      quantity: requestedQuantity,
+      source: 'WHOLESALE_BACKORDER',
+    };
+  }
+
+  return {
+    quantity: new Prisma.Decimal(0),
+    source: 'LOCAL_STOCK',
+  };
 }
 
 async function createActiveReservationInTx(tx: Tx, input: CreateReservationInput, quantity: Prisma.Decimal) {
@@ -177,18 +217,29 @@ async function createActiveReservationInTx(tx: Tx, input: CreateReservationInput
       orderItemId: input.orderItemId ?? null,
       quantity,
       status: 'ACTIVE',
+      source: input.source ?? 'LOCAL_STOCK',
+      expectedShipDate: input.expectedShipDate ? new Date(input.expectedShipDate) : null,
       reason: input.reason ?? null,
     },
     include: reservationInclude,
   });
 
-  await adjustProductStock(tx, input.warehouseProductId, quantity.mul(-1));
+  if ((input.source ?? 'LOCAL_STOCK') === 'LOCAL_STOCK') {
+    await adjustProductStock(tx, input.warehouseProductId, quantity.mul(-1));
+  }
   return reservation;
 }
 
 async function closeActiveReservationInTx(
   tx: Tx,
-  reservation: { id: string; status: WarehouseReservationStatus; warehouseProductId: string; quantity: Prisma.Decimal; reason: string | null },
+  reservation: {
+    id: string;
+    status: WarehouseReservationStatus;
+    warehouseProductId: string;
+    quantity: Prisma.Decimal;
+    source: WarehouseReservationSource;
+    reason: string | null;
+  },
   status: Exclude<WarehouseReservationStatus, 'ACTIVE'>,
   reason?: string | null,
 ) {
@@ -196,7 +247,7 @@ async function closeActiveReservationInTx(
     throw new Error('Można zamknąć tylko aktywną rezerwację');
   }
 
-  if (status === 'RELEASED' || status === 'CANCELLED') {
+  if ((status === 'RELEASED' || status === 'CANCELLED') && reservation.source === 'LOCAL_STOCK') {
     await adjustProductStock(tx, reservation.warehouseProductId, new Prisma.Decimal(reservation.quantity));
   }
 
@@ -252,8 +303,8 @@ export async function createReservation(input: CreateReservationInput) {
     }
 
     const settings = await getWarehouseSettings(tx, tenantId);
-    const reservableQuantity = await reserveQuantityForProduct(tx, product.id, quantity, settings.allowNegativeStock);
-    if (reservableQuantity.lt(quantity)) {
+    const availability = await reserveQuantityForProduct(tx, product.id, quantity, settings.allowNegativeStock);
+    if (availability.quantity.lt(quantity)) {
       throw new Error('Niewystarczający stan produktu do utworzenia pełnej rezerwacji');
     }
 
@@ -265,6 +316,7 @@ export async function createReservation(input: CreateReservationInput) {
         warehouseProductId: product.id,
         orderId: order.id,
         orderItemId,
+        source: availability.source,
       },
       quantity,
     );
@@ -376,7 +428,9 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
             where: { id: existingReservation.id },
             data: { quantity: requestedQuantity },
           });
-          await adjustProductStock(tx, warehouseProductId, delta.mul(-1));
+          if (existingReservation.source === 'LOCAL_STOCK') {
+            await adjustProductStock(tx, warehouseProductId, delta.mul(-1));
+          }
           result.updated++;
           result.issues.push({
             orderItemId: item.id,
@@ -390,8 +444,8 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
           continue;
         }
 
-        const additionalQuantity = await reserveQuantityForProduct(tx, warehouseProductId, delta, settings.allowNegativeStock);
-        if (additionalQuantity.lte(0)) {
+        const additionalAvailability = await reserveQuantityForProduct(tx, warehouseProductId, delta, settings.allowNegativeStock);
+        if (additionalAvailability.quantity.lte(0) || additionalAvailability.source !== existingReservation.source) {
           result.missingStock++;
           result.issues.push({
             orderItemId: item.id,
@@ -401,17 +455,21 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
             reservedQuantity: Number(currentQuantity),
             warehouseProductId,
             status: 'MISSING_STOCK',
-            message: 'Brak dodatkowego stanu do zwiększenia rezerwacji',
+            message: additionalAvailability.source !== existingReservation.source
+              ? 'Nie można mieszać źródeł realizacji w jednej rezerwacji'
+              : 'Brak dodatkowego stanu do zwiększenia rezerwacji',
           });
           continue;
         }
 
-        const nextQuantity = currentQuantity.plus(additionalQuantity);
+        const nextQuantity = currentQuantity.plus(additionalAvailability.quantity);
         await tx.warehouseReservation.update({
           where: { id: existingReservation.id },
           data: { quantity: nextQuantity },
         });
-        await adjustProductStock(tx, warehouseProductId, additionalQuantity.mul(-1));
+        if (existingReservation.source === 'LOCAL_STOCK') {
+          await adjustProductStock(tx, warehouseProductId, additionalAvailability.quantity.mul(-1));
+        }
 
         if (nextQuantity.lt(requestedQuantity)) {
           result.partial++;
@@ -440,8 +498,8 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
         continue;
       }
 
-      const reservableQuantity = await reserveQuantityForProduct(tx, warehouseProductId, requestedQuantity, settings.allowNegativeStock);
-      if (reservableQuantity.lte(0)) {
+      const availability = await reserveQuantityForProduct(tx, warehouseProductId, requestedQuantity, settings.allowNegativeStock);
+      if (availability.quantity.lte(0)) {
         result.missingStock++;
         result.issues.push({
           orderItemId: item.id,
@@ -463,20 +521,22 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
           warehouseProductId,
           orderId: order.id,
           orderItemId: item.id,
-          quantity: reservableQuantity,
+          quantity: availability.quantity,
+          source: availability.source,
+          expectedShipDate: item.shippingDate ?? null,
           reason: `Zamówienie ${order.orderReference}`,
         },
-        reservableQuantity,
+        availability.quantity,
       );
 
-      if (reservableQuantity.lt(requestedQuantity)) {
+      if (availability.quantity.lt(requestedQuantity)) {
         result.partial++;
         result.issues.push({
           orderItemId: item.id,
           sku: item.sku,
           productName: item.productNameSnapshot,
           requestedQuantity: item.quantity,
-          reservedQuantity: Number(reservableQuantity),
+          reservedQuantity: Number(availability.quantity),
           warehouseProductId,
           status: 'PARTIAL',
           message: 'Rezerwacja częściowa z powodu niewystarczającego stanu',
@@ -537,7 +597,9 @@ export async function releaseOrderReservations(orderId: string): Promise<OrderRe
 
     for (const reservation of activeReservations) {
       await closeActiveReservationInTx(tx, reservation, 'RELEASED', 'Ręczne zwolnienie rezerwacji zamówienia');
-      restoredQuantity = restoredQuantity.plus(reservation.quantity);
+      if (reservation.source === 'LOCAL_STOCK') {
+        restoredQuantity = restoredQuantity.plus(reservation.quantity);
+      }
       issues.push({
         orderItemId: reservation.orderItemId ?? '',
         sku: reservation.orderItem?.sku ?? '',
@@ -618,7 +680,9 @@ export async function releaseDocumentReservations(
       throw new Error('Tylko aktywna albo skonsumowana rezerwacja może zostać zwolniona przez anulowanie WZ');
     }
 
-    await adjustProductStock(tx, reservation.warehouseProductId, new Prisma.Decimal(reservation.quantity));
+    if (reservation.source === 'LOCAL_STOCK') {
+      await adjustProductStock(tx, reservation.warehouseProductId, new Prisma.Decimal(reservation.quantity));
+    }
     await tx.warehouseReservation.update({
       where: { id: reservation.id },
       data: {

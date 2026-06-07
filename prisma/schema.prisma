@@ -150,6 +150,9 @@ model Order {
   totalPaid       Decimal  @map("total_paid") @db.Decimal(10, 2)
   createdAtShop   DateTime @map("created_at_shop")
   payloadJson     Json     @map("payload_json") // snapshot całego zamówienia z API sklepu
+  maxShippingDate DateTime? @map("max_shipping_date")
+  shippingPromiseLabel String? @map("shipping_promise_label")
+  shippingCutoffUsedAt DateTime? @map("shipping_cutoff_used_at")
   syncedAt        DateTime @default(now()) @map("synced_at")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
@@ -176,6 +179,14 @@ model OrderItem {
   quantity              Int
   personalizedProductId String?  @map("personalized_product_id")
   warehouseProductId    String?  @map("warehouse_product_id")
+  sourceType            OrderItemSourceType @default(SIMPLE) @map("source_type")
+  bundleGroupId         String?  @map("bundle_group_id")
+  bundleName            String?  @map("bundle_name")
+  bundleExternalItemId  String?  @map("bundle_external_item_id")
+  bundleExternalProductId String? @map("bundle_external_product_id")
+  shippingDate          DateTime? @map("shipping_date")
+  shippingLeadTimeDays  Int?     @map("shipping_lead_time_days")
+  shippingSource        String?  @map("shipping_source")
   createdAt             DateTime @default(now()) @map("created_at")
   updatedAt             DateTime @updatedAt @map("updated_at")
 
@@ -189,6 +200,8 @@ model OrderItem {
   @@index([sku])
   @@index([personalizedProductId])
   @@index([warehouseProductId])
+  @@index([sourceType])
+  @@index([bundleGroupId])
   @@map("order_items")
 }
 
@@ -625,6 +638,16 @@ enum WarehouseReservationStatus {
   CANCELLED
 }
 
+enum WarehouseReservationSource {
+  LOCAL_STOCK
+  WHOLESALE_BACKORDER
+}
+
+enum OrderItemSourceType {
+  SIMPLE
+  BUNDLE_COMPONENT
+}
+
 enum WholesalePlatform {
   CSV_FEED
   XML_FEED
@@ -865,6 +888,8 @@ model WarehouseReservation {
   orderItemId        String?                    @map("order_item_id")
   quantity           Decimal                    @db.Decimal(10, 3)
   status             WarehouseReservationStatus @default(ACTIVE)
+  source             WarehouseReservationSource @default(LOCAL_STOCK)
+  expectedShipDate   DateTime?                  @map("expected_ship_date")
   reason             String?                    @db.Text
   releasedAt         DateTime?                  @map("released_at")
   consumedAt         DateTime?                  @map("consumed_at")

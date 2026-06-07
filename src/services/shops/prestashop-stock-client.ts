@@ -483,21 +483,14 @@ export function replaceProductOrderAvailabilityXml(
 ) {
   const availableForOrder = options.availabilityPolicy === 'OUT_OF_STOCK' ? 0 : 1;
   const showPrice = 1;
-  const availableLater = buildAvailableLaterMessage(options);
+  const messages = buildAvailabilityMessages(options);
 
-  return replaceLocalizedTextField(
-    replaceSimpleProductField(
-      replaceSimpleProductField(
-        stripProductReadonlyFields(xml),
-        'available_for_order',
-        String(availableForOrder),
-      ),
-      'show_price',
-      String(showPrice),
-    ),
-    'available_later',
-    availableLater,
-  );
+  let nextXml = stripProductReadonlyFields(xml);
+  nextXml = replaceSimpleProductField(nextXml, 'available_for_order', String(availableForOrder));
+  nextXml = replaceSimpleProductField(nextXml, 'show_price', String(showPrice));
+  nextXml = replaceLocalizedTextField(nextXml, 'available_now', messages.availableNow);
+  nextXml = replaceLocalizedTextField(nextXml, 'available_later', messages.availableLater);
+  return nextXml;
 }
 
 function stripProductReadonlyFields(xml: string) {
@@ -543,14 +536,61 @@ function replaceLocalizedTextField(xml: string, field: string, value: string) {
   });
 }
 
-function buildAvailableLaterMessage(
+function buildAvailabilityMessages(
   options: Pick<ShopStockUpdateOptions, 'availabilityPolicy' | 'leadTimeDays' | 'warehouseAvailableAt'>,
 ) {
-  if (options.availabilityPolicy !== 'BACKORDER_FROM_WHOLESALE') return '';
-  if (options.warehouseAvailableAt) return `Dostawa z hurtowni od ${options.warehouseAvailableAt}`;
-  if (options.leadTimeDays === 0) return 'Dostawa z hurtowni';
-  if (options.leadTimeDays !== undefined && options.leadTimeDays !== null) {
-    return `Wysyłka w ${options.leadTimeDays} dni`;
+  if (options.availabilityPolicy === 'OUT_OF_STOCK') {
+    return { availableNow: '', availableLater: '' };
   }
-  return 'Dostępne u dostawcy';
+
+  const promise = buildShippingPromiseMessage(options);
+  if (options.availabilityPolicy === 'BACKORDER_FROM_WHOLESALE') {
+    return { availableNow: '', availableLater: promise };
+  }
+
+  return { availableNow: promise, availableLater: '' };
+}
+
+function buildShippingPromiseMessage(
+  options: Pick<ShopStockUpdateOptions, 'availabilityPolicy' | 'leadTimeDays' | 'warehouseAvailableAt'>,
+) {
+  if (options.warehouseAvailableAt) return `Wysyłka do ${formatPolishDate(parseDateOnly(options.warehouseAvailableAt))}`;
+  if (options.leadTimeDays === 0) return 'Wysyłka dzisiaj';
+  if (options.leadTimeDays === 1) return 'Wysyłka jutro';
+  if (options.leadTimeDays === 2) return 'Wysyłka pojutrze';
+  if (options.leadTimeDays !== undefined && options.leadTimeDays !== null) {
+    return `Wysyłka do ${formatPolishDate(addBusinessDays(todayDateOnly(), options.leadTimeDays))}`;
+  }
+  return options.availabilityPolicy === 'BACKORDER_FROM_WHOLESALE'
+    ? 'Wysyłka po potwierdzeniu hurtowni'
+    : 'Wysyłka dzisiaj';
+}
+
+function parseDateOnly(value: string) {
+  const [year, month, day] = value.split('-').map((part) => Number(part));
+  return new Date(Date.UTC(year, (month || 1) - 1, day || 1));
+}
+
+function todayDateOnly() {
+  const now = new Date();
+  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+}
+
+function addBusinessDays(date: Date, days: number) {
+  let next = date;
+  let remaining = days;
+  while (remaining > 0) {
+    next = new Date(Date.UTC(next.getUTCFullYear(), next.getUTCMonth(), next.getUTCDate() + 1));
+    const day = next.getUTCDay();
+    if (day !== 0 && day !== 6) remaining--;
+  }
+  return next;
+}
+
+function formatPolishDate(date: Date) {
+  return new Intl.DateTimeFormat('pl-PL', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(date);
 }

@@ -79,10 +79,30 @@ export interface PrestaShopOrderDetails {
   items: Array<{
     id: number;
     product_id: number;
+    product_attribute_id: number;
     product_reference: string;
     product_name: string;
     quantity: number;
   }>;
+  bundleSelections: PrestaShopBundleOrderSelection[];
+}
+
+export interface PrestaShopBundleComponent {
+  id_product: number;
+  id_product_attribute: number;
+  reference: string;
+  name: string;
+  quantity: number;
+}
+
+export interface PrestaShopBundleOrderSelection {
+  id_order_detail: number;
+  id_product_bundle: number;
+  id_product_attribute_bundle: number;
+  bundle_name: string;
+  bundle_reference: string;
+  bundle_quantity: number;
+  components: PrestaShopBundleComponent[];
 }
 
 export class PrestaShopClient {
@@ -359,7 +379,7 @@ export class PrestaShopClient {
     });
   }
 
-  async fetchOrderDetails(orderId: number): Promise<PrestaShopOrderDetails> {
+  async fetchOrderDetails(orderId: number, options: { bundleApiKey?: string } = {}): Promise<PrestaShopOrderDetails> {
     try {
       if (DEBUG_SHOP_SYNC) console.log(`[PrestaShop] Fetching order ${orderId} from: orders/${orderId}?display=full`);
       const orderData = await this.fetchWebService<any>(`orders/${orderId}?display=full`);
@@ -406,6 +426,7 @@ export class PrestaShopClient {
       const items: Array<{
         id: number;
         product_id: number;
+        product_attribute_id: number;
         product_reference: string;
         product_name: string;
         quantity: number;
@@ -416,6 +437,7 @@ export class PrestaShopClient {
           items.push({
             id: row.id,
             product_id: row.product_id,
+            product_attribute_id: row.product_attribute_id ?? 0,
             product_reference: row.product_reference || '',
             product_name: row.product_name || '',
             quantity: row.product_quantity,
@@ -423,10 +445,15 @@ export class PrestaShopClient {
         }
       }
 
+      const bundleSelections = options.bundleApiKey
+        ? await this.fetchAdvancedBundleOrderSelections(orderId, options.bundleApiKey)
+        : [];
+
       return {
         order,
         customer,
         items,
+        bundleSelections,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -434,11 +461,84 @@ export class PrestaShopClient {
     }
   }
 
+  async fetchAdvancedBundleOrderSelections(orderId: number, apiKey: string): Promise<PrestaShopBundleOrderSelection[]> {
+    const key = apiKey.trim();
+    if (!key) throw new Error('kp_advancedbundle API key is empty');
+
+    const url = new URL(`${this.baseUrl}/index.php`);
+    url.searchParams.set('fc', 'module');
+    url.searchParams.set('module', 'kp_advancedbundle');
+    url.searchParams.set('controller', 'orderselections');
+    url.searchParams.set('id_order', String(orderId));
+    url.searchParams.set('api_key', key);
+
+    const response = await fetch(url.toString(), {
+      headers: { Accept: 'application/json' },
+    });
+
+    const text = await response.text();
+    let payload: any = null;
+    try {
+      payload = text ? JSON.parse(text) : null;
+    } catch {
+      throw new Error(`kp_advancedbundle returned non-JSON response: ${text.slice(0, 120)}`);
+    }
+
+    if (!response.ok || !payload?.success) {
+      const message = payload?.message || payload?.error || text.slice(0, 160) || `HTTP ${response.status}`;
+      throw new Error(`kp_advancedbundle endpoint failed: ${message}`);
+    }
+
+    const rows: any[] = Array.isArray(payload?.data?.selections) ? payload.data.selections : [];
+    return rows
+      .map((row: any) => normalizeBundleSelection(row))
+      .filter((row: PrestaShopBundleOrderSelection | null): row is PrestaShopBundleOrderSelection => Boolean(row));
+  }
+
   async addOrderNote(orderId: number, message: string): Promise<void> {
     // This would require order_histories endpoint
     // Implementation depends on PrestaShop version
     console.log(`Would add note to order ${orderId}: ${message}`);
   }
+}
+
+function normalizeBundleSelection(row: any): PrestaShopBundleOrderSelection | null {
+  const idOrderDetail = Number(row?.id_order_detail ?? row?.idOrderDetail);
+  const idProductBundle = Number(row?.id_product_bundle ?? row?.idProductBundle);
+  if (!Number.isFinite(idOrderDetail) || idOrderDetail <= 0 || !Number.isFinite(idProductBundle) || idProductBundle <= 0) {
+    return null;
+  }
+
+  const components: any[] = Array.isArray(row?.components)
+    ? row.components
+    : Array.isArray(row?.selection?.components)
+      ? row.selection.components
+      : [];
+
+  return {
+    id_order_detail: idOrderDetail,
+    id_product_bundle: idProductBundle,
+    id_product_attribute_bundle: Number(row?.id_product_attribute_bundle ?? row?.idProductAttributeBundle ?? 0) || 0,
+    bundle_name: String(row?.bundle_name ?? row?.bundleName ?? '').trim(),
+    bundle_reference: String(row?.bundle_reference ?? row?.bundleReference ?? '').trim(),
+    bundle_quantity: Number(row?.bundle_quantity ?? row?.bundleQuantity ?? 1) || 1,
+    components: components
+      .map((component: any) => normalizeBundleComponent(component))
+      .filter((component: PrestaShopBundleComponent | null): component is PrestaShopBundleComponent => Boolean(component)),
+  };
+}
+
+function normalizeBundleComponent(component: any): PrestaShopBundleComponent | null {
+  const idProduct = Number(component?.id_product ?? component?.idProduct);
+  if (!Number.isFinite(idProduct) || idProduct <= 0) return null;
+
+  return {
+    id_product: idProduct,
+    id_product_attribute: Number(component?.id_product_attribute ?? component?.idProductAttribute ?? 0) || 0,
+    reference: String(component?.reference ?? component?.sku ?? '').trim(),
+    name: String(component?.name ?? component?.product_name ?? '').trim(),
+    quantity: Number(component?.quantity ?? component?.qty ?? 1) || 1,
+  };
 }
 
 function normalizePrestaShopLocalizedValue(value: unknown): string {

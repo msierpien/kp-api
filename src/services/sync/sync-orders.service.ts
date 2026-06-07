@@ -2,6 +2,7 @@ import prisma from '../../lib/prisma';
 import {
   PrestaShopClient,
   type PrestaShopBundleOrderSelection,
+  type PrestaShopOrder,
   type PrestaShopOrderDetails,
 } from '../prestashop/prestashop-client';
 import { decrypt } from '../../lib/encryption';
@@ -80,6 +81,57 @@ export interface SyncShopOrdersOptions {
   limit?: number;
 }
 
+function resolvePaidOrderStatusIds(config: any): number[] | undefined {
+  const orderSync = config?.orderSync ?? {};
+  const rawStatusIds = orderSync.paidStatusIds ?? orderSync.currentStateIds ?? orderSync.currentStates;
+  const values = Array.isArray(rawStatusIds)
+    ? rawStatusIds
+    : typeof rawStatusIds === 'string'
+      ? rawStatusIds.split(',')
+      : rawStatusIds === undefined || rawStatusIds === null
+        ? []
+        : [rawStatusIds];
+
+  const statusIds = Array.from(new Set(
+    values
+      .map((value: unknown) => Number(value))
+      .filter((value: number) => Number.isInteger(value) && value > 0)
+  ));
+
+  if (statusIds.length > 0) {
+    return statusIds;
+  }
+
+  return orderSync.orderStatus === 'PAID' ? [2] : undefined;
+}
+
+async function fetchOrdersByStatus(
+  client: PrestaShopClient,
+  params: {
+    limit: number;
+    dateFrom: string;
+    idFrom?: string;
+  },
+  currentStates: number[] | undefined,
+): Promise<PrestaShopOrder[]> {
+  if (!currentStates || currentStates.length === 0) {
+    return client.fetchOrders(params);
+  }
+
+  const ordersById = new Map<string, PrestaShopOrder>();
+  for (const currentState of currentStates) {
+    const orders = await client.fetchOrders({
+      ...params,
+      currentState,
+    });
+    for (const order of orders) {
+      ordersById.set(String(order.id), order);
+    }
+  }
+
+  return Array.from(ordersById.values()).sort((a, b) => Number(a.id) - Number(b.id));
+}
+
 export async function syncShopOrders(shopId: string, options: SyncShopOrdersOptions = {}): Promise<SyncResult> {
   const startTime = new Date();
   const result: SyncResult = {
@@ -105,12 +157,11 @@ export async function syncShopOrders(shopId: string, options: SyncShopOrdersOpti
 
     const syncLimit = options.limit ?? context.config.orderSync?.limit ?? 50;
 
-    const orders = await context.client.fetchOrders({
+    const orders = await fetchOrdersByStatus(context.client, {
       limit: syncLimit,
       dateFrom,
       idFrom: options.fromOrderId,
-      currentState: context.config.orderSync?.orderStatus === 'PAID' ? 2 : undefined,
-    });
+    }, resolvePaidOrderStatusIds(context.config));
 
     result.ordersFetched = orders.length;
     if (DEBUG_SHOP_SYNC) {

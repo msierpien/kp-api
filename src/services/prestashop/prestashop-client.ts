@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 import { Buffer } from 'node:buffer';
 
-interface PrestaShopOrder {
+export interface PrestaShopOrder {
   id: number;
   id_customer: number;
   id_cart: number;

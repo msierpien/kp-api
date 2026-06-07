@@ -252,6 +252,22 @@ export async function ordersRoutes(fastify: FastifyInstance) {
     },
   );
 
+  fastify.post<{ Params: OrderParams }>(
+    '/:id/invoice/cancel',
+    {
+      schema: {
+        tags: ['ifirma'],
+        summary: 'Anuluj lokalną fakturę dla zamówienia bez zmiany w iFirma',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      const result = await invoicesService.cancelOrderInvoice(request.params.id);
+      return reply.send(result);
+    },
+  );
+
   fastify.patch<{ Params: OrderParams; Body: unknown }>(
     '/:id/status',
     {

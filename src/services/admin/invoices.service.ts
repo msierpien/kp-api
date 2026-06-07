@@ -83,6 +83,12 @@ export async function issueOrderInvoice(orderId: string) {
           status: 'PENDING',
           requestPayloadJson: preview.payload as Prisma.InputJsonValue,
           responsePayloadJson: Prisma.JsonNull,
+          externalId: null,
+          externalNumber: null,
+          pdfUrl: null,
+          pdfPath: null,
+          issuedAt: null,
+          sentAt: null,
           failedAt: null,
           errorMessage: null,
         },
@@ -137,6 +143,39 @@ export async function retryInvoice(invoiceId: string) {
   });
 
   return issuePreparedInvoice(document.id, document.shopId, payload);
+}
+
+export async function cancelOrderInvoice(orderId: string) {
+  const orderInvoice = await getOrderInvoice(orderId);
+  const invoice = orderInvoice.invoice;
+  if (!invoice) throw new Error('Brak faktury dla zamówienia');
+  return cancelInvoice(invoice.id);
+}
+
+export async function cancelInvoice(invoiceId: string) {
+  const document = await prisma.salesDocument.findFirst({
+    where: {
+      id: invoiceId,
+      ...(getTenantId() ? { tenantId: getTenantId() as string } : {}),
+    },
+    include: { emailLogs: { orderBy: { createdAt: 'desc' }, take: 10 } },
+  });
+
+  if (!document) throw new Error('Faktura nie znaleziona');
+  if (document.status === 'CANCELLED') {
+    return document;
+  }
+
+  return prisma.salesDocument.update({
+    where: { id: document.id },
+    data: {
+      status: 'CANCELLED',
+      errorMessage: 'Anulowano lokalnie w KP Admin. Dokument w iFirma nie został zmieniony.',
+      failedAt: null,
+      sentAt: null,
+    },
+    include: { emailLogs: { orderBy: { createdAt: 'desc' }, take: 10 } },
+  });
 }
 
 async function issuePreparedInvoice(documentId: string, shopId: string, payload: Record<string, unknown>) {

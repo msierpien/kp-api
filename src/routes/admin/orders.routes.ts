@@ -2,6 +2,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import prisma from '../../lib/prisma';
 import { createManualOrder, deleteOrder } from '../../services/admin/orders.service';
 import * as reservationService from '../../services/admin/warehouse-reservations.service';
+import { extractOrderShippingInfo } from '../../services/orders/order-shipping-info.service';
 import { createManualOrderSchema, type CreateManualOrderInput } from '../../schemas/admin.schema';
 
 interface OrderParams {
@@ -12,6 +13,13 @@ const looseObjectResponse = {
   type: 'object',
   additionalProperties: true,
 } as const;
+
+function withOrderComputedFields<T extends { payloadJson: unknown; currency?: string }>(order: T) {
+  return {
+    ...order,
+    shippingInfo: extractOrderShippingInfo(order.payloadJson, order.currency),
+  };
+}
 
 export async function ordersRoutes(fastify: FastifyInstance) {
   // GET /admin/orders - List all orders
@@ -71,7 +79,7 @@ export async function ordersRoutes(fastify: FastifyInstance) {
         },
       });
 
-      return reply.send(orders);
+      return reply.send(orders.map(withOrderComputedFields));
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({
@@ -155,7 +163,7 @@ export async function ordersRoutes(fastify: FastifyInstance) {
           });
         }
 
-        return reply.send(order);
+        return reply.send(withOrderComputedFields(order));
       } catch (error) {
         fastify.log.error(error);
         return reply.status(500).send({

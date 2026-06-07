@@ -151,6 +151,8 @@ function buildPositions(
     });
   }
 
+  reconcileSmallRoundingDelta(positions, order, warnings);
+
   if (snapshotRows.length === 0 && fallbackRows.length > 0) {
     warnings.push('Snapshot PrestaShop nie zawiera `items`; użyto pozycji zapisanych lokalnie w zamówieniu.');
   }
@@ -160,6 +162,71 @@ function buildPositions(
   }
 
   return positions;
+}
+
+function reconcileSmallRoundingDelta(positions: Array<Record<string, unknown>>, order: OrderSnapshot, warnings: string[]) {
+  const expectedTotal = roundMoney(numberOrZero(order.totalPaid));
+  if (expectedTotal <= 0 || positions.length === 0) return;
+
+  const actualTotal = positionsGrossTotal(positions);
+  const delta = roundMoney(expectedTotal - actualTotal);
+  if (Math.abs(delta) < 0.005 || Math.abs(delta) > 0.05) return;
+
+  const index = findRoundingAdjustmentPosition(positions, delta);
+  if (index < 0) return;
+
+  const position = positions[index];
+  const quantity = positiveNumber(position.Ilosc) ?? 1;
+  const price = numberOrNull(position.CenaJednostkowa);
+  if (price === null) return;
+
+  const nextPrice = roundMoney(price + delta / quantity);
+  if (nextPrice <= 0) return;
+
+  const nextPositions = positions.map((item, itemIndex) =>
+    itemIndex === index ? { ...item, CenaJednostkowa: nextPrice } : item
+  );
+  if (positionsGrossTotal(nextPositions) !== expectedTotal) return;
+
+  position.CenaJednostkowa = nextPrice;
+  warnings.push(`Skorygowano końcówkę zaokrągleń pozycji faktury o ${delta.toFixed(2)} PLN.`);
+}
+
+function positionsGrossTotal(positions: Array<Record<string, unknown>>) {
+  return roundMoney(positions.reduce((sum, position) => {
+    const quantity = positiveNumber(position.Ilosc) ?? 0;
+    const price = numberOrNull(position.CenaJednostkowa) ?? 0;
+    return sum + roundMoney(quantity * price);
+  }, 0));
+}
+
+function findRoundingAdjustmentPosition(positions: Array<Record<string, unknown>>, delta: number) {
+  const preferred = [
+    (position: Record<string, unknown>) => !isShippingPosition(position) && isSingleQuantityPosition(position),
+    (position: Record<string, unknown>) => isSingleQuantityPosition(position),
+    (position: Record<string, unknown>) => !isShippingPosition(position),
+    () => true,
+  ];
+
+  for (const predicate of preferred) {
+    for (let index = positions.length - 1; index >= 0; index--) {
+      const position = positions[index];
+      const price = numberOrNull(position.CenaJednostkowa);
+      const quantity = positiveNumber(position.Ilosc);
+      if (price === null || !quantity || !predicate(position)) continue;
+      if (price + delta / quantity > 0) return index;
+    }
+  }
+
+  return -1;
+}
+
+function isShippingPosition(position: Record<string, unknown>) {
+  return String(position.NazwaPelna ?? '').trim().toLowerCase().startsWith('wysyłka');
+}
+
+function isSingleQuantityPosition(position: Record<string, unknown>) {
+  return (positiveNumber(position.Ilosc) ?? 0) === 1;
 }
 
 function expandBundleRows(rows: any[], snapshot: any, order: OrderSnapshot, warnings: string[]) {

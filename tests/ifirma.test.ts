@@ -216,4 +216,80 @@ describe('iFirma integration', () => {
     assert.equal((result.payload.Pozycje as any[])[1].Ilosc, 2);
     assert.equal((result.payload.Pozycje as any[])[1].CenaJednostkowa, 30);
   });
+
+  it('corrects small rounding leftovers after splitting bundle items', async () => {
+    const { buildIfirmaDomesticInvoicePayload } = await import('../src/services/ifirma/ifirma-invoice.mapper');
+    const result = buildIfirmaDomesticInvoicePayload({
+      id: 'order-5',
+      orderReference: 'THSIPQKVH',
+      customerEmail: 'jan@example.com',
+      customerName: 'Jan Kowalski',
+      currency: 'PLN',
+      totalPaid: 95.43,
+      totalShippingTaxIncl: 20,
+      totalShippingTaxExcl: 16.26,
+      createdAtShop: new Date('2026-06-07T10:00:00Z'),
+      billingAddressJson: {
+        firstname: 'Jan',
+        lastname: 'Kowalski',
+        address1: 'Prosta 1',
+        postcode: '00-001',
+        city: 'Warszawa',
+        country: { iso_code: 'PL', name: 'Polska' },
+      },
+      payloadJson: {
+        order: { total_shipping_tax_incl: 20, total_shipping_tax_excl: 16.26 },
+        carrier: { name: 'Kurier InPost' },
+        items: [
+          {
+            id: 1855,
+            product_name: 'Balon foliowy 19 cali gwiazda tęczowy z nadrukiem 18',
+            product_quantity: 1,
+            unit_price_tax_incl: '3.078936',
+            unit_price_tax_excl: '2.503200',
+            total_price_tax_incl: '3.078936',
+            total_price_tax_excl: '2.503200',
+            tax_rate: '23.000',
+          },
+          {
+            id: 1856,
+            product_name: 'Zestaw balonów na 18 urodziny Black & Gold XXL',
+            product_quantity: 1,
+            unit_price_tax_incl: '72.354848',
+            unit_price_tax_excl: '58.825080',
+            total_price_tax_incl: '72.354848',
+            total_price_tax_excl: '58.825080',
+            tax_rate: '23.000',
+          },
+        ],
+        bundleSelections: [
+          {
+            id_order_detail: 1856,
+            bundle_name: 'Zestaw balonów na 18 urodziny Black & Gold XXL',
+            components: Array.from({ length: 9 }, (_, index) => ({
+              id_product: 1000 + index,
+              reference: `SKU-${index}`,
+              name: `Składnik ${index + 1}`,
+              quantity: 1,
+            })),
+          },
+        ],
+      },
+    }, {
+      defaultPaymentMethod: 'PRZ',
+      paymentTermDays: 0,
+      receiverSignatureType: 'BPO',
+      visibleBdo: false,
+      splitBundleItems: true,
+    }, new Date('2026-06-07T12:00:00Z'));
+
+    assert.deepEqual(result.errors, []);
+    assert.match(result.warnings.join('\n'), /Skorygowano końcówkę zaokrągleń/);
+    const positions = result.payload.Pozycje as any[];
+    const grossTotal = positions.reduce((sum, position) =>
+      sum + Math.round(Number(position.CenaJednostkowa) * Number(position.Ilosc) * 100) / 100
+    , 0);
+    assert.equal(Math.round(grossTotal * 100) / 100, 95.43);
+    assert.equal(positions.filter((position) => position.CenaJednostkowa === 8.03).length, 1);
+  });
 });

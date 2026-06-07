@@ -111,4 +111,47 @@ describe('iFirma integration', () => {
     assert.match(result.errors.join('\n'), /tylko PLN/);
     assert.match(result.errors.join('\n'), /faktury krajowe PL/);
   });
+
+  it('falls back to locally saved order items when snapshot items are missing', async () => {
+    const { buildIfirmaDomesticInvoicePayload } = await import('../src/services/ifirma/ifirma-invoice.mapper');
+    const result = buildIfirmaDomesticInvoicePayload({
+      id: 'order-3',
+      orderReference: 'KP-102',
+      customerEmail: 'jan@example.com',
+      customerName: 'Jan Kowalski',
+      currency: 'PLN',
+      totalPaid: 49.99,
+      createdAtShop: new Date('2026-06-01T10:00:00Z'),
+      billingAddressJson: {
+        firstname: 'Jan',
+        lastname: 'Kowalski',
+        address1: 'Prosta 1',
+        postcode: '00-001',
+        city: 'Warszawa',
+        country: { iso_code: 'PL', name: 'Polska' },
+      },
+      payloadJson: { order: { total_shipping_tax_incl: 0 } },
+      items: [
+        {
+          sku: 'SKU-1',
+          productNameSnapshot: 'Balon testowy',
+          quantity: 1,
+          unitPriceTaxIncl: '49.99',
+          unitPriceTaxExcl: '40.64',
+          taxRate: '23.0000',
+        },
+      ],
+    }, {
+      defaultPaymentMethod: 'PRZ',
+      paymentTermDays: 0,
+      receiverSignatureType: 'BPO',
+      visibleBdo: false,
+    }, new Date('2026-06-07T12:00:00Z'));
+
+    assert.deepEqual(result.errors, []);
+    assert.equal((result.payload.Pozycje as any[]).length, 1);
+    assert.equal((result.payload.Pozycje as any[])[0].NazwaPelna, 'Balon testowy');
+    assert.equal((result.payload.Pozycje as any[])[0].CenaJednostkowa, 49.99);
+    assert.match(result.warnings.join('\n'), /użyto pozycji zapisanych lokalnie/);
+  });
 });

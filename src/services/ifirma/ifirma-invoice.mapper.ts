@@ -31,6 +31,18 @@ type OrderSnapshot = {
   payloadJson: any;
   billingAddressJson?: any;
   deliveryAddressJson?: any;
+  items?: Array<{
+    sku?: string | null;
+    productNameSnapshot?: string | null;
+    quantity?: unknown;
+    unitPriceTaxIncl?: unknown;
+    unitPriceTaxExcl?: unknown;
+    totalPriceTaxIncl?: unknown;
+    totalPriceTaxExcl?: unknown;
+    taxRate?: unknown;
+    taxName?: string | null;
+    payloadJson?: any;
+  }>;
 };
 
 export function buildIfirmaDomesticInvoicePayload(
@@ -104,7 +116,9 @@ function normalizeSnapshot(value: any) {
 }
 
 function buildPositions(snapshot: any, order: OrderSnapshot, warnings: string[]) {
-  const rows = Array.isArray(snapshot.items) ? snapshot.items : [];
+  const snapshotRows = Array.isArray(snapshot.items) ? snapshot.items : [];
+  const fallbackRows = snapshotRows.length > 0 ? [] : buildFallbackRowsFromOrderItems(order);
+  const rows = snapshotRows.length > 0 ? snapshotRows : fallbackRows;
   const positions = rows
     .map((row: any) => buildProductPosition(row))
     .filter((position: any): position is Record<string, unknown> => Boolean(position));
@@ -124,11 +138,37 @@ function buildPositions(snapshot: any, order: OrderSnapshot, warnings: string[])
     });
   }
 
+  if (snapshotRows.length === 0 && fallbackRows.length > 0) {
+    warnings.push('Snapshot PrestaShop nie zawiera `items`; użyto pozycji zapisanych lokalnie w zamówieniu.');
+  }
+
   if (rows.length === 0) {
     warnings.push('Snapshot PrestaShop nie zawiera `items`; faktura nie może zostać wystawiona bez pozycji.');
   }
 
   return positions;
+}
+
+function buildFallbackRowsFromOrderItems(order: OrderSnapshot) {
+  if (!Array.isArray(order.items)) return [];
+  return order.items.map((item) => {
+    const payload = item.payloadJson && typeof item.payloadJson === 'object' && !Array.isArray(item.payloadJson)
+      ? item.payloadJson
+      : {};
+    return {
+      ...payload,
+      product_reference: item.sku,
+      product_name: item.productNameSnapshot,
+      product_quantity: item.quantity,
+      quantity: item.quantity,
+      unit_price_tax_incl: item.unitPriceTaxIncl,
+      unit_price_tax_excl: item.unitPriceTaxExcl,
+      total_price_tax_incl: item.totalPriceTaxIncl,
+      total_price_tax_excl: item.totalPriceTaxExcl,
+      tax_rate: item.taxRate,
+      tax_name: item.taxName,
+    };
+  });
 }
 
 function buildProductPosition(row: any) {

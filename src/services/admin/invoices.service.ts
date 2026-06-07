@@ -2,9 +2,11 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
+import { decrypt } from '../../lib/encryption';
 import { getTenantId } from '../../lib/tenant-context';
 import { IfirmaClient } from '../ifirma/ifirma-client';
 import { buildIfirmaDomesticInvoicePayload } from '../ifirma/ifirma-invoice.mapper';
+import { PrestaShopClient, type PrestaShopOrderDetails } from '../prestashop/prestashop-client';
 import { getDecryptedIfirmaSettings } from './ifirma-settings.service';
 import { createTenantEmailService } from './email-settings.service';
 
@@ -27,6 +29,9 @@ async function loadOrder(orderId: string) {
         take: 1,
         include: { emailLogs: { orderBy: { createdAt: 'desc' }, take: 10 } },
       },
+      items: {
+        orderBy: { createdAt: 'asc' },
+      },
       warehouseDocuments: true,
     },
   });
@@ -46,7 +51,7 @@ export async function getOrderInvoice(orderId: string) {
 }
 
 export async function previewOrderInvoice(orderId: string) {
-  const order = await loadOrder(orderId);
+  const order = await ensureInvoiceSnapshot(await loadOrder(orderId));
   const settings = await getDecryptedIfirmaSettings(order.shopId);
   const preview = buildIfirmaDomesticInvoicePayload(order, settings);
 
@@ -59,7 +64,7 @@ export async function previewOrderInvoice(orderId: string) {
 }
 
 export async function issueOrderInvoice(orderId: string) {
-  const order = await loadOrder(orderId);
+  const order = await ensureInvoiceSnapshot(await loadOrder(orderId));
   const existing = order.salesDocuments[0];
   if (existing && ['ISSUED', 'SENT'].includes(existing.status)) {
     throw new Error('Faktura dla tego zamówienia została już wystawiona');
@@ -261,4 +266,116 @@ async function downloadAndStoreInvoicePdf(client: IfirmaClient, documentId: stri
   const filePath = path.join(dir, `${documentId}.pdf`);
   await writeFile(filePath, pdf);
   return filePath;
+}
+
+type InvoiceOrder = NonNullable<Awaited<ReturnType<typeof loadOrder>>>;
+
+function needsPrestaShopInvoiceRefresh(order: InvoiceOrder) {
+  const snapshot = order.payloadJson && typeof order.payloadJson === 'object' && !Array.isArray(order.payloadJson)
+    ? order.payloadJson as Record<string, unknown>
+    : {};
+  const snapshotItems = Array.isArray(snapshot.items) ? snapshot.items : [];
+  return !order.billingAddressJson || snapshotItems.length === 0 || !order.paymentMethod;
+}
+
+async function ensureInvoiceSnapshot(order: InvoiceOrder): Promise<InvoiceOrder> {
+  if (order.shop.platform !== 'PRESTASHOP' || !needsPrestaShopInvoiceRefresh(order)) {
+    return order;
+  }
+
+  const externalOrderId = Number(order.externalOrderId);
+  if (!Number.isFinite(externalOrderId) || externalOrderId <= 0) {
+    return order;
+  }
+
+  const details = await fetchPrestaShopOrderDetailsForInvoice(order.shop, externalOrderId);
+  await savePrestaShopInvoiceSnapshot(order.id, details);
+  return loadOrder(order.id);
+}
+
+async function fetchPrestaShopOrderDetailsForInvoice(shop: InvoiceOrder['shop'], externalOrderId: number) {
+  const config = (shop.configJson && typeof shop.configJson === 'object' && !Array.isArray(shop.configJson))
+    ? shop.configJson as Record<string, any>
+    : {};
+  const authType = config.authType === 'ADMIN_API' ? 'ADMIN_API' : 'WEB_SERVICE';
+  const bundleConfig = config.advancedBundle ?? config.kpAdvancedBundle ?? {};
+  const bundleImportEnabled = Boolean(bundleConfig.enabled ?? bundleConfig.importBundles);
+  const bundleApiKey = typeof bundleConfig.apiKey === 'string'
+    ? bundleConfig.apiKey
+    : typeof bundleConfig.token === 'string'
+      ? bundleConfig.token
+      : '';
+
+  const client = new PrestaShopClient({
+    baseUrl: shop.baseUrl,
+    apiKey: decrypt(shop.apiKey),
+    authType,
+    adminApiConfig: authType === 'ADMIN_API' ? config.adminApi : undefined,
+  });
+
+  return client.fetchOrderDetails(
+    externalOrderId,
+    bundleImportEnabled && bundleApiKey.trim() ? { bundleApiKey } : {},
+  );
+}
+
+async function savePrestaShopInvoiceSnapshot(orderId: string, details: PrestaShopOrderDetails) {
+  const billingAddressJson = details.invoiceAddress ? toJson({
+    ...details.invoiceAddress,
+    country: details.invoiceCountry,
+  }) : Prisma.JsonNull;
+  const deliveryAddressJson = details.deliveryAddress ? toJson({
+    ...details.deliveryAddress,
+    country: details.deliveryCountry,
+    carrier: details.carrier,
+  }) : Prisma.JsonNull;
+
+  await prisma.$transaction(async (tx) => {
+    await tx.order.update({
+      where: { id: orderId },
+      data: {
+        currency: String((details.order as any).currency || 'PLN'),
+        totalPaid: details.order.total_paid,
+        totalShippingTaxIncl: decimalOrNull(details.order.total_shipping_tax_incl),
+        totalShippingTaxExcl: decimalOrNull(details.order.total_shipping_tax_excl),
+        totalDiscountsTaxIncl: decimalOrNull(details.order.total_discounts_tax_incl),
+        totalDiscountsTaxExcl: decimalOrNull(details.order.total_discounts_tax_excl),
+        paymentMethod: details.order.payment || details.order.module || null,
+        externalStatusId: details.order.current_state == null ? null : String(details.order.current_state),
+        externalStatusName: details.orderStatus?.name ?? null,
+        billingAddressJson,
+        deliveryAddressJson,
+        payloadJson: toJson(details),
+        syncedAt: new Date(),
+      },
+    });
+
+    for (const item of details.items) {
+      await tx.orderItem.updateMany({
+        where: {
+          orderId,
+          externalItemId: String(item.id),
+        },
+        data: {
+          unitPriceTaxIncl: decimalOrNull(item.unit_price_tax_incl),
+          unitPriceTaxExcl: decimalOrNull(item.unit_price_tax_excl ?? item.product_price),
+          totalPriceTaxIncl: decimalOrNull(item.total_price_tax_incl),
+          totalPriceTaxExcl: decimalOrNull(item.total_price_tax_excl),
+          taxRate: decimalOrNull(item.tax_rate),
+          taxName: item.tax_name ?? null,
+          payloadJson: item.payload ? toJson(item.payload) : Prisma.JsonNull,
+        },
+      });
+    }
+  });
+}
+
+function toJson(value: unknown) {
+  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+}
+
+function decimalOrNull(value: unknown) {
+  if (value === undefined || value === null || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? value as any : null;
 }

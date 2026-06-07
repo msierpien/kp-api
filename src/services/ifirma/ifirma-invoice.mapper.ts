@@ -9,6 +9,7 @@ export interface IfirmaInvoiceSettingsSnapshot {
   receiverSignature?: string | null;
   issuerSignature?: string | null;
   visibleBdo: boolean;
+  splitBundleItems?: boolean;
 }
 
 export interface IfirmaInvoicePreview {
@@ -41,6 +42,11 @@ type OrderSnapshot = {
     totalPriceTaxExcl?: unknown;
     taxRate?: unknown;
     taxName?: string | null;
+    sourceType?: string | null;
+    bundleGroupId?: string | null;
+    bundleName?: string | null;
+    bundleExternalItemId?: string | null;
+    bundleExternalProductId?: string | null;
     payloadJson?: any;
   }>;
 };
@@ -71,7 +77,7 @@ export function buildIfirmaDomesticInvoicePayload(
     ? formatDate(addDays(now, settings.paymentTermDays))
     : null;
 
-  const positions = buildPositions(snapshot, order, warnings);
+  const positions = buildPositions(snapshot, order, settings, warnings);
   if (positions.length === 0) {
     errors.push('Zamówienie nie ma pozycji możliwych do przeniesienia na fakturę.');
   }
@@ -115,10 +121,17 @@ function normalizeSnapshot(value: any) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
-function buildPositions(snapshot: any, order: OrderSnapshot, warnings: string[]) {
+function buildPositions(
+  snapshot: any,
+  order: OrderSnapshot,
+  settings: IfirmaInvoiceSettingsSnapshot,
+  warnings: string[],
+) {
   const snapshotRows = Array.isArray(snapshot.items) ? snapshot.items : [];
   const fallbackRows = snapshotRows.length > 0 ? [] : buildFallbackRowsFromOrderItems(order);
-  const rows = snapshotRows.length > 0 ? snapshotRows : fallbackRows;
+  const rows = settings.splitBundleItems
+    ? expandBundleRows(snapshotRows.length > 0 ? snapshotRows : fallbackRows, snapshot, order, warnings)
+    : snapshotRows.length > 0 ? snapshotRows : fallbackRows;
   const positions = rows
     .map((row: any) => buildProductPosition(row))
     .filter((position: any): position is Record<string, unknown> => Boolean(position));
@@ -149,6 +162,129 @@ function buildPositions(snapshot: any, order: OrderSnapshot, warnings: string[])
   return positions;
 }
 
+function expandBundleRows(rows: any[], snapshot: any, order: OrderSnapshot, warnings: string[]) {
+  const bundlesByOrderDetailId = new Map<string, any>();
+  for (const selection of Array.isArray(snapshot.bundleSelections) ? snapshot.bundleSelections : []) {
+    const key = selection?.id_order_detail ?? selection?.idOrderDetail;
+    if (key !== undefined && key !== null) {
+      bundlesByOrderDetailId.set(String(key), selection);
+    }
+  }
+
+  const localBundleComponents = new Map<string, NonNullable<OrderSnapshot['items']>>();
+  for (const item of Array.isArray(order.items) ? order.items : []) {
+    if (item.sourceType !== 'BUNDLE_COMPONENT' || !item.bundleExternalItemId) continue;
+    const current = localBundleComponents.get(item.bundleExternalItemId) ?? [];
+    current.push(item);
+    localBundleComponents.set(item.bundleExternalItemId, current);
+  }
+
+  let expandedBundles = 0;
+  const expandedRows = rows.flatMap((row) => {
+    const rowId = row?.id;
+    const bundle = rowId !== undefined && rowId !== null ? bundlesByOrderDetailId.get(String(rowId)) : null;
+    if (bundle?.components?.length) {
+      expandedBundles++;
+      return buildBundleComponentRowsFromSnapshot(row, bundle);
+    }
+
+    const localComponents = rowId !== undefined && rowId !== null ? localBundleComponents.get(String(rowId)) : null;
+    if (localComponents?.length) {
+      expandedBundles++;
+      return buildBundleComponentRowsFromOrderItems(row, localComponents);
+    }
+
+    return [row];
+  });
+
+  if (expandedBundles > 0) {
+    warnings.push(`Rozbito ${expandedBundles} ${expandedBundles === 1 ? 'zestaw' : 'zestawy'} na pozycje składników faktury.`);
+  }
+
+  return expandedRows;
+}
+
+function buildBundleComponentRowsFromSnapshot(parentRow: any, bundle: any) {
+  const parentPrice = parentPriceSnapshot(parentRow);
+  const components: any[] = Array.isArray(bundle.components) ? bundle.components : [];
+  const parentQuantity = positiveNumber(parentRow.quantity ?? parentRow.product_quantity) ?? 1;
+  const totalComponentQuantity = components.reduce((sum: number, component: any) => {
+    const componentQuantity = positiveNumber(component?.quantity ?? component?.qty) ?? 1;
+    return sum + componentQuantity * parentQuantity;
+  }, 0);
+
+  return components.map((component: any) => {
+    const componentQuantity = (positiveNumber(component?.quantity ?? component?.qty) ?? 1) * parentQuantity;
+    const grossUnit = firstNumber(
+      component?.unit_price_tax_incl,
+      component?.price_tax_incl,
+      component?.price,
+      parentPrice.grossTotal !== null && totalComponentQuantity > 0 ? parentPrice.grossTotal / totalComponentQuantity : null,
+    );
+    const netUnit = firstNumber(
+      component?.unit_price_tax_excl,
+      component?.price_tax_excl,
+      component?.net_price,
+      parentPrice.netTotal !== null && totalComponentQuantity > 0 ? parentPrice.netTotal / totalComponentQuantity : null,
+    );
+
+    return {
+      product_reference: component?.reference ?? component?.sku ?? '',
+      product_name: component?.name ?? component?.product_name ?? `Produkt #${component?.id_product ?? component?.idProduct ?? ''}`.trim(),
+      product_quantity: componentQuantity,
+      quantity: componentQuantity,
+      unit_price_tax_incl: grossUnit,
+      unit_price_tax_excl: netUnit,
+      total_price_tax_incl: grossUnit === null ? null : grossUnit * componentQuantity,
+      total_price_tax_excl: netUnit === null ? null : netUnit * componentQuantity,
+      tax_rate: component?.tax_rate ?? parentRow.tax_rate,
+      tax_name: component?.tax_name ?? parentRow.tax_name,
+    };
+  });
+}
+
+function buildBundleComponentRowsFromOrderItems(parentRow: any, components: NonNullable<OrderSnapshot['items']>) {
+  const parentPrice = parentPriceSnapshot(parentRow);
+  const totalComponentQuantity = components.reduce((sum, component) =>
+    sum + (positiveNumber(component.quantity) ?? 1)
+  , 0);
+
+  return components.map((component) => {
+    const componentQuantity = positiveNumber(component.quantity) ?? 1;
+    const grossUnit = firstNumber(
+      component.unitPriceTaxIncl,
+      parentPrice.grossTotal !== null && totalComponentQuantity > 0 ? parentPrice.grossTotal / totalComponentQuantity : null,
+    );
+    const netUnit = firstNumber(
+      component.unitPriceTaxExcl,
+      parentPrice.netTotal !== null && totalComponentQuantity > 0 ? parentPrice.netTotal / totalComponentQuantity : null,
+    );
+
+    return {
+      product_reference: component.sku ?? '',
+      product_name: component.productNameSnapshot ?? component.bundleName ?? 'Produkt',
+      product_quantity: componentQuantity,
+      quantity: componentQuantity,
+      unit_price_tax_incl: grossUnit,
+      unit_price_tax_excl: netUnit,
+      total_price_tax_incl: grossUnit === null ? null : grossUnit * componentQuantity,
+      total_price_tax_excl: netUnit === null ? null : netUnit * componentQuantity,
+      tax_rate: component.taxRate ?? parentRow.tax_rate,
+      tax_name: component.taxName ?? parentRow.tax_name,
+    };
+  });
+}
+
+function parentPriceSnapshot(row: any) {
+  const quantity = positiveNumber(row.quantity ?? row.product_quantity) ?? 1;
+  const grossUnit = numberOrNull(row.unit_price_tax_incl);
+  const netUnit = numberOrNull(row.unit_price_tax_excl ?? row.product_price);
+  return {
+    grossTotal: numberOrNull(row.total_price_tax_incl) ?? (grossUnit === null ? null : grossUnit * quantity),
+    netTotal: numberOrNull(row.total_price_tax_excl) ?? (netUnit === null ? null : netUnit * quantity),
+  };
+}
+
 function buildFallbackRowsFromOrderItems(order: OrderSnapshot) {
   if (!Array.isArray(order.items)) return [];
   return order.items.map((item) => {
@@ -167,6 +303,11 @@ function buildFallbackRowsFromOrderItems(order: OrderSnapshot) {
       total_price_tax_excl: item.totalPriceTaxExcl,
       tax_rate: item.taxRate,
       tax_name: item.taxName,
+      source_type: item.sourceType,
+      bundle_group_id: item.bundleGroupId,
+      bundle_name: item.bundleName,
+      bundle_external_item_id: item.bundleExternalItemId,
+      bundle_external_product_id: item.bundleExternalProductId,
     };
   });
 }
@@ -262,6 +403,19 @@ function numberOrNull(value: unknown) {
   if (value === undefined || value === null || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function firstNumber(...values: unknown[]) {
+  for (const value of values) {
+    const number = numberOrNull(value);
+    if (number !== null) return number;
+  }
+  return null;
+}
+
+function positiveNumber(value: unknown) {
+  const number = numberOrNull(value);
+  return number !== null && number > 0 ? number : null;
 }
 
 function numberOrZero(value: unknown) {

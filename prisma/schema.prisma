@@ -346,6 +346,7 @@ model IfirmaSettings {
   issuerSignature       String?  @map("issuer_signature")
   visibleBdo            Boolean  @default(false) @map("visible_bdo")
   sendEmailAfterIssue   Boolean  @default(false) @map("send_email_after_issue")
+  splitBundleItems      Boolean  @default(false) @map("split_bundle_items")
   createdAt             DateTime @default(now()) @map("created_at")
   updatedAt             DateTime @updatedAt @map("updated_at")
 

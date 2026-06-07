@@ -154,4 +154,66 @@ describe('iFirma integration', () => {
     assert.equal((result.payload.Pozycje as any[])[0].CenaJednostkowa, 49.99);
     assert.match(result.warnings.join('\n'), /użyto pozycji zapisanych lokalnie/);
   });
+
+  it('can split PrestaShop bundle rows into component invoice positions', async () => {
+    const { buildIfirmaDomesticInvoicePayload } = await import('../src/services/ifirma/ifirma-invoice.mapper');
+    const result = buildIfirmaDomesticInvoicePayload({
+      id: 'order-4',
+      orderReference: 'KP-103',
+      customerEmail: 'jan@example.com',
+      customerName: 'Jan Kowalski',
+      currency: 'PLN',
+      totalPaid: 90,
+      createdAtShop: new Date('2026-06-01T10:00:00Z'),
+      billingAddressJson: {
+        firstname: 'Jan',
+        lastname: 'Kowalski',
+        address1: 'Prosta 1',
+        postcode: '00-001',
+        city: 'Warszawa',
+        country: { iso_code: 'PL', name: 'Polska' },
+      },
+      payloadJson: {
+        order: { total_shipping_tax_incl: 0 },
+        items: [
+          {
+            id: 10,
+            product_name: 'Zestaw urodzinowy',
+            product_quantity: 1,
+            unit_price_tax_incl: '90.00',
+            unit_price_tax_excl: '73.17',
+            total_price_tax_incl: '90.00',
+            total_price_tax_excl: '73.17',
+            tax_rate: '23.000',
+          },
+        ],
+        bundleSelections: [
+          {
+            id_order_detail: 10,
+            bundle_name: 'Zestaw urodzinowy',
+            components: [
+              { id_product: 101, reference: 'BALON', name: 'Balon', quantity: 1 },
+              { id_product: 102, reference: 'TALERZYK', name: 'Talerzyk', quantity: 2 },
+            ],
+          },
+        ],
+      },
+    }, {
+      defaultPaymentMethod: 'PRZ',
+      paymentTermDays: 0,
+      receiverSignatureType: 'BPO',
+      visibleBdo: false,
+      splitBundleItems: true,
+    }, new Date('2026-06-07T12:00:00Z'));
+
+    assert.deepEqual(result.errors, []);
+    assert.match(result.warnings.join('\n'), /Rozbito 1 zestaw/);
+    assert.equal((result.payload.Pozycje as any[]).length, 2);
+    assert.equal((result.payload.Pozycje as any[])[0].NazwaPelna, 'Balon');
+    assert.equal((result.payload.Pozycje as any[])[0].Ilosc, 1);
+    assert.equal((result.payload.Pozycje as any[])[0].CenaJednostkowa, 30);
+    assert.equal((result.payload.Pozycje as any[])[1].NazwaPelna, 'Talerzyk');
+    assert.equal((result.payload.Pozycje as any[])[1].Ilosc, 2);
+    assert.equal((result.payload.Pozycje as any[])[1].CenaJednostkowa, 30);
+  });
 });

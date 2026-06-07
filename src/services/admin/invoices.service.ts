@@ -5,7 +5,7 @@ import prisma from '../../lib/prisma';
 import { decrypt } from '../../lib/encryption';
 import { getTenantId } from '../../lib/tenant-context';
 import { IfirmaClient } from '../ifirma/ifirma-client';
-import { buildIfirmaDomesticInvoicePayload } from '../ifirma/ifirma-invoice.mapper';
+import { buildIfirmaDomesticInvoicePayload, type IfirmaInvoiceSettingsSnapshot } from '../ifirma/ifirma-invoice.mapper';
 import { PrestaShopClient, type PrestaShopOrderDetails } from '../prestashop/prestashop-client';
 import { getDecryptedIfirmaSettings } from './ifirma-settings.service';
 import { createTenantEmailService } from './email-settings.service';
@@ -51,8 +51,9 @@ export async function getOrderInvoice(orderId: string) {
 }
 
 export async function previewOrderInvoice(orderId: string) {
-  const order = await ensureInvoiceSnapshot(await loadOrder(orderId));
-  const settings = await getDecryptedIfirmaSettings(order.shopId);
+  const initialOrder = await loadOrder(orderId);
+  const settings = await getDecryptedIfirmaSettings(initialOrder.shopId);
+  const order = await ensureInvoiceSnapshot(initialOrder, settings);
   const preview = buildIfirmaDomesticInvoicePayload(order, settings);
 
   return {
@@ -64,13 +65,14 @@ export async function previewOrderInvoice(orderId: string) {
 }
 
 export async function issueOrderInvoice(orderId: string) {
-  const order = await ensureInvoiceSnapshot(await loadOrder(orderId));
+  const initialOrder = await loadOrder(orderId);
+  const settings = await getDecryptedIfirmaSettings(initialOrder.shopId);
+  const order = await ensureInvoiceSnapshot(initialOrder, settings);
   const existing = order.salesDocuments[0];
   if (existing && ['ISSUED', 'SENT'].includes(existing.status)) {
     throw new Error('Faktura dla tego zamówienia została już wystawiona');
   }
 
-  const settings = await getDecryptedIfirmaSettings(order.shopId);
   const preview = buildIfirmaDomesticInvoicePayload(order, settings);
   if (preview.errors.length > 0) {
     throw new Error(preview.errors.join('; '));
@@ -309,16 +311,24 @@ async function downloadAndStoreInvoicePdf(client: IfirmaClient, documentId: stri
 
 type InvoiceOrder = NonNullable<Awaited<ReturnType<typeof loadOrder>>>;
 
-function needsPrestaShopInvoiceRefresh(order: InvoiceOrder) {
+function needsPrestaShopInvoiceRefresh(order: InvoiceOrder, settings?: IfirmaInvoiceSettingsSnapshot) {
   const snapshot = order.payloadJson && typeof order.payloadJson === 'object' && !Array.isArray(order.payloadJson)
     ? order.payloadJson as Record<string, unknown>
     : {};
   const snapshotItems = Array.isArray(snapshot.items) ? snapshot.items : [];
-  return !order.billingAddressJson || snapshotItems.length === 0 || !order.paymentMethod;
+  const snapshotBundleSelections = Array.isArray(snapshot.bundleSelections) ? snapshot.bundleSelections : [];
+  const bundleSelectionsFetched = snapshot.bundleSelectionsFetched === true;
+  return !order.billingAddressJson ||
+    snapshotItems.length === 0 ||
+    !order.paymentMethod ||
+    Boolean(settings?.splitBundleItems && !bundleSelectionsFetched && snapshotBundleSelections.length === 0 && getAdvancedBundleApiKey(order.shop));
 }
 
-async function ensureInvoiceSnapshot(order: InvoiceOrder): Promise<InvoiceOrder> {
-  if (order.shop.platform !== 'PRESTASHOP' || !needsPrestaShopInvoiceRefresh(order)) {
+async function ensureInvoiceSnapshot(
+  order: InvoiceOrder,
+  settings?: IfirmaInvoiceSettingsSnapshot,
+): Promise<InvoiceOrder> {
+  if (order.shop.platform !== 'PRESTASHOP' || !needsPrestaShopInvoiceRefresh(order, settings)) {
     return order;
   }
 
@@ -327,23 +337,25 @@ async function ensureInvoiceSnapshot(order: InvoiceOrder): Promise<InvoiceOrder>
     return order;
   }
 
-  const details = await fetchPrestaShopOrderDetailsForInvoice(order.shop, externalOrderId);
+  const details = await fetchPrestaShopOrderDetailsForInvoice(order.shop, externalOrderId, {
+    fetchBundleSelections: Boolean(settings?.splitBundleItems),
+  });
   await savePrestaShopInvoiceSnapshot(order.id, details);
   return loadOrder(order.id);
 }
 
-async function fetchPrestaShopOrderDetailsForInvoice(shop: InvoiceOrder['shop'], externalOrderId: number) {
+async function fetchPrestaShopOrderDetailsForInvoice(
+  shop: InvoiceOrder['shop'],
+  externalOrderId: number,
+  options: { fetchBundleSelections?: boolean } = {},
+) {
   const config = (shop.configJson && typeof shop.configJson === 'object' && !Array.isArray(shop.configJson))
     ? shop.configJson as Record<string, any>
     : {};
   const authType = config.authType === 'ADMIN_API' ? 'ADMIN_API' : 'WEB_SERVICE';
+  const bundleApiKey = getAdvancedBundleApiKey(shop);
   const bundleConfig = config.advancedBundle ?? config.kpAdvancedBundle ?? {};
-  const bundleImportEnabled = Boolean(bundleConfig.enabled ?? bundleConfig.importBundles);
-  const bundleApiKey = typeof bundleConfig.apiKey === 'string'
-    ? bundleConfig.apiKey
-    : typeof bundleConfig.token === 'string'
-      ? bundleConfig.token
-      : '';
+  const shouldFetchBundleSelections = options.fetchBundleSelections || Boolean(bundleConfig.enabled ?? bundleConfig.importBundles);
 
   const client = new PrestaShopClient({
     baseUrl: shop.baseUrl,
@@ -354,8 +366,20 @@ async function fetchPrestaShopOrderDetailsForInvoice(shop: InvoiceOrder['shop'],
 
   return client.fetchOrderDetails(
     externalOrderId,
-    bundleImportEnabled && bundleApiKey.trim() ? { bundleApiKey } : {},
+    shouldFetchBundleSelections && bundleApiKey.trim() ? { bundleApiKey } : {},
   );
+}
+
+function getAdvancedBundleApiKey(shop: InvoiceOrder['shop']) {
+  const config = (shop.configJson && typeof shop.configJson === 'object' && !Array.isArray(shop.configJson))
+    ? shop.configJson as Record<string, any>
+    : {};
+  const bundleConfig = config.advancedBundle ?? config.kpAdvancedBundle ?? {};
+  return typeof bundleConfig.apiKey === 'string'
+    ? bundleConfig.apiKey
+    : typeof bundleConfig.token === 'string'
+      ? bundleConfig.token
+      : '';
 }
 
 async function savePrestaShopInvoiceSnapshot(orderId: string, details: PrestaShopOrderDetails) {
@@ -384,7 +408,7 @@ async function savePrestaShopInvoiceSnapshot(orderId: string, details: PrestaSho
         externalStatusName: details.orderStatus?.name ?? null,
         billingAddressJson,
         deliveryAddressJson,
-        payloadJson: toJson(details),
+        payloadJson: toJson({ ...details, bundleSelectionsFetched: true }),
         syncedAt: new Date(),
       },
     });

@@ -87,6 +87,7 @@ export async function upsertIfirmaSettings(shopId: string, input: IfirmaSettings
       issuerSignature: input.issuerSignature ?? null,
       visibleBdo: input.visibleBdo,
       sendEmailAfterIssue: input.sendEmailAfterIssue,
+      splitBundleItems: input.splitBundleItems,
     },
     create: {
       tenantId: shop.tenantId,
@@ -106,6 +107,7 @@ export async function upsertIfirmaSettings(shopId: string, input: IfirmaSettings
       issuerSignature: input.issuerSignature ?? null,
       visibleBdo: input.visibleBdo,
       sendEmailAfterIssue: input.sendEmailAfterIssue,
+      splitBundleItems: input.splitBundleItems,
     },
   });
 

@@ -199,6 +199,7 @@ export const ifirmaSettingsSchema = z.object({
   issuerSignature: z.string().optional().nullable(),
   visibleBdo: z.boolean().default(false),
   sendEmailAfterIssue: z.boolean().default(false),
+  splitBundleItems: z.boolean().default(false),
 });
 
 export const shopOrderStatusMappingSchema = z.object({

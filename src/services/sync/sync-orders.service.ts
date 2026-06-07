@@ -68,6 +68,14 @@ type OrderImportItem = {
   product_reference: string;
   product_name: string;
   quantity: number;
+  product_price?: string;
+  unit_price_tax_incl?: string;
+  unit_price_tax_excl?: string;
+  total_price_tax_incl?: string;
+  total_price_tax_excl?: string;
+  tax_rate?: string;
+  tax_name?: string;
+  payload?: Record<string, unknown>;
   sourceType: 'SIMPLE' | 'BUNDLE_COMPONENT';
   bundleGroupId?: string | null;
   bundleName?: string | null;
@@ -414,7 +422,7 @@ async function createOrderFromDetails(
     return ref ? context.mappingsBySku.get(ref) || null : null;
   };
 
-  const relevantItems = importItems.filter((item) => {
+  importItems.forEach((item) => {
     const ref = (item.product_reference || '').toLowerCase();
     const personalizedProduct = getPersonalizedProduct(item);
     const shopMapping = getShopMapping(item);
@@ -443,13 +451,6 @@ async function createOrderFromDetails(
       isWarehouseMapped;
   });
 
-  if (relevantItems.length === 0) {
-    if (DEBUG_SHOP_SYNC) console.log(`[Sync] Order ${details.order.id} has no personalized or warehouse-mapped products, skipping`);
-    result.skipped = true;
-    result.success = true;
-    return result;
-  }
-
   const customerEmail = details.customer.email?.trim().toLowerCase();
   if (!customerEmail) {
     console.warn(`[Sync] Order ${details.order.id} has no customer email, skipping`);
@@ -460,7 +461,7 @@ async function createOrderFromDetails(
   }
 
   const shippingPromisesByItemId = new Map<string, ShippingPromise>();
-  for (const item of relevantItems) {
+  for (const item of importItems) {
     const shopMapping: any = getShopMapping(item);
     const shippingPromise = await buildItemShippingPromise(context, details, shopMapping);
     if (shippingPromise) {
@@ -477,11 +478,27 @@ async function createOrderFromDetails(
       customerEmail,
       customerName: `${details.customer.firstname} ${details.customer.lastname}`.trim(),
       language: 'pl',
-      currency: 'PLN',
+      currency: String((details.order as any).currency || 'PLN'),
       totalPaid: parseFloat(details.order.total_paid),
+      totalShippingTaxIncl: decimalOrNull(details.order.total_shipping_tax_incl),
+      totalShippingTaxExcl: decimalOrNull(details.order.total_shipping_tax_excl),
+      totalDiscountsTaxIncl: decimalOrNull(details.order.total_discounts_tax_incl),
+      totalDiscountsTaxExcl: decimalOrNull(details.order.total_discounts_tax_excl),
+      paymentMethod: details.order.payment || details.order.module || null,
+      externalStatusId: details.order.current_state == null ? null : String(details.order.current_state),
+      externalStatusName: details.orderStatus?.name ?? null,
       createdAtShop: new Date(details.order.date_add),
       maxShippingDate: orderShippingPromise?.shippingDate ?? null,
       shippingPromiseLabel: orderShippingPromise?.shippingPromiseLabel ?? null,
+      billingAddressJson: details.invoiceAddress ? JSON.parse(JSON.stringify({
+        ...details.invoiceAddress,
+        country: details.invoiceCountry,
+      })) : null,
+      deliveryAddressJson: details.deliveryAddress ? JSON.parse(JSON.stringify({
+        ...details.deliveryAddress,
+        country: details.deliveryCountry,
+        carrier: details.carrier,
+      })) : null,
       payloadJson: JSON.parse(JSON.stringify(details)),
     },
   });
@@ -495,7 +512,7 @@ async function createOrderFromDetails(
     token: string;
   }> = [];
 
-  for (const item of relevantItems) {
+  for (const item of importItems) {
     const shopMapping: any = getShopMapping(item);
     const personalizedProduct: any = getPersonalizedProduct(item);
     const shippingPromise = shippingPromisesByItemId.get(item.id);
@@ -513,6 +530,12 @@ async function createOrderFromDetails(
         sku: item.product_reference,
         productNameSnapshot: item.product_name,
         quantity: item.quantity,
+        unitPriceTaxIncl: decimalOrNull(item.unit_price_tax_incl),
+        unitPriceTaxExcl: decimalOrNull(item.unit_price_tax_excl ?? item.product_price),
+        totalPriceTaxIncl: decimalOrNull(item.total_price_tax_incl),
+        totalPriceTaxExcl: decimalOrNull(item.total_price_tax_excl),
+        taxRate: decimalOrNull(item.tax_rate),
+        taxName: item.tax_name ?? null,
         sourceType: item.sourceType,
         bundleGroupId: item.bundleGroupId ?? null,
         bundleName: item.bundleName ?? null,
@@ -523,6 +546,7 @@ async function createOrderFromDetails(
         shippingSource: shippingPromise?.shippingSource ?? null,
         personalizedProductId: personalizedProduct?.id ?? null,
         warehouseProductId: shopMapping?.warehouseProductId ?? null,
+        payloadJson: item.payload ? JSON.parse(JSON.stringify(item.payload)) : null,
       },
     });
 
@@ -640,6 +664,14 @@ function buildImportItems(details: PrestaShopOrderDetails): OrderImportItem[] {
         product_reference: row.product_reference,
         product_name: row.product_name,
         quantity: row.quantity,
+        product_price: row.product_price,
+        unit_price_tax_incl: row.unit_price_tax_incl,
+        unit_price_tax_excl: row.unit_price_tax_excl,
+        total_price_tax_incl: row.total_price_tax_incl,
+        total_price_tax_excl: row.total_price_tax_excl,
+        tax_rate: row.tax_rate,
+        tax_name: row.tax_name,
+        payload: row.payload,
         sourceType: 'SIMPLE',
       });
       continue;
@@ -653,6 +685,10 @@ function buildImportItems(details: PrestaShopOrderDetails): OrderImportItem[] {
         product_reference: component.reference || '',
         product_name: component.name || `Produkt #${component.id_product}`,
         quantity: Math.max(1, Number(component.quantity ?? 1)) * Math.max(1, row.quantity),
+        payload: {
+          bundleParent: row.payload,
+          component,
+        },
         sourceType: 'BUNDLE_COMPONENT',
         bundleGroupId,
         bundleName: bundle.bundle_name || row.product_name,
@@ -716,4 +752,10 @@ async function logSync(
       finishedAt: new Date(),
     },
   });
+}
+
+function decimalOrNull(value: unknown): number | null {
+  if (value === undefined || value === null || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }

@@ -183,6 +183,43 @@ export const emailSettingsIdParamsSchema = z.object({
 export type EmailSettingsInput = z.infer<typeof emailSettingsSchema>;
 export type EmailSettingsIdParams = z.infer<typeof emailSettingsIdParamsSchema>;
 
+export const ifirmaSettingsSchema = z.object({
+  login: z.string().min(1, 'Login iFirma jest wymagany'),
+  invoiceKey: z.string().min(1, 'Klucz faktura iFirma jest wymagany'),
+  mode: z.enum(['production', 'test']).default('production'),
+  isActive: z.boolean().default(true),
+  defaultPaymentMethod: z.string().min(1).default('PRZ'),
+  paymentTermDays: z.number().int().min(0).max(365).default(0),
+  numberingSeriesName: z.string().optional().nullable(),
+  templateName: z.string().optional().nullable(),
+  issuePlace: z.string().optional().nullable(),
+  bankAccountNumber: z.string().optional().nullable(),
+  receiverSignatureType: z.enum(['OUP', 'UPO', 'BPO', 'BWO']).default('BPO'),
+  receiverSignature: z.string().optional().nullable(),
+  issuerSignature: z.string().optional().nullable(),
+  visibleBdo: z.boolean().default(false),
+  sendEmailAfterIssue: z.boolean().default(false),
+});
+
+export const shopOrderStatusMappingSchema = z.object({
+  statuses: z.array(z.object({
+    externalStatusId: z.string().min(1),
+    isPaid: z.boolean().optional(),
+    isCancelled: z.boolean().optional(),
+    isReadyForInvoice: z.boolean().optional(),
+    isInvoiceTarget: z.boolean().optional(),
+  })).default([]),
+});
+
+export const updateOrderStatusSchema = z.object({
+  operationalStatus: z.string().min(1).optional(),
+  externalStatusId: z.string().min(1).optional(),
+});
+
+export type IfirmaSettingsInput = z.infer<typeof ifirmaSettingsSchema>;
+export type ShopOrderStatusMappingInput = z.infer<typeof shopOrderStatusMappingSchema>;
+export type UpdateOrderStatusInput = z.infer<typeof updateOrderStatusSchema>;
+
 // ============================================
 // Template Layout (wizualny edytor szablonów)
 // ============================================

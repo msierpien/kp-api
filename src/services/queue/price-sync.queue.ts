@@ -1,5 +1,5 @@
 import { Queue, Job } from 'bullmq';
-import { getRedisConnection } from './render.queue';
+import { getBullMqConnection } from './render.queue';
 
 export const PRICE_SYNC_QUEUE_NAME = 'price-sync';
 
@@ -20,7 +20,7 @@ let priceSyncQueue: Queue<PriceSyncJobData> | null = null;
 export function getPriceSyncQueue(): Queue<PriceSyncJobData> {
   if (!priceSyncQueue) {
     priceSyncQueue = new Queue<PriceSyncJobData>(PRICE_SYNC_QUEUE_NAME, {
-      connection: getRedisConnection(),
+      connection: getBullMqConnection(),
       defaultJobOptions: {
         attempts: 3,
         backoff: {
@@ -36,10 +36,10 @@ export function getPriceSyncQueue(): Queue<PriceSyncJobData> {
           age: 7 * 24 * 3600,
         },
       },
-    });
+    }) as Queue<PriceSyncJobData>;
   }
 
-  return priceSyncQueue;
+  return priceSyncQueue as Queue<PriceSyncJobData>;
 }
 
 export async function addPriceSyncJob(data: PriceSyncJobData): Promise<Job<PriceSyncJobData>> {

@@ -39,6 +39,10 @@ export function getRedisConnection(): IORedis {
   return redisConnection;
 }
 
+export function getBullMqConnection() {
+  return getRedisConnection() as any;
+}
+
 // Job types
 export type RenderJobType = 'PNG_PREVIEW' | 'PDF_PRINT';
 
@@ -95,7 +99,7 @@ let queueEvents: QueueEvents | null = null;
  */
 export function getRenderQueue(): Queue<RenderJobData, RenderJobResult> {
   if (!renderQueue) {
-    const connection = getRedisConnection();
+    const connection = getBullMqConnection();
 
     renderQueue = new Queue<RenderJobData, RenderJobResult>(RENDER_QUEUE_NAME, {
       connection,
@@ -114,11 +118,11 @@ export function getRenderQueue(): Queue<RenderJobData, RenderJobResult> {
           age: 7 * 24 * 3600, // Keep for 7 days
         },
       },
-    });
+    }) as Queue<RenderJobData, RenderJobResult>;
 
     console.log('[RenderQueue] Queue initialized');
   }
-  return renderQueue;
+  return renderQueue as Queue<RenderJobData, RenderJobResult>;
 }
 
 /**
@@ -126,7 +130,7 @@ export function getRenderQueue(): Queue<RenderJobData, RenderJobResult> {
  */
 export function getQueueEvents(): QueueEvents {
   if (!queueEvents) {
-    const connection = getRedisConnection();
+    const connection = getBullMqConnection();
     queueEvents = new QueueEvents(RENDER_QUEUE_NAME, { connection });
     console.log('[RenderQueue] QueueEvents initialized');
   }

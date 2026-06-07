@@ -1,6 +1,8 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import {
   createShopSchema,
+  ifirmaSettingsSchema,
+  shopOrderStatusMappingSchema,
   updateShopSchema,
   shopIdParamsSchema,
   type CreateShopInput,
@@ -10,6 +12,8 @@ import {
 import { ValidationError } from '../../lib/errors';
 import { shopsUseCases } from '../../modules/shops/shops.use-cases';
 import * as shopWebhookService from '../../services/webhooks/prestashop-order-webhook.service';
+import * as shopOrderStatusesService from '../../services/admin/shop-order-statuses.service';
+import * as ifirmaSettingsService from '../../services/admin/ifirma-settings.service';
 
 const shopResponseSchema = {
   type: 'object',
@@ -163,6 +167,101 @@ export async function shopsRoutes(fastify: FastifyInstance) {
     const categories = await shopsUseCases.getPrestaShopCategories(request.params.id);
     return reply.send(categories);
   });
+
+  fastify.get<{ Params: ShopIdParamsInput }>(
+    '/:id/order-statuses',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Lista statusów zamówień PrestaShop dla integracji',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        response: { 200: { type: 'array', items: { type: 'object', additionalProperties: true } } },
+      },
+    },
+    async (request, reply) => {
+      const params = parseShopParams(request.params);
+      const result = await shopOrderStatusesService.listShopOrderStatuses(params.id);
+      return reply.send(result);
+    },
+  );
+
+  fastify.post<{ Params: ShopIdParamsInput }>(
+    '/:id/order-statuses/sync',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Pobierz statusy zamówień z PrestaShop i zapisz katalog lokalny',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        response: { 200: { type: 'array', items: { type: 'object', additionalProperties: true } } },
+      },
+    },
+    async (request, reply) => {
+      const params = parseShopParams(request.params);
+      const result = await shopOrderStatusesService.syncShopOrderStatuses(params.id);
+      return reply.send(result);
+    },
+  );
+
+  fastify.put<{ Params: ShopIdParamsInput; Body: unknown }>(
+    '/:id/order-statuses/mapping',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Zapisz mapowanie statusów workflow dla sklepu',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        body: { type: 'object', additionalProperties: true },
+        response: { 200: { type: 'array', items: { type: 'object', additionalProperties: true } } },
+      },
+    },
+    async (request, reply) => {
+      const params = parseShopParams(request.params);
+      const parsed = shopOrderStatusMappingSchema.safeParse(request.body);
+      if (!parsed.success) {
+        throw new ValidationError(parsed.error.errors[0].message, parsed.error.flatten());
+      }
+      const result = await shopOrderStatusesService.updateShopOrderStatusMappings(params.id, parsed.data);
+      return reply.send(result);
+    },
+  );
+
+  fastify.get<{ Params: ShopIdParamsInput }>(
+    '/:id/ifirma-settings',
+    {
+      schema: {
+        tags: ['ifirma'],
+        summary: 'Pobierz konfigurację iFirma dla sklepu',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        response: { 200: { type: 'object', additionalProperties: true } },
+      },
+    },
+    async (request, reply) => {
+      const params = parseShopParams(request.params);
+      const result = await ifirmaSettingsService.getIfirmaSettings(params.id);
+      return reply.send(result);
+    },
+  );
+
+  fastify.put<{ Params: ShopIdParamsInput; Body: unknown }>(
+    '/:id/ifirma-settings',
+    {
+      schema: {
+        tags: ['ifirma'],
+        summary: 'Zapisz konfigurację iFirma dla sklepu',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        body: { type: 'object', additionalProperties: true },
+        response: { 200: { type: 'object', additionalProperties: true } },
+      },
+    },
+    async (request, reply) => {
+      const params = parseShopParams(request.params);
+      const parsed = ifirmaSettingsSchema.safeParse(request.body);
+      if (!parsed.success) {
+        throw new ValidationError(parsed.error.errors[0].message, parsed.error.flatten());
+      }
+      const result = await ifirmaSettingsService.upsertIfirmaSettings(params.id, parsed.data);
+      return reply.send(result);
+    },
+  );
 
   // POST /admin/shops
   fastify.post<{ Body: CreateShopInput }>(

@@ -1,5 +1,5 @@
 import { Queue, Job } from 'bullmq';
-import { getRedisConnection } from './render.queue';
+import { getBullMqConnection } from './render.queue';
 
 export const STOCK_SYNC_QUEUE_NAME = 'stock-sync';
 
@@ -53,7 +53,7 @@ let stockSyncQueue: Queue<StockSyncJobData> | null = null;
 export function getStockSyncQueue(): Queue<StockSyncJobData> {
   if (!stockSyncQueue) {
     stockSyncQueue = new Queue<StockSyncJobData>(STOCK_SYNC_QUEUE_NAME, {
-      connection: getRedisConnection(),
+      connection: getBullMqConnection(),
       defaultJobOptions: {
         attempts: 3,
         backoff: {
@@ -69,10 +69,10 @@ export function getStockSyncQueue(): Queue<StockSyncJobData> {
           age: 7 * 24 * 3600,
         },
       },
-    });
+    }) as Queue<StockSyncJobData>;
   }
 
-  return stockSyncQueue;
+  return stockSyncQueue as Queue<StockSyncJobData>;
 }
 
 export async function addStockSyncJob(data: StockSyncJobData): Promise<Job<StockSyncJobData>> {

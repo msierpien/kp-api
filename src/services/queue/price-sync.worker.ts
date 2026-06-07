@@ -2,7 +2,7 @@ import { Worker, Job } from 'bullmq';
 import { createLogger } from '../../lib/logger';
 import prisma from '../../lib/prisma';
 import { createShopStockClient } from '../shops/shop-client.factory';
-import { getRedisConnection } from './render.queue';
+import { getBullMqConnection } from './render.queue';
 import { PRICE_SYNC_QUEUE_NAME, type PriceSyncJobData } from './price-sync.queue';
 
 const logger = createLogger('price-sync-worker');
@@ -81,7 +81,7 @@ export function startPriceSyncWorker() {
     PRICE_SYNC_QUEUE_NAME,
     async (job) => processPriceSyncJob(job),
     {
-      connection: getRedisConnection(),
+      connection: getBullMqConnection(),
       concurrency: 1,
       limiter: PRESTASHOP_SYNC_RATE_LIMIT,
     },

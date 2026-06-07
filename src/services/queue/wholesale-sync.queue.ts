@@ -1,5 +1,5 @@
 import { Queue, Job } from 'bullmq';
-import { getRedisConnection } from './render.queue';
+import { getBullMqConnection } from './render.queue';
 
 export const WHOLESALE_SYNC_QUEUE_NAME = 'wholesale-sync';
 
@@ -19,7 +19,7 @@ let wholesaleSyncQueue: Queue<WholesaleSyncJobData> | null = null;
 export function getWholesaleSyncQueue(): Queue<WholesaleSyncJobData> {
   if (!wholesaleSyncQueue) {
     wholesaleSyncQueue = new Queue<WholesaleSyncJobData>(WHOLESALE_SYNC_QUEUE_NAME, {
-      connection: getRedisConnection(),
+      connection: getBullMqConnection(),
       defaultJobOptions: {
         attempts: 1,
         removeOnComplete: {
@@ -31,10 +31,10 @@ export function getWholesaleSyncQueue(): Queue<WholesaleSyncJobData> {
           age: 7 * 24 * 3600,
         },
       },
-    });
+    }) as Queue<WholesaleSyncJobData>;
   }
 
-  return wholesaleSyncQueue;
+  return wholesaleSyncQueue as Queue<WholesaleSyncJobData>;
 }
 
 export async function addWholesaleSyncJob(data: WholesaleSyncJobData): Promise<Job<WholesaleSyncJobData>> {

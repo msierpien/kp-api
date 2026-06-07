@@ -5,8 +5,17 @@ export interface PrestaShopOrder {
   id: number;
   id_customer: number;
   id_cart: number;
+  id_address_delivery?: number;
+  id_address_invoice?: number;
+  id_carrier?: number;
   reference: string;
   current_state: number;
+  payment?: string;
+  module?: string;
+  total_discounts_tax_incl?: string;
+  total_discounts_tax_excl?: string;
+  total_shipping_tax_incl?: string;
+  total_shipping_tax_excl?: string;
   total_paid: string;
   date_add: string;
   associations?: {
@@ -17,6 +26,13 @@ export interface PrestaShopOrder {
       product_quantity: number;
       product_name: string;
       product_reference: string;
+      product_price?: string;
+      unit_price_tax_incl?: string;
+      unit_price_tax_excl?: string;
+      total_price_tax_incl?: string;
+      total_price_tax_excl?: string;
+      tax_rate?: string;
+      tax_name?: string;
     }>;
   };
 }
@@ -26,6 +42,33 @@ interface PrestaShopCustomer {
   email: string;
   firstname: string;
   lastname: string;
+}
+
+export interface PrestaShopAddress {
+  id: number | string;
+  id_country?: number | string;
+  company?: string;
+  vat_number?: string;
+  dni?: string;
+  firstname?: string;
+  lastname?: string;
+  address1?: string;
+  address2?: string;
+  postcode?: string;
+  city?: string;
+  phone?: string;
+  phone_mobile?: string;
+}
+
+export interface PrestaShopCountry {
+  id: number | string;
+  iso_code?: string;
+  name?: unknown;
+}
+
+export interface PrestaShopCarrier {
+  id: number | string;
+  name?: string;
 }
 
 interface PrestaShopProduct {
@@ -60,6 +103,18 @@ export interface PrestaShopCategoryDetails {
   active: boolean;
 }
 
+export interface PrestaShopOrderStatusDetails {
+  id: string;
+  name: string;
+  color?: string;
+  paid: boolean;
+  deleted: boolean;
+  shipped: boolean;
+  invoice: boolean;
+  delivery: boolean;
+  payload: Record<string, unknown>;
+}
+
 export interface CreatePrestaShopProductInput {
   reference: string;
   name: string;
@@ -76,6 +131,12 @@ export interface CreatePrestaShopProductInput {
 export interface PrestaShopOrderDetails {
   order: PrestaShopOrder;
   customer: PrestaShopCustomer;
+  invoiceAddress: PrestaShopAddress | null;
+  deliveryAddress: PrestaShopAddress | null;
+  invoiceCountry: PrestaShopCountry | null;
+  deliveryCountry: PrestaShopCountry | null;
+  carrier: PrestaShopCarrier | null;
+  orderStatus: PrestaShopOrderStatusDetails | null;
   items: Array<{
     id: number;
     product_id: number;
@@ -83,6 +144,14 @@ export interface PrestaShopOrderDetails {
     product_reference: string;
     product_name: string;
     quantity: number;
+    product_price?: string;
+    unit_price_tax_incl?: string;
+    unit_price_tax_excl?: string;
+    total_price_tax_incl?: string;
+    total_price_tax_excl?: string;
+    tax_rate?: string;
+    tax_name?: string;
+    payload: Record<string, unknown>;
   }>;
   bundleSelections: PrestaShopBundleOrderSelection[];
 }
@@ -272,6 +341,24 @@ export class PrestaShopClient {
     }));
   }
 
+  async fetchOrderStates(): Promise<PrestaShopOrderStatusDetails[]> {
+    const data = await this.fetchWebService<any>('order_states?display=full&sort=[id_ASC]&limit=1000');
+    if (!data.order_states) return [];
+
+    const states = Array.isArray(data.order_states) ? data.order_states : [data.order_states];
+    return states.map((state: any) => ({
+      id: String(state.id),
+      name: normalizePrestaShopLocalizedValue(state.name) || `Status ${state.id}`,
+      color: typeof state.color === 'string' && state.color.trim() ? state.color.trim() : undefined,
+      paid: normalizeBooleanish(state.paid),
+      deleted: normalizeBooleanish(state.deleted),
+      shipped: normalizeBooleanish(state.shipped),
+      invoice: normalizeBooleanish(state.invoice),
+      delivery: normalizeBooleanish(state.delivery),
+      payload: state,
+    }));
+  }
+
   async findProductByReference(reference: string): Promise<PrestaShopProductDetails | null> {
     const normalizedReference = reference.trim();
     if (!normalizedReference) return null;
@@ -422,6 +509,17 @@ export class PrestaShopClient {
         console.log(`[PrestaShop] Customer ${order.id_customer} lastname: "${customer.lastname}"`);
       }
 
+      const [invoiceAddress, deliveryAddress, carrier, orderStatus] = await Promise.all([
+        this.fetchAddressIfPresent(order.id_address_invoice),
+        this.fetchAddressIfPresent(order.id_address_delivery),
+        this.fetchCarrierIfPresent(order.id_carrier),
+        this.fetchOrderStateIfPresent(order.current_state),
+      ]);
+      const invoiceCountry = await this.fetchCountryIfPresent(invoiceAddress?.id_country);
+      const deliveryCountry = deliveryAddress?.id_country === invoiceAddress?.id_country
+        ? invoiceCountry
+        : await this.fetchCountryIfPresent(deliveryAddress?.id_country);
+
       // Fetch order items
       const items: Array<{
         id: number;
@@ -430,6 +528,14 @@ export class PrestaShopClient {
         product_reference: string;
         product_name: string;
         quantity: number;
+        product_price?: string;
+        unit_price_tax_incl?: string;
+        unit_price_tax_excl?: string;
+        total_price_tax_incl?: string;
+        total_price_tax_excl?: string;
+        tax_rate?: string;
+        tax_name?: string;
+        payload: Record<string, unknown>;
       }> = [];
 
       if (order.associations?.order_rows) {
@@ -441,6 +547,14 @@ export class PrestaShopClient {
             product_reference: row.product_reference || '',
             product_name: row.product_name || '',
             quantity: row.product_quantity,
+            product_price: row.product_price,
+            unit_price_tax_incl: row.unit_price_tax_incl,
+            unit_price_tax_excl: row.unit_price_tax_excl,
+            total_price_tax_incl: row.total_price_tax_incl,
+            total_price_tax_excl: row.total_price_tax_excl,
+            tax_rate: row.tax_rate,
+            tax_name: row.tax_name,
+            payload: row as unknown as Record<string, unknown>,
           });
         }
       }
@@ -452,6 +566,12 @@ export class PrestaShopClient {
       return {
         order,
         customer,
+        invoiceAddress,
+        deliveryAddress,
+        invoiceCountry,
+        deliveryCountry,
+        carrier,
+        orderStatus,
         items,
         bundleSelections,
       };
@@ -459,6 +579,67 @@ export class PrestaShopClient {
       const message = error instanceof Error ? error.message : 'Unknown error';
       throw new Error(`Failed to fetch order ${orderId} details: ${message}`);
     }
+  }
+
+  async createOrderHistory(input: { orderId: number | string; orderStateId: number | string }): Promise<void> {
+    const orderId = String(input.orderId).trim();
+    const orderStateId = String(input.orderStateId).trim();
+    if (!orderId) throw new Error('PrestaShop order id is required');
+    if (!orderStateId) throw new Error('PrestaShop order state id is required');
+
+    await this.fetchWebServiceText('order_histories', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/xml',
+        Accept: 'application/xml',
+      },
+      body: buildOrderHistoryXml({ orderId, orderStateId }),
+    });
+  }
+
+  private async fetchAddressIfPresent(addressId: unknown): Promise<PrestaShopAddress | null> {
+    const id = normalizeId(addressId);
+    if (!id) return null;
+
+    const data = await this.fetchWebService<any>(`addresses/${encodeURIComponent(id)}?display=full`);
+    return data.address || (data.addresses && data.addresses[0]) || data || null;
+  }
+
+  private async fetchCountryIfPresent(countryId: unknown): Promise<PrestaShopCountry | null> {
+    const id = normalizeId(countryId);
+    if (!id) return null;
+
+    const data = await this.fetchWebService<any>(`countries/${encodeURIComponent(id)}?display=full`);
+    return data.country || (data.countries && data.countries[0]) || data || null;
+  }
+
+  private async fetchCarrierIfPresent(carrierId: unknown): Promise<PrestaShopCarrier | null> {
+    const id = normalizeId(carrierId);
+    if (!id) return null;
+
+    const data = await this.fetchWebService<any>(`carriers/${encodeURIComponent(id)}?display=full`);
+    return data.carrier || (data.carriers && data.carriers[0]) || data || null;
+  }
+
+  private async fetchOrderStateIfPresent(stateId: unknown): Promise<PrestaShopOrderStatusDetails | null> {
+    const id = normalizeId(stateId);
+    if (!id) return null;
+
+    const data = await this.fetchWebService<any>(`order_states/${encodeURIComponent(id)}?display=full`);
+    const state = data.order_state || (data.order_states && data.order_states[0]) || data || null;
+    if (!state) return null;
+
+    return {
+      id: String(state.id ?? id),
+      name: normalizePrestaShopLocalizedValue(state.name) || `Status ${state.id ?? id}`,
+      color: typeof state.color === 'string' && state.color.trim() ? state.color.trim() : undefined,
+      paid: normalizeBooleanish(state.paid),
+      deleted: normalizeBooleanish(state.deleted),
+      shipped: normalizeBooleanish(state.shipped),
+      invoice: normalizeBooleanish(state.invoice),
+      delivery: normalizeBooleanish(state.delivery),
+      payload: state,
+    };
   }
 
   async fetchAdvancedBundleOrderSelections(orderId: number, apiKey: string): Promise<PrestaShopBundleOrderSelection[]> {
@@ -613,6 +794,30 @@ function replaceSimpleXmlTag(xml: string, tagName: string, value: string) {
   const pattern = new RegExp(`(<${tagName}\\b[^>]*>)([\\s\\S]*?)(</${tagName}>)`, 'i');
   if (!pattern.test(xml)) throw new Error(`PrestaShop product XML missing <${tagName}>`);
   return xml.replace(pattern, (_match, openTag, _currentValue, closeTag) => `${openTag}${escapeXml(value)}${closeTag}`);
+}
+
+function buildOrderHistoryXml(input: { orderId: string; orderStateId: string }) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
+  <order_history>
+    <id_order>${escapeXml(input.orderId)}</id_order>
+    <id_order_state>${escapeXml(input.orderStateId)}</id_order_state>
+  </order_history>
+</prestashop>`;
+}
+
+function normalizeId(value: unknown) {
+  if (value === undefined || value === null) return '';
+  const text = String(value).trim();
+  return text && text !== '0' ? text : '';
+}
+
+function normalizeBooleanish(value: unknown) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value === 1;
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes';
 }
 
 function normalizeEan13(value?: string | null) {

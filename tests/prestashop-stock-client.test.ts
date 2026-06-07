@@ -27,11 +27,12 @@ test('PrestaShop product update enables orders and publishes wholesale lead time
     availabilityPolicy: 'BACKORDER_FROM_WHOLESALE',
     leadTimeDays: 3,
   });
+  const expectedMessage = `Wysyłka do ${formatExpectedLeadTimeDate(3)}`;
 
   assert.match(xml, /<available_for_order>1<\/available_for_order>/);
   assert.match(xml, /<show_price>1<\/show_price>/);
-  assert.match(xml, /<language id="1"><!\[CDATA\[Wysyłka w 3 dni\]\]><\/language>/);
-  assert.match(xml, /<language id="2"><!\[CDATA\[Wysyłka w 3 dni\]\]><\/language>/);
+  assert.match(xml, new RegExp(`<language id="1"><!\\[CDATA\\[${escapeRegex(expectedMessage)}\\]\\]><\\/language>`));
+  assert.match(xml, new RegExp(`<language id="2"><!\\[CDATA\\[${escapeRegex(expectedMessage)}\\]\\]><\\/language>`));
   assert.doesNotMatch(xml, /<manufacturer_name>/);
   assert.doesNotMatch(xml, /<quantity>/);
   assert.doesNotMatch(xml, /<position_in_category>/);
@@ -54,3 +55,27 @@ test('bulk stock client defaults invalid batch sizes to 500', () => {
   assert.equal(normalizeBulkStockBatchSize(0), 500);
   assert.equal(normalizeBulkStockBatchSize(501), 500);
 });
+
+function formatExpectedLeadTimeDate(days: number) {
+  let next = todayDateOnly();
+  let remaining = days;
+  while (remaining > 0) {
+    next = new Date(Date.UTC(next.getUTCFullYear(), next.getUTCMonth(), next.getUTCDate() + 1));
+    const day = next.getUTCDay();
+    if (day !== 0 && day !== 6) remaining--;
+  }
+  return new Intl.DateTimeFormat('pl-PL', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(next);
+}
+
+function todayDateOnly() {
+  const now = new Date();
+  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+}
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

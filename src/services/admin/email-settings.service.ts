@@ -1,14 +1,17 @@
 import prisma from '../../lib/prisma';
 import { encrypt, decrypt } from '../../lib/encryption';
-import { emailService } from '../email/email.service';
+import { EmailService, emailService } from '../email/email.service';
 import type { EmailSettingsInput } from '../../schemas/admin.schema';
 
 /**
  * Pobiera aktywne ustawienia email z bazy
  */
-export async function getActiveEmailSettings() {
+export async function getActiveEmailSettings(tenantId?: string) {
   const settings = await prisma.emailSettings.findFirst({
-    where: { isActive: true },
+    where: {
+      isActive: true,
+      ...(tenantId ? { tenantId } : {}),
+    },
     orderBy: { createdAt: 'desc' },
   });
 
@@ -163,6 +166,7 @@ export async function testEmailSettings(data: EmailSettingsInput) {
     user: data.user,
     pass: data.password,
     from: data.fromEmail,
+    fromName: data.fromName,
   });
 
   return await testService.testConnection();
@@ -186,7 +190,27 @@ export async function reloadEmailService() {
     user: settings.user,
     pass: settings.password,
     from: settings.fromEmail,
+    fromName: settings.fromName,
   });
 
   console.log('[EmailSettings] Email service reloaded with active settings');
+}
+
+export async function createTenantEmailService(tenantId: string) {
+  const settings = await getActiveEmailSettings(tenantId);
+  if (!settings) {
+    throw new Error('Brak aktywnej konfiguracji SMTP dla tenanta');
+  }
+
+  const service = new EmailService();
+  service.initialize({
+    host: settings.host,
+    port: settings.port,
+    secure: settings.secure,
+    user: settings.user,
+    pass: settings.password,
+    from: settings.fromEmail,
+    fromName: settings.fromName,
+  });
+  return service;
 }

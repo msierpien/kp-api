@@ -4,7 +4,7 @@ import { renderPreview, renderPDF } from '../renderer/fabric-renderer.service';
 import { validateAnswers } from '../renderer/text-validator.service';
 import { saveFile } from '../storage/local-storage.service';
 import {
-  getRedisConnection,
+  getBullMqConnection,
   RENDER_QUEUE_NAME,
   RenderJobData,
   RenderJobResult,
@@ -311,7 +311,7 @@ export function startRenderWorker(): Worker<RenderJobData, RenderJobResult> {
     return workerInstance;
   }
 
-  const connection = getRedisConnection();
+  const connection = getBullMqConnection();
 
   workerInstance = new Worker<RenderJobData, RenderJobResult>(
     RENDER_QUEUE_NAME,

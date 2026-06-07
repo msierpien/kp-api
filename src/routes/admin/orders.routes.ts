@@ -2,8 +2,10 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import prisma from '../../lib/prisma';
 import { createManualOrder, deleteOrder } from '../../services/admin/orders.service';
 import * as reservationService from '../../services/admin/warehouse-reservations.service';
+import * as invoicesService from '../../services/admin/invoices.service';
+import * as shopOrderStatusesService from '../../services/admin/shop-order-statuses.service';
 import { extractOrderShippingInfo } from '../../services/orders/order-shipping-info.service';
-import { createManualOrderSchema, type CreateManualOrderInput } from '../../schemas/admin.schema';
+import { createManualOrderSchema, updateOrderStatusSchema, type CreateManualOrderInput } from '../../schemas/admin.schema';
 
 interface OrderParams {
   id: string;
@@ -72,6 +74,11 @@ export async function ordersRoutes(fastify: FastifyInstance) {
                 },
               },
             },
+          },
+          salesDocuments: {
+            where: { documentType: 'INVOICE' },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
           },
         },
         orderBy: {
@@ -152,9 +159,16 @@ export async function ordersRoutes(fastify: FastifyInstance) {
                   },
                 },
               },
-            },
           },
-        });
+          salesDocuments: {
+            where: { documentType: 'INVOICE' },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            include: { emailLogs: { orderBy: { createdAt: 'desc' }, take: 10 } },
+          },
+          warehouseDocuments: true,
+        },
+      });
 
         if (!order) {
           return reply.status(404).send({
@@ -172,6 +186,95 @@ export async function ordersRoutes(fastify: FastifyInstance) {
         });
       }
     }
+  );
+
+  fastify.get<{ Params: OrderParams }>(
+    '/:id/invoice',
+    {
+      schema: {
+        tags: ['ifirma'],
+        summary: 'Status faktury dla zamówienia',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      const result = await invoicesService.getOrderInvoice(request.params.id);
+      return reply.send(result);
+    },
+  );
+
+  fastify.post<{ Params: OrderParams }>(
+    '/:id/invoice/preview',
+    {
+      schema: {
+        tags: ['ifirma'],
+        summary: 'Walidacja i podgląd payloadu faktury iFirma',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      const result = await invoicesService.previewOrderInvoice(request.params.id);
+      return reply.send(result);
+    },
+  );
+
+  fastify.post<{ Params: OrderParams }>(
+    '/:id/invoice/issue',
+    {
+      schema: {
+        tags: ['ifirma'],
+        summary: 'Ręcznie wystaw fakturę iFirma dla zamówienia',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      const result = await invoicesService.issueOrderInvoice(request.params.id);
+      return reply.send(result);
+    },
+  );
+
+  fastify.post<{ Params: OrderParams }>(
+    '/:id/invoice/send-email',
+    {
+      schema: {
+        tags: ['ifirma'],
+        summary: 'Wyślij fakturę e-mailem przez SMTP KP Admin',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      const result = await invoicesService.sendOrderInvoiceEmail(request.params.id);
+      return reply.send(result);
+    },
+  );
+
+  fastify.patch<{ Params: OrderParams; Body: unknown }>(
+    '/:id/status',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Zmień lokalny status zamówienia i opcjonalnie status PrestaShop',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        body: { type: 'object', additionalProperties: true },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      const parsed = updateOrderStatusSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: parsed.error.errors[0].message,
+          details: parsed.error.errors,
+        });
+      }
+      const result = await shopOrderStatusesService.updateOrderStatus(request.params.id, parsed.data);
+      return reply.send(result);
+    },
   );
 
   fastify.get<{ Params: OrderParams; Querystring: reservationService.ReservationsQuery }>(

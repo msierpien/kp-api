@@ -4,7 +4,7 @@ import { createShopStockClient } from '../shops/shop-client.factory';
 import { PrestaShopStockClient } from '../shops/prestashop-stock-client';
 import type { ShopProductInventorySnapshot } from '../shops/shop-stock-client.interface';
 import { getInventoryPublicationDecision } from '../stock/stock-sync.service';
-import { getRedisConnection } from './render.queue';
+import { getBullMqConnection } from './render.queue';
 import { STOCK_SYNC_QUEUE_NAME, type StockSyncBatchJobData, type StockSyncJobData, type StockSyncLegacyJobData } from './stock-sync.queue';
 
 let stockSyncWorker: Worker<StockSyncJobData> | null = null;
@@ -365,7 +365,7 @@ export function startStockSyncWorker() {
     STOCK_SYNC_QUEUE_NAME,
     async (job) => processStockSyncJob(job),
     {
-      connection: getRedisConnection(),
+      connection: getBullMqConnection(),
       concurrency: 5,
       limiter: PRESTASHOP_SYNC_RATE_LIMIT,
     },

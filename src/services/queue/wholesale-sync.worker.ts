@@ -2,7 +2,7 @@ import { Worker, Job } from 'bullmq';
 import { createLogger } from '../../lib/logger';
 import prisma from '../../lib/prisma';
 import { runWholesaleSyncJob } from '../admin/wholesale.service';
-import { getRedisConnection } from './render.queue';
+import { getBullMqConnection } from './render.queue';
 import { WHOLESALE_SYNC_QUEUE_NAME, type WholesaleSyncJobData } from './wholesale-sync.queue';
 
 const logger = createLogger('wholesale-sync-worker');
@@ -23,7 +23,7 @@ export function startWholesaleSyncWorker() {
     WHOLESALE_SYNC_QUEUE_NAME,
     async (job) => processWholesaleSyncJob(job),
     {
-      connection: getRedisConnection(),
+      connection: getBullMqConnection(),
       concurrency: 1,
     },
   );

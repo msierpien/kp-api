@@ -1,5 +1,5 @@
 import nodemailer from 'nodemailer';
-import type { Transporter } from 'nodemailer';
+import type { SendMailOptions, Transporter } from 'nodemailer';
 import { config } from '../../config';
 
 export interface EmailConfig {
@@ -9,6 +9,7 @@ export interface EmailConfig {
   user: string;
   pass: string;
   from: string;
+  fromName?: string | null;
 }
 
 export interface PersonalizationEmailData {
@@ -24,7 +25,16 @@ export interface PersonalizationEmailData {
   baseUrl: string;
 }
 
-class EmailService {
+export interface InvoiceEmailData {
+  to: string;
+  customerName?: string | null;
+  orderReference: string;
+  shopName: string;
+  invoiceNumber?: string | null;
+  pdfPath?: string | null;
+}
+
+export class EmailService {
   private transporter: Transporter | null = null;
   private config: EmailConfig | null = null;
 
@@ -67,7 +77,7 @@ class EmailService {
       console.log('[Email] Sending personalization email to:', data.to);
 
       const result = await this.transporter.sendMail({
-        from: `"${data.shopName}" <${this.config.from}>`,
+        from: this.formatFrom(data.shopName),
         to: data.to,
         subject: `Personalizacja zamówienia ${data.orderReference} - ${data.shopName}`,
         text,
@@ -84,6 +94,42 @@ class EmailService {
       }
       return false;
     }
+  }
+
+  async sendInvoiceEmail(data: InvoiceEmailData): Promise<{ success: boolean; messageId?: string }> {
+    if (!this.transporter || !this.config) {
+      console.warn('[Email] Service not configured, skipping invoice email send');
+      return { success: false };
+    }
+
+    const invoiceLabel = data.invoiceNumber ? ` ${data.invoiceNumber}` : '';
+    const subject = `Faktura${invoiceLabel} do zamówienia ${data.orderReference} - ${data.shopName}`;
+    const text = this.generateInvoiceEmailText(data);
+    const html = this.generateInvoiceEmailHtml(data);
+    const attachments: SendMailOptions['attachments'] = data.pdfPath
+      ? [{ filename: `faktura-${data.orderReference}.pdf`, path: data.pdfPath }]
+      : undefined;
+
+    try {
+      const result = await this.transporter.sendMail({
+        from: this.formatFrom(data.shopName),
+        to: data.to,
+        subject,
+        text,
+        html,
+        attachments,
+      });
+
+      return { success: true, messageId: result.messageId };
+    } catch (error) {
+      console.error('[Email] Failed to send invoice email:', error instanceof Error ? error.message : error);
+      return { success: false };
+    }
+  }
+
+  private formatFrom(fallbackName: string) {
+    const name = this.config?.fromName?.trim() || fallbackName;
+    return `"${name.replace(/"/g, "'")}" <${this.config?.from}>`;
   }
 
   private generatePersonalizationEmailHtml(data: PersonalizationEmailData): string {
@@ -213,6 +259,32 @@ WAŻNE: Link do personalizacji jest ważny przez 30 dni.
 Po wypełnieniu formularza nie będzie możliwości edycji.
 
 Pozdrawiamy,
+${data.shopName}
+    `.trim();
+  }
+
+  private generateInvoiceEmailHtml(data: InvoiceEmailData): string {
+    return `
+<!DOCTYPE html>
+<html lang="pl">
+<head><meta charset="UTF-8"><title>Faktura</title></head>
+<body style="font-family: Arial, sans-serif; color: #1f2937;">
+  <p>Dzień dobry${data.customerName ? ` ${data.customerName}` : ''},</p>
+  <p>W załączniku przesyłamy fakturę${data.invoiceNumber ? ` <strong>${data.invoiceNumber}</strong>` : ''} do zamówienia <strong>${data.orderReference}</strong>.</p>
+  <p>Dziękujemy za zakupy.</p>
+  <p>${data.shopName}</p>
+</body>
+</html>
+    `.trim();
+  }
+
+  private generateInvoiceEmailText(data: InvoiceEmailData): string {
+    return `
+Dzień dobry${data.customerName ? ` ${data.customerName}` : ''},
+
+W załączniku przesyłamy fakturę${data.invoiceNumber ? ` ${data.invoiceNumber}` : ''} do zamówienia ${data.orderReference}.
+
+Dziękujemy za zakupy.
 ${data.shopName}
     `.trim();
   }

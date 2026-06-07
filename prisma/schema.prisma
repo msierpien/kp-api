@@ -50,6 +50,10 @@ model Tenant {
   wholesaleMappings     WholesaleProductMapping[]
   wholesaleSyncLogs     WholesaleSyncLog[]
   warehouseReservations WarehouseReservation[]
+  shopOrderStatuses     ShopOrderStatus[]
+  ifirmaSettings        IfirmaSettings[]
+  salesDocuments        SalesDocument[]
+  invoiceEmailLogs      InvoiceEmailLog[]
 
   @@index([status])
   @@index([slug])
@@ -103,6 +107,9 @@ model Shop {
   productShopPrices    WarehouseProductShopPrice[]
   productImportLogs    ShopProductImportLog[]
   webhookEvents        ShopWebhookEvent[]
+  orderStatuses        ShopOrderStatus[]
+  ifirmaSettings       IfirmaSettings?
+  salesDocuments       SalesDocument[]
 
   @@index([tenantId])
   @@index([status])
@@ -148,8 +155,20 @@ model Order {
   language        String   @default("pl")
   currency        String   @default("PLN")
   totalPaid       Decimal  @map("total_paid") @db.Decimal(10, 2)
+  totalShippingTaxIncl Decimal? @map("total_shipping_tax_incl") @db.Decimal(10, 2)
+  totalShippingTaxExcl Decimal? @map("total_shipping_tax_excl") @db.Decimal(10, 2)
+  totalDiscountsTaxIncl Decimal? @map("total_discounts_tax_incl") @db.Decimal(10, 2)
+  totalDiscountsTaxExcl Decimal? @map("total_discounts_tax_excl") @db.Decimal(10, 2)
+  paymentMethod  String?  @map("payment_method")
+  operationalStatus String @default("NEW") @map("operational_status")
+  externalStatusId String? @map("external_status_id")
+  externalStatusName String? @map("external_status_name")
+  statusSyncedAt DateTime? @map("status_synced_at")
+  statusSyncError String? @map("status_sync_error") @db.Text
   createdAtShop   DateTime @map("created_at_shop")
   payloadJson     Json     @map("payload_json") // snapshot całego zamówienia z API sklepu
+  billingAddressJson Json? @map("billing_address_json")
+  deliveryAddressJson Json? @map("delivery_address_json")
   maxShippingDate DateTime? @map("max_shipping_date")
   shippingPromiseLabel String? @map("shipping_promise_label")
   shippingCutoffUsedAt DateTime? @map("shipping_cutoff_used_at")
@@ -163,9 +182,12 @@ model Order {
   accessPins            OrderAccessPin[]
   warehouseDocuments    WarehouseDocument[]
   warehouseReservations WarehouseReservation[]
+  salesDocuments        SalesDocument[]
 
   @@unique([shopId, externalOrderId])
   @@index([shopId, orderReference])
+  @@index([shopId, operationalStatus])
+  @@index([shopId, externalStatusId])
   @@index([customerEmail])
   @@map("orders")
 }
@@ -177,6 +199,12 @@ model OrderItem {
   sku                   String
   productNameSnapshot   String   @map("product_name_snapshot")
   quantity              Int
+  unitPriceTaxIncl      Decimal? @map("unit_price_tax_incl") @db.Decimal(10, 2)
+  unitPriceTaxExcl      Decimal? @map("unit_price_tax_excl") @db.Decimal(10, 2)
+  totalPriceTaxIncl     Decimal? @map("total_price_tax_incl") @db.Decimal(10, 2)
+  totalPriceTaxExcl     Decimal? @map("total_price_tax_excl") @db.Decimal(10, 2)
+  taxRate               Decimal? @map("tax_rate") @db.Decimal(5, 4)
+  taxName               String?  @map("tax_name")
   personalizedProductId String?  @map("personalized_product_id")
   warehouseProductId    String?  @map("warehouse_product_id")
   sourceType            OrderItemSourceType @default(SIMPLE) @map("source_type")
@@ -187,6 +215,7 @@ model OrderItem {
   shippingDate          DateTime? @map("shipping_date")
   shippingLeadTimeDays  Int?     @map("shipping_lead_time_days")
   shippingSource        String?  @map("shipping_source")
+  payloadJson           Json?    @map("payload_json")
   createdAt             DateTime @default(now()) @map("created_at")
   updatedAt             DateTime @updatedAt @map("updated_at")
 
@@ -256,6 +285,134 @@ model ShopWebhookEvent {
   @@index([eventType])
   @@index([externalOrderId])
   @@map("shop_webhook_events")
+}
+
+model ShopOrderStatus {
+  id                String    @id @default(cuid())
+  tenantId          String    @map("tenant_id")
+  shopId            String    @map("shop_id")
+  externalStatusId  String    @map("external_status_id")
+  name              String
+  color             String?
+  isPaid            Boolean   @default(false) @map("is_paid")
+  isCancelled       Boolean   @default(false) @map("is_cancelled")
+  isReadyForInvoice Boolean   @default(false) @map("is_ready_for_invoice")
+  isInvoiceTarget   Boolean   @default(false) @map("is_invoice_target")
+  sortOrder         Int       @default(0) @map("sort_order")
+  payloadJson       Json?     @map("payload_json")
+  lastSyncedAt      DateTime? @map("last_synced_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, externalStatusId])
+  @@index([tenantId])
+  @@index([shopId])
+  @@index([tenantId, isReadyForInvoice])
+  @@map("shop_order_statuses")
+}
+
+enum SalesDocumentType {
+  INVOICE
+}
+
+enum SalesDocumentStatus {
+  DRAFT
+  PENDING
+  ISSUED
+  SENT
+  FAILED
+  CANCELLED
+}
+
+model IfirmaSettings {
+  id                    String   @id @default(cuid())
+  tenantId              String   @map("tenant_id")
+  shopId                String   @unique @map("shop_id")
+  login                 String
+  invoiceKey            String   @map("invoice_key")
+  mode                  String   @default("production")
+  isActive              Boolean  @default(true) @map("is_active")
+  defaultPaymentMethod  String   @default("PRZ") @map("default_payment_method")
+  paymentTermDays       Int      @default(0) @map("payment_term_days")
+  numberingSeriesName   String?  @map("numbering_series_name")
+  templateName          String?  @map("template_name")
+  issuePlace            String?  @map("issue_place")
+  bankAccountNumber     String?  @map("bank_account_number")
+  receiverSignatureType String   @default("BPO") @map("receiver_signature_type")
+  receiverSignature     String?  @map("receiver_signature")
+  issuerSignature       String?  @map("issuer_signature")
+  visibleBdo            Boolean  @default(false) @map("visible_bdo")
+  sendEmailAfterIssue   Boolean  @default(false) @map("send_email_after_issue")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([shopId])
+  @@map("ifirma_settings")
+}
+
+model SalesDocument {
+  id                  String              @id @default(cuid())
+  tenantId            String              @map("tenant_id")
+  shopId              String              @map("shop_id")
+  orderId             String              @map("order_id")
+  externalOrderId     String              @map("external_order_id")
+  documentType        SalesDocumentType   @default(INVOICE) @map("document_type")
+  status              SalesDocumentStatus @default(DRAFT)
+  externalId          String?             @map("external_id")
+  externalNumber      String?             @map("external_number")
+  requestPayloadJson  Json?               @map("request_payload_json")
+  responsePayloadJson Json?               @map("response_payload_json")
+  pdfUrl              String?             @map("pdf_url")
+  pdfPath             String?             @map("pdf_path")
+  issuedAt            DateTime?           @map("issued_at")
+  sentAt              DateTime?           @map("sent_at")
+  failedAt            DateTime?           @map("failed_at")
+  errorMessage        String?             @map("error_message") @db.Text
+  createdAt           DateTime            @default(now()) @map("created_at")
+  updatedAt           DateTime            @updatedAt @map("updated_at")
+
+  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shop      Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  order     Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  emailLogs InvoiceEmailLog[]
+
+  @@unique([shopId, externalOrderId, documentType])
+  @@index([tenantId])
+  @@index([shopId])
+  @@index([orderId])
+  @@index([status])
+  @@map("sales_documents")
+}
+
+model InvoiceEmailLog {
+  id                String    @id @default(cuid())
+  tenantId          String    @map("tenant_id")
+  salesDocumentId   String    @map("sales_document_id")
+  toEmail           String    @map("to_email")
+  subject           String
+  status            String    @default("PENDING")
+  providerMessageId String?   @map("provider_message_id")
+  payloadJson       Json?     @map("payload_json")
+  errorMessage      String?   @map("error_message") @db.Text
+  sentAt            DateTime? @map("sent_at")
+  failedAt          DateTime? @map("failed_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  salesDocument SalesDocument @relation(fields: [salesDocumentId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([salesDocumentId])
+  @@index([status])
+  @@map("invoice_email_logs")
 }
 
 // ============================================

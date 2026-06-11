@@ -123,6 +123,22 @@ export async function registerWholesaleProviderRoutes(fastify: FastifyInstance) 
     }
   });
 
+  fastify.get('/providers/diagnostics', {
+    schema: {
+      tags: ['wholesale'],
+      summary: 'Diagnostyka duplikatów providerów i kodów hurtowni',
+    },
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const result = await wholesaleService.getWholesaleDiagnostics();
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd diagnostyki hurtowni';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   fastify.get('/providers/:id', {
     schema: {
       tags: ['wholesale'],

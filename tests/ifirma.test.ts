@@ -292,4 +292,87 @@ describe('iFirma integration', () => {
     assert.equal(Math.round(grossTotal * 100) / 100, 95.43);
     assert.equal(positions.filter((position) => position.CenaJednostkowa === 8.03).length, 1);
   });
+
+  it('builds a full cancellation correction payload by zeroing invoice positions', async () => {
+    const { buildIfirmaDomesticInvoiceCorrectionPayload } = await import('../src/services/ifirma/ifirma-correction.mapper');
+    const result = buildIfirmaDomesticInvoiceCorrectionPayload({
+      orderReference: 'KP-104',
+      correctionType: 'CANCELLATION',
+      reason: 'Klient anulowal zamowienie',
+      returnedItems: [],
+      refundShipping: true,
+      settings: {
+        defaultPaymentMethod: 'KOM',
+        paymentTermDays: 0,
+        issuePlace: 'Polskowola',
+        receiverSignatureType: 'BPO',
+        visibleBdo: false,
+      },
+      sourceInvoicePayload: {
+        Pozycje: [
+          { NazwaPelna: 'Produkt A', Ilosc: 2, CenaJednostkowa: 10, StawkaVat: 0.23, Jednostka: 'szt', TypStawkiVat: 'PRC' },
+          { NazwaPelna: 'Wysyłka', Ilosc: 1, CenaJednostkowa: 20, StawkaVat: 0.23, Jednostka: 'szt', TypStawkiVat: 'PRC' },
+        ],
+      },
+    }, new Date('2026-06-08T10:00:00Z'));
+
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.payload.PowodKorekty, 'ZWR_SPRZ_TOW');
+    assert.equal(result.payload.SposobZaplaty, 'KOM');
+    assert.equal((result.payload.Pozycje as any[])[0].Ilosc, 0);
+    assert.equal((result.payload.Pozycje as any[])[1].Ilosc, 0);
+  });
+
+  it('builds a partial return correction payload by reducing returned quantities only', async () => {
+    const { buildIfirmaDomesticInvoiceCorrectionPayload } = await import('../src/services/ifirma/ifirma-correction.mapper');
+    const result = buildIfirmaDomesticInvoiceCorrectionPayload({
+      orderReference: 'KP-105',
+      correctionType: 'RETURN',
+      returnedItems: [
+        { productName: 'Produkt A', quantity: 1, unitPriceTaxIncl: 10 },
+      ],
+      refundShipping: false,
+      settings: {
+        defaultPaymentMethod: 'PRZ',
+        paymentTermDays: 0,
+        receiverSignatureType: 'BPO',
+        visibleBdo: false,
+      },
+      sourceInvoicePayload: {
+        Pozycje: [
+          { NazwaPelna: 'Produkt A', Ilosc: 3, CenaJednostkowa: 10, StawkaVat: 0.23, Jednostka: 'szt', TypStawkiVat: 'PRC' },
+          { NazwaPelna: 'Wysyłka', Ilosc: 1, CenaJednostkowa: 20, StawkaVat: 0.23, Jednostka: 'szt', TypStawkiVat: 'PRC' },
+        ],
+      },
+    }, new Date('2026-06-08T10:00:00Z'));
+
+    assert.deepEqual(result.errors, []);
+    assert.equal((result.payload.Pozycje as any[])[0].Ilosc, 2);
+    assert.equal((result.payload.Pozycje as any[])[1].Ilosc, 1);
+  });
+
+  it('builds PrestaShop order slip XML with refund details and shipping', async () => {
+    const { buildOrderSlipXml } = await import('../src/services/prestashop/prestashop-client');
+    const xml = buildOrderSlipXml({
+      orderId: 123,
+      customerId: 456,
+      totalProductsTaxExcl: 40,
+      totalProductsTaxIncl: 49.2,
+      totalShippingTaxExcl: 10,
+      totalShippingTaxIncl: 12.3,
+      amount: 61.5,
+      shippingCost: true,
+      partial: true,
+      details: [
+        { idOrderDetail: 789, productQuantity: 1, amountTaxExcl: 40, amountTaxIncl: 49.2 },
+      ],
+    });
+
+    assert.match(xml, /<order_slip>/);
+    assert.match(xml, /<id_order>123<\/id_order>/);
+    assert.match(xml, /<id_customer>456<\/id_customer>/);
+    assert.match(xml, /<id_order_detail>789<\/id_order_detail>/);
+    assert.match(xml, /<total_shipping_tax_incl>12\.30<\/total_shipping_tax_incl>/);
+    assert.match(xml, /<partial>1<\/partial>/);
+  });
 });

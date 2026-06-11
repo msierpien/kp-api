@@ -128,6 +128,58 @@ export interface CreatePrestaShopProductInput {
   taxRulesGroupId?: string | number;
 }
 
+export function buildPrestaShopOrdersQuery(params: {
+  limit?: number;
+  dateFrom?: string;
+  idFrom?: string;
+  currentState?: number;
+}) {
+  const queryParams = new URLSearchParams({
+    display: 'full',
+    limit: String(params.limit || 50),
+    sort: '[id_ASC]',
+  });
+
+  if (params.dateFrom) {
+    queryParams.set('filter[date_add]', `>[${params.dateFrom}]`);
+    queryParams.set('date', '1');
+  }
+  if (params.idFrom) {
+    queryParams.set('filter[id]', `[${params.idFrom},]`);
+  }
+  if (params.currentState) {
+    queryParams.set('filter[current_state]', `[${params.currentState}]`);
+  }
+
+  return queryParams.toString();
+}
+
+export interface CreatePrestaShopOrderSlipInput {
+  orderId: number | string;
+  customerId: number | string;
+  conversionRate?: number;
+  totalProductsTaxExcl: number;
+  totalProductsTaxIncl: number;
+  totalShippingTaxExcl?: number;
+  totalShippingTaxIncl?: number;
+  amount?: number;
+  shippingCost?: boolean;
+  shippingCostAmount?: number;
+  partial?: boolean;
+  orderSlipType?: number;
+  details: Array<{
+    idOrderDetail: number | string;
+    productQuantity: number;
+    amountTaxExcl: number;
+    amountTaxIncl: number;
+  }>;
+}
+
+export interface CreatePrestaShopOrderSlipResult {
+  id: string | null;
+  raw: string;
+}
+
 export interface PrestaShopOrderDetails {
   order: PrestaShopOrder;
   customer: PrestaShopCustomer;
@@ -261,19 +313,8 @@ export class PrestaShopClient {
     idFrom?: string;
     currentState?: number;
   }): Promise<PrestaShopOrder[]> {
-    const queryParams: string[] = [`limit=${params.limit || 50}`];
-    if (params.dateFrom) {
-      queryParams.push(`date_add>[${params.dateFrom}]`);
-    }
-    if (params.idFrom) {
-      queryParams.push(`id>=${params.idFrom}`);
-    }
-    if (params.currentState) {
-      queryParams.push(`current_state=${params.currentState}`);
-    }
-
-    const query = queryParams.join('&');
-    const data = await this.fetchWebService<any>(`orders?${query}&display=full`);
+    const query = buildPrestaShopOrdersQuery(params);
+    const data = await this.fetchWebService<any>(`orders?${query}`);
 
     if (!data.orders) {
       return [];
@@ -597,6 +638,22 @@ export class PrestaShopClient {
     });
   }
 
+  async createOrderSlip(input: CreatePrestaShopOrderSlipInput): Promise<CreatePrestaShopOrderSlipResult> {
+    const payload = buildOrderSlipXml(input);
+    const { text, response } = await this.fetchWebServiceText('order_slip', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/xml',
+        Accept: 'application/xml',
+      },
+      body: payload,
+    });
+
+    const idFromLocation = response.headers.get('location')?.match(/\/order_slip\/(\d+)\b/)?.[1];
+    const id = idFromLocation ?? extractXmlTagValue(text, 'id') ?? null;
+    return { id, raw: text };
+  }
+
   private async fetchAddressIfPresent(addressId: unknown): Promise<PrestaShopAddress | null> {
     const id = normalizeId(addressId);
     if (!id) return null;
@@ -804,6 +861,54 @@ function buildOrderHistoryXml(input: { orderId: string; orderStateId: string }) 
     <id_order_state>${escapeXml(input.orderStateId)}</id_order_state>
   </order_history>
 </prestashop>`;
+}
+
+export function buildOrderSlipXml(input: CreatePrestaShopOrderSlipInput) {
+  const orderId = String(input.orderId).trim();
+  const customerId = String(input.customerId).trim();
+  if (!orderId) throw new Error('PrestaShop order id is required');
+  if (!customerId) throw new Error('PrestaShop customer id is required');
+  if (input.details.length === 0 && !input.shippingCost) {
+    throw new Error('PrestaShop order slip requires at least one detail or shipping refund');
+  }
+
+  const totalShippingTaxExcl = input.totalShippingTaxExcl ?? 0;
+  const totalShippingTaxIncl = input.totalShippingTaxIncl ?? 0;
+  const shippingCostAmount = input.shippingCostAmount ?? totalShippingTaxIncl;
+  const amount = input.amount ?? input.totalProductsTaxIncl + totalShippingTaxIncl;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
+  <order_slip>
+    <id_customer>${escapeXml(customerId)}</id_customer>
+    <id_order>${escapeXml(orderId)}</id_order>
+    <conversion_rate>${formatDecimal(input.conversionRate ?? 1, 6)}</conversion_rate>
+    <total_products_tax_excl>${formatDecimal(input.totalProductsTaxExcl)}</total_products_tax_excl>
+    <total_products_tax_incl>${formatDecimal(input.totalProductsTaxIncl)}</total_products_tax_incl>
+    <total_shipping_tax_excl>${formatDecimal(totalShippingTaxExcl)}</total_shipping_tax_excl>
+    <total_shipping_tax_incl>${formatDecimal(totalShippingTaxIncl)}</total_shipping_tax_incl>
+    <amount>${formatDecimal(amount)}</amount>
+    <shipping_cost>${input.shippingCost ? 1 : 0}</shipping_cost>
+    <shipping_cost_amount>${formatDecimal(shippingCostAmount)}</shipping_cost_amount>
+    <partial>${input.partial ? 1 : 0}</partial>
+    ${input.orderSlipType === undefined ? '' : `<order_slip_type>${escapeXml(String(input.orderSlipType))}</order_slip_type>`}
+    <associations>
+      <order_slip_details>
+        ${input.details.map((detail) => `<order_slip_detail>
+          <id_order_detail>${escapeXml(String(detail.idOrderDetail))}</id_order_detail>
+          <product_quantity>${formatDecimal(detail.productQuantity, 3)}</product_quantity>
+          <amount_tax_excl>${formatDecimal(detail.amountTaxExcl)}</amount_tax_excl>
+          <amount_tax_incl>${formatDecimal(detail.amountTaxIncl)}</amount_tax_incl>
+        </order_slip_detail>`).join('')}
+      </order_slip_details>
+    </associations>
+  </order_slip>
+</prestashop>`;
+}
+
+function formatDecimal(value: number, scale = 2) {
+  if (!Number.isFinite(value)) return (0).toFixed(scale);
+  return value.toFixed(scale);
 }
 
 function normalizeId(value: unknown) {

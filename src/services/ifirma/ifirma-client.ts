@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 
 export const IFIRMA_KEY_NAME_INVOICE = 'faktura';
 export const IFIRMA_DOMESTIC_INVOICE_URL = 'https://www.ifirma.pl/iapi/fakturakraj.json';
+export const IFIRMA_DOMESTIC_INVOICE_CORRECTION_BASE_URL = 'https://www.ifirma.pl/iapi/fakturakraj/korekta';
 
 export interface IfirmaClientConfig {
   login: string;
@@ -99,6 +100,70 @@ export class IfirmaClient {
     if (!response.ok) {
       const text = await response.text();
       throw new Error(`iFirma PDF download error ${response.status}: ${text.slice(0, 300)}`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  }
+
+  async issueDomesticInvoiceCorrection(invoiceIdentifier: string, payload: unknown): Promise<IfirmaIssueInvoiceResult> {
+    const cleanIdentifier = invoiceIdentifier.trim();
+    if (!cleanIdentifier) throw new Error('iFirma source invoice identifier is required');
+
+    const url = `${IFIRMA_DOMESTIC_INVOICE_CORRECTION_BASE_URL}/${encodeURIComponent(cleanIdentifier)}.json`;
+    const requestContent = JSON.stringify(payload);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json; charset=UTF-8',
+        Authentication: createIfirmaAuthenticationHeader({
+          url,
+          user: this.config.login,
+          keyName: IFIRMA_KEY_NAME_INVOICE,
+          requestContent,
+          key: this.config.invoiceKey,
+        }),
+      },
+      body: requestContent,
+    });
+
+    const text = await response.text();
+    const raw = text ? JSON.parse(text) : {};
+
+    if (!response.ok) {
+      throw new Error(`iFirma correction API error ${response.status}: ${text.slice(0, 300)}`);
+    }
+
+    const normalized = normalizeIssueResponse(raw);
+    if (normalized.code !== null && normalized.code !== 0) {
+      throw new Error(normalized.information || `iFirma returned code ${normalized.code}`);
+    }
+
+    return normalized;
+  }
+
+  async downloadDomesticInvoiceCorrectionPdf(identifier: string): Promise<Buffer> {
+    const cleanIdentifier = identifier.trim();
+    if (!cleanIdentifier) throw new Error('iFirma correction identifier is required');
+
+    const url = `${IFIRMA_DOMESTIC_INVOICE_CORRECTION_BASE_URL}/${encodeURIComponent(cleanIdentifier)}.pdf`;
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/pdf',
+        Authentication: createIfirmaAuthenticationHeader({
+          url,
+          user: this.config.login,
+          keyName: IFIRMA_KEY_NAME_INVOICE,
+          requestContent: '',
+          key: this.config.invoiceKey,
+        }),
+      },
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`iFirma correction PDF download error ${response.status}: ${text.slice(0, 300)}`);
     }
 
     return Buffer.from(await response.arrayBuffer());

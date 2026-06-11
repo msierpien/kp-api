@@ -146,7 +146,7 @@ async function getWarehouseSettings(tx: Tx, tenantId: string) {
 
   const limits = tenant?.limitsJson as any;
   return {
-    allowNegativeStock: limits?.warehouse?.allowNegativeStock !== false,
+    allowNegativeStock: limits?.warehouse?.allowNegativeStock === true,
   };
 }
 

@@ -24,9 +24,7 @@ async function loadOrder(orderId: string) {
     include: {
       shop: true,
       salesDocuments: {
-        where: { documentType: 'INVOICE' },
         orderBy: { createdAt: 'desc' },
-        take: 1,
         include: { emailLogs: { orderBy: { createdAt: 'desc' }, take: 10 } },
       },
       items: {
@@ -42,10 +40,13 @@ async function loadOrder(orderId: string) {
 
 export async function getOrderInvoice(orderId: string) {
   const order = await loadOrder(orderId);
+  const invoice = getPrimaryInvoice(order);
   return {
     orderId: order.id,
     orderReference: order.orderReference,
-    invoice: order.salesDocuments[0] ?? null,
+    invoice,
+    documents: order.salesDocuments,
+    corrections: order.salesDocuments.filter((document) => document.documentType === 'CORRECTION'),
     warehouseDocuments: order.warehouseDocuments,
   };
 }
@@ -59,7 +60,7 @@ export async function previewOrderInvoice(orderId: string) {
   return {
     orderId: order.id,
     orderReference: order.orderReference,
-    existingInvoice: order.salesDocuments[0] ?? null,
+    existingInvoice: getPrimaryInvoice(order),
     ...preview,
   };
 }
@@ -68,7 +69,7 @@ export async function issueOrderInvoice(orderId: string) {
   const initialOrder = await loadOrder(orderId);
   const settings = await getDecryptedIfirmaSettings(initialOrder.shopId);
   const order = await ensureInvoiceSnapshot(initialOrder, settings);
-  const existing = order.salesDocuments[0];
+  const existing = getPrimaryInvoice(order);
   if (existing && ['ISSUED', 'SENT'].includes(existing.status)) {
     throw new Error('Faktura dla tego zamówienia została już wystawiona');
   }
@@ -102,6 +103,7 @@ export async function issueOrderInvoice(orderId: string) {
           orderId: order.id,
           externalOrderId: order.externalOrderId,
           documentType: 'INVOICE',
+          documentKey: 'PRIMARY',
           status: 'PENDING',
           requestPayloadJson: preview.payload as Prisma.InputJsonValue,
         },
@@ -126,6 +128,9 @@ export async function retryInvoice(invoiceId: string) {
   });
 
   if (!document) throw new Error('Faktura nie znaleziona');
+  if (document.documentType !== 'INVOICE') {
+    throw new Error('Korekty należy ponawiać przez operację zwrotu');
+  }
   if (['ISSUED', 'SENT'].includes(document.status)) {
     throw new Error('Nie można ponowić faktury, która została już wystawiona');
   }
@@ -238,6 +243,9 @@ export async function sendInvoiceEmail(invoiceId: string) {
   });
 
   if (!document) throw new Error('Faktura nie znaleziona');
+  if (document.documentType !== 'INVOICE') {
+    throw new Error('Wysyłka e-mail obsługuje tylko fakturę pierwotną');
+  }
   if (!['ISSUED', 'SENT'].includes(document.status)) {
     throw new Error('Faktura musi być wystawiona przed wysyłką e-mail');
   }
@@ -310,6 +318,12 @@ async function downloadAndStoreInvoicePdf(client: IfirmaClient, documentId: stri
 }
 
 type InvoiceOrder = NonNullable<Awaited<ReturnType<typeof loadOrder>>>;
+
+function getPrimaryInvoice(order: Pick<InvoiceOrder, 'salesDocuments'>) {
+  return order.salesDocuments
+    .filter((document) => document.documentType === 'INVOICE')
+    .sort((a, b) => Number(b.createdAt) - Number(a.createdAt))[0] ?? null;
+}
 
 function needsPrestaShopInvoiceRefresh(order: InvoiceOrder, settings?: IfirmaInvoiceSettingsSnapshot) {
   const snapshot = order.payloadJson && typeof order.payloadJson === 'object' && !Array.isArray(order.payloadJson)

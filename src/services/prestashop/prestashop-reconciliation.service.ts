@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
 import { createShopStockClient } from '../shops/shop-client.factory';
+import { getInventoryPublicationDecision, resolveInventoryPublishedLeadTime } from '../stock/stock-sync.service';
 
 export interface PrestaShopReconciliationQuery {
   shopId?: string;
@@ -12,10 +13,11 @@ export interface PrestaShopReconciliationQuery {
 }
 
 export type PrestaShopReconciliationStatus = 'IN_SYNC' | 'MISMATCH' | 'ERROR' | 'UNSUPPORTED';
+export type PrestaShopReconciliationDifference = 'PRICE' | 'STOCK' | 'LEAD_TIME' | 'AVAILABILITY' | 'NATIVE_MESSAGE';
 
 export interface PrestaShopReconciliationEntry {
   status: PrestaShopReconciliationStatus;
-  differences: Array<'PRICE' | 'STOCK'>;
+  differences: PrestaShopReconciliationDifference[];
   action: 'NONE' | 'REMOTE_SHOULD_BE_UPDATED' | 'CHECK_MAPPING_OR_ACCESS';
   errorMessage?: string;
   shop: {
@@ -40,10 +42,24 @@ export interface PrestaShopReconciliationEntry {
     price?: number;
     stock?: number;
     stockAvailableId?: string;
+    leadTimeDays?: number | null;
+    effectiveLeadTimeDays?: number | null;
+    availabilityPolicy?: string | null;
+    outOfStockBehavior?: number | null;
+    availableForOrder?: boolean | null;
+    nativeAvailableNow?: string | null;
+    nativeAvailableLater?: string | null;
+    etaLabel?: string | null;
+    etaDiagnosticsAvailable?: boolean;
+  };
+  expected: {
+    leadTimeDays: number | null;
+    availabilityPolicy: string | null;
   };
   comparison: {
     priceDifference: number | null;
     stockDifference: number | null;
+    leadTimeDifference: number | null;
   };
 }
 
@@ -130,20 +146,38 @@ export async function reconcilePrestaShopForTenant(
           action: 'CHECK_MAPPING_OR_ACCESS',
           errorMessage: `Reconciliation is not implemented for platform ${mapping.shop.platform}`,
           remote: {},
-          comparison: { priceDifference: null, stockDifference: null },
+          expected: { leadTimeDays: null, availabilityPolicy: null },
+          comparison: { priceDifference: null, stockDifference: null, leadTimeDifference: null },
         });
         continue;
       }
 
       const remote = await client.getProductInventorySnapshot(mapping.externalProductId);
+      const decision = await getInventoryPublicationDecision(mapping.warehouseProduct.id);
+      const expectedLeadTime = resolveInventoryPublishedLeadTime(decision, mapping.shop.configJson).leadTimeDays;
+      const expectedAvailabilityPolicy = decision.availabilityPolicy;
       const priceDifference = comparePrice(baseEntry.warehouseProduct.retailPrice, remote.price);
       const stockDifference = remote.stock === undefined
         ? null
         : baseEntry.warehouseProduct.currentStock - remote.stock;
-      const differences: Array<'PRICE' | 'STOCK'> = [];
+      const leadTimeDifference = remote.etaDiagnosticsAvailable
+        ? compareNullableNumber(expectedLeadTime, remote.leadTimeDays ?? null)
+        : null;
+      const differences: PrestaShopReconciliationDifference[] = [];
 
       if (priceDifference !== null && Math.abs(priceDifference) > priceTolerance) differences.push('PRICE');
       if (stockDifference !== null && stockDifference !== 0) differences.push('STOCK');
+      if (leadTimeDifference !== null && leadTimeDifference !== 0) differences.push('LEAD_TIME');
+      if (
+        remote.etaDiagnosticsAvailable &&
+        remote.availabilityPolicy &&
+        remote.availabilityPolicy !== expectedAvailabilityPolicy
+      ) {
+        differences.push('AVAILABILITY');
+      }
+      if (hasNativeShippingMessage(remote.nativeAvailableNow) || hasNativeShippingMessage(remote.nativeAvailableLater)) {
+        differences.push('NATIVE_MESSAGE');
+      }
 
       entries.push({
         ...baseEntry,
@@ -154,10 +188,24 @@ export async function reconcilePrestaShopForTenant(
           price: remote.price,
           stock: remote.stock,
           stockAvailableId: remote.stockAvailableId,
+          leadTimeDays: remote.leadTimeDays,
+          effectiveLeadTimeDays: remote.effectiveLeadTimeDays,
+          availabilityPolicy: remote.availabilityPolicy,
+          outOfStockBehavior: remote.outOfStockBehavior,
+          availableForOrder: remote.availableForOrder,
+          nativeAvailableNow: remote.nativeAvailableNow,
+          nativeAvailableLater: remote.nativeAvailableLater,
+          etaLabel: remote.etaLabel,
+          etaDiagnosticsAvailable: remote.etaDiagnosticsAvailable,
+        },
+        expected: {
+          leadTimeDays: expectedLeadTime,
+          availabilityPolicy: expectedAvailabilityPolicy,
         },
         comparison: {
           priceDifference,
           stockDifference,
+          leadTimeDifference,
         },
       });
     } catch (error) {
@@ -168,7 +216,8 @@ export async function reconcilePrestaShopForTenant(
         action: 'CHECK_MAPPING_OR_ACCESS',
         errorMessage: error instanceof Error ? error.message : 'Nieznany błąd reconciliation',
         remote: {},
-        comparison: { priceDifference: null, stockDifference: null },
+        expected: { leadTimeDays: null, availabilityPolicy: null },
+        comparison: { priceDifference: null, stockDifference: null, leadTimeDifference: null },
       });
     }
   }
@@ -185,6 +234,9 @@ export async function reconcilePrestaShopForTenant(
       mismatches: entries.filter((entry) => entry.status === 'MISMATCH').length,
       errors: entries.filter((entry) => entry.status === 'ERROR').length,
       unsupported: entries.filter((entry) => entry.status === 'UNSUPPORTED').length,
+      leadTimeMismatches: entries.filter((entry) => entry.differences.includes('LEAD_TIME')).length,
+      availabilityMismatches: entries.filter((entry) => entry.differences.includes('AVAILABILITY')).length,
+      nativeMessageMismatches: entries.filter((entry) => entry.differences.includes('NATIVE_MESSAGE')).length,
     },
     sourceOfTruth: 'WAREHOUSE',
     priceTolerance,
@@ -279,6 +331,18 @@ export async function importStockFromPrestaShop(shopId?: string): Promise<Import
 function comparePrice(localPrice: number | null, remotePrice?: number) {
   if (localPrice === null || remotePrice === undefined) return null;
   return Number((localPrice - remotePrice).toFixed(2));
+}
+
+function compareNullableNumber(expected: number | null, remote: number | null) {
+  if (expected === null && remote === null) return 0;
+  if (expected === null) return -Math.max(1, Math.abs(remote ?? 1));
+  if (remote === null) return Math.max(1, expected);
+  return expected - remote;
+}
+
+function hasNativeShippingMessage(value?: string | null) {
+  if (!value) return false;
+  return value.includes('Wysyłka') || value.includes('Dostawa z hurtowni');
 }
 
 function normalizeLimit(value?: number) {

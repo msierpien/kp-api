@@ -33,6 +33,7 @@ export interface SyncWholesaleProviderOptions {
 
 const ACTIVE_WHOLESALE_SYNC_STATUSES = ['PENDING', 'PROCESSING'];
 const DEFAULT_WHOLESALE_SYNC_BATCH_SIZE = 500;
+const ZERO = new Prisma.Decimal(0);
 
 export async function getWholesaleSyncLogs(providerId: string, query: WholesaleSyncLogsQuery = {}) {
   const tenantId = requireTenantId();
@@ -172,12 +173,13 @@ export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
   if (provider.platform !== 'CSV_FEED') throw new Error(`Sync nie obsługuje jeszcze platformy ${provider.platform}`);
 
   try {
+    const syncStartedAt = new Date();
     await prisma.wholesaleSyncLog.update({
       where: { id: logId },
       data: {
         status: 'PROCESSING',
         errorMessage: null,
-        startedAt: new Date(),
+        startedAt: syncStartedAt,
         batchSize,
       },
     });
@@ -199,6 +201,7 @@ export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
     let updated = 0;
     let skipped = 0;
     let processed = 0;
+    let deactivatedMissing = 0;
 
     for (let offset = 0; offset < limitedRecords.length; offset += batchSize) {
       const batch = limitedRecords.slice(offset, offset + batchSize);
@@ -226,6 +229,17 @@ export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
     }
 
     const finishedAt = new Date();
+    if (!limit) {
+      const missing = await markMappingsMissingFromFeed({
+        tenantId,
+        providerId,
+        syncStartedAt,
+        finishedAt,
+      });
+      deactivatedMissing = missing.deactivated;
+      updated += missing.deactivated;
+    }
+
     const finishedLog = await prisma.wholesaleSyncLog.update({
       where: { id: logId },
       data: {
@@ -235,7 +249,7 @@ export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
         processedItems: processed,
         mappingsCreated: created,
         mappingsUpdated: updated,
-        skipped,
+        skipped: skipped + deactivatedMissing,
         errorMessage: null,
         finishedAt,
       },
@@ -378,6 +392,54 @@ async function enqueueWholesaleAvailabilityStockSync(warehouseProductIds: string
       triggeredBy: 'WHOLESALE_SYNC',
     });
   }
+}
+
+async function markMappingsMissingFromFeed(input: {
+  tenantId: string;
+  providerId: string;
+  syncStartedAt: Date;
+  finishedAt: Date;
+}) {
+  const staleMappings = await prisma.wholesaleProductMapping.findMany({
+    where: {
+      tenantId: input.tenantId,
+      providerId: input.providerId,
+      isActive: true,
+      OR: [
+        { lastSyncAt: null },
+        { lastSyncAt: { lt: input.syncStartedAt } },
+      ],
+    },
+    select: {
+      id: true,
+      warehouseProductId: true,
+      lastKnownStock: true,
+    },
+  });
+
+  if (staleMappings.length === 0) {
+    return { deactivated: 0 };
+  }
+
+  const changedProductIds = staleMappings
+    .filter((mapping) => mapping.warehouseProductId && isPositiveDecimal(mapping.lastKnownStock))
+    .map((mapping) => mapping.warehouseProductId as string);
+  const ids = staleMappings.map((mapping) => mapping.id);
+
+  for (let i = 0; i < ids.length; i += 1000) {
+    await prisma.wholesaleProductMapping.updateMany({
+      where: { id: { in: ids.slice(i, i + 1000) } },
+      data: {
+        isActive: false,
+        lastKnownStock: ZERO,
+        lastSyncAt: input.finishedAt,
+      },
+    });
+  }
+
+  await enqueueWholesaleAvailabilityStockSync(changedProductIds, input.tenantId);
+
+  return { deactivated: staleMappings.length };
 }
 
 function normalizeSyncLimit(limit?: number) {

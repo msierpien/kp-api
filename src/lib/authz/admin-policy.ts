@@ -49,6 +49,7 @@ export function canAccessAdminPath(role: UserRole, method: string, url: string) 
   if (path.startsWith('/render-jobs')) return true;
   if (path.startsWith('/cases')) return true;
   if (path.startsWith('/orders')) return method !== 'DELETE';
+  if (path.startsWith('/order-returns')) return true;
   if (path.startsWith('/invoices')) return true;
 
   return operatorWarehouseAccess(method, path);

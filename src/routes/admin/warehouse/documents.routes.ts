@@ -12,7 +12,7 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
         properties: {
           page: { type: 'integer', minimum: 1, default: 1 },
           limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
-          type: { type: 'string', enum: ['PZ', 'PW', 'WZ', 'RW', 'INW'] },
+          type: { type: 'string', enum: ['PZ', 'PW', 'WZ', 'ZW', 'RW', 'INW'] },
           status: { type: 'string', enum: ['DRAFT', 'CONFIRMED', 'CANCELLED'] },
           dateFrom: { type: 'string' },
           dateTo: { type: 'string' },
@@ -38,7 +38,7 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
         type: 'object',
         required: ['type', 'items'],
         properties: {
-          type: { type: 'string', enum: ['PZ', 'PW', 'WZ', 'RW', 'INW'] },
+          type: { type: 'string', enum: ['PZ', 'PW', 'WZ', 'ZW', 'RW', 'INW'] },
           date: { type: 'string' },
           description: { type: 'string' },
           orderId: { type: 'string' },

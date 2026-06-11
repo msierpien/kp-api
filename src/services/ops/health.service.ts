@@ -3,6 +3,7 @@ import path from 'path';
 import Redis from 'ioredis';
 import prisma from '../../lib/prisma';
 import { config } from '../../config';
+import { getApplicationVersionInfo, type ApplicationVersionInfo } from './version.service';
 
 export type DependencyHealth = {
   status: 'ok' | 'error';
@@ -14,6 +15,7 @@ export type ReadinessHealth = {
   status: 'ok' | 'error';
   timestamp: string;
   uptimeSeconds: number;
+  version: ApplicationVersionInfo;
   runtime: typeof config.runtime;
   dependencies: {
     database: DependencyHealth;
@@ -88,6 +90,7 @@ export async function getReadinessHealth(): Promise<ReadinessHealth> {
     status,
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.round(process.uptime()),
+    version: getApplicationVersionInfo(config.app.env),
     runtime: config.runtime,
     dependencies,
   };

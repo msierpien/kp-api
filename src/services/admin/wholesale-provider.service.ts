@@ -19,6 +19,17 @@ import {
 
 const logger = createLogger('wholesale-provider-service');
 
+type HydratedWholesaleMappingDiagnostic = {
+  id: string;
+  providerId: string;
+  externalSku: string;
+  externalEan: string | null;
+  externalName: string | null;
+  warehouseProductId: string | null;
+  provider: { id: string; name: string };
+  warehouseProduct: { id: string; sku: string } | null;
+};
+
 export interface WholesaleProvidersQuery {
   page?: number;
   limit?: number;
@@ -84,12 +95,169 @@ export interface UpdateWholesaleSyncIntervalInput {
   intervalMinutes: number;
 }
 
+export interface WholesaleDiagnosticsResult {
+  summary: {
+    duplicateProviderGroups: number;
+    duplicateSkuGroups: number;
+    duplicateEanGroups: number;
+  };
+  duplicateProviderGroups: Array<{
+    key: string;
+    canonicalProviderId: string;
+    providers: Array<{
+      id: string;
+      name: string;
+      preset: string;
+      isActive: boolean;
+      syncEnabled: boolean;
+      leadTimeDays: number | null;
+      mappings: number;
+      lastSyncAt: Date | null;
+    }>;
+  }>;
+  duplicateSkuGroups: WholesaleDuplicateMappingGroup[];
+  duplicateEanGroups: WholesaleDuplicateMappingGroup[];
+}
+
+export interface WholesaleDuplicateMappingGroup {
+  value: string;
+  providers: number;
+  mappings: number;
+  linkedMappings: number;
+  items: Array<{
+    mappingId: string;
+    providerId: string;
+    providerName: string;
+    externalSku: string;
+    externalEan: string | null;
+    externalName: string | null;
+    warehouseProductId: string | null;
+    warehouseProductSku: string | null;
+  }>;
+}
+
 function withLatestWholesaleSyncLog<T extends { syncLogs?: unknown[] }>(provider: T) {
   const { syncLogs, ...rest } = provider;
   return {
     ...rest,
     latestSyncLog: syncLogs?.[0] ?? null,
   };
+}
+
+function buildDuplicateProviderGroups(providers: Array<{
+  id: string;
+  name: string;
+  configJson: Prisma.JsonValue | null;
+  isActive: boolean;
+  syncEnabled: boolean;
+  leadTimeDays: number | null;
+  lastSyncAt: Date | null;
+  _count: { mappings: number };
+}>) {
+  const groups = new Map<string, typeof providers>();
+
+  for (const provider of providers) {
+    const config = parseProviderConfig(provider.configJson);
+    const key = normalizeProviderDiagnosticKey(provider.name || config.preset || provider.id);
+    const group = groups.get(key) ?? [];
+    group.push(provider);
+    groups.set(key, group);
+  }
+
+  return Array.from(groups.entries())
+    .filter(([, group]) => group.length > 1)
+    .map(([key, group]) => {
+      const sorted = [...group].sort((a, b) => {
+        const activeScore = Number(b.isActive) - Number(a.isActive);
+        if (activeScore !== 0) return activeScore;
+        const syncScore = Number(b.syncEnabled) - Number(a.syncEnabled);
+        if (syncScore !== 0) return syncScore;
+        const leadScore = Number(b.leadTimeDays !== null) - Number(a.leadTimeDays !== null);
+        if (leadScore !== 0) return leadScore;
+        return b._count.mappings - a._count.mappings;
+      });
+
+      return {
+        key,
+        canonicalProviderId: sorted[0]?.id ?? group[0].id,
+        providers: sorted.map((provider) => ({
+          id: provider.id,
+          name: provider.name,
+          preset: parseProviderConfig(provider.configJson).preset ?? 'CUSTOM',
+          isActive: provider.isActive,
+          syncEnabled: provider.syncEnabled,
+          leadTimeDays: provider.leadTimeDays,
+          mappings: provider._count.mappings,
+          lastSyncAt: provider.lastSyncAt,
+        })),
+      };
+    });
+}
+
+async function hydrateDuplicateSkuGroups(tenantId: string, skus: string[]): Promise<WholesaleDuplicateMappingGroup[]> {
+  if (skus.length === 0) return [];
+
+  const mappings = await prisma.wholesaleProductMapping.findMany({
+    where: { tenantId, isActive: true, externalSku: { in: skus } },
+    include: {
+      provider: { select: { id: true, name: true } },
+      warehouseProduct: { select: { id: true, sku: true } },
+    },
+    orderBy: [{ externalSku: 'asc' }, { provider: { name: 'asc' } }],
+  });
+
+  return buildDuplicateMappingGroups(skus, mappings, (mapping) => mapping.externalSku);
+}
+
+async function hydrateDuplicateEanGroups(tenantId: string, eans: string[]): Promise<WholesaleDuplicateMappingGroup[]> {
+  if (eans.length === 0) return [];
+
+  const mappings = await prisma.wholesaleProductMapping.findMany({
+    where: { tenantId, isActive: true, externalEan: { in: eans } },
+    include: {
+      provider: { select: { id: true, name: true } },
+      warehouseProduct: { select: { id: true, sku: true } },
+    },
+    orderBy: [{ externalEan: 'asc' }, { provider: { name: 'asc' } }],
+  });
+
+  return buildDuplicateMappingGroups(eans, mappings, (mapping) => mapping.externalEan ?? '');
+}
+
+function buildDuplicateMappingGroups(
+  values: string[],
+  mappings: HydratedWholesaleMappingDiagnostic[],
+  valueForMapping: (mapping: HydratedWholesaleMappingDiagnostic) => string,
+): WholesaleDuplicateMappingGroup[] {
+  return values.map((value) => {
+    const items = mappings.filter((mapping) => valueForMapping(mapping) === value);
+    const providerIds = new Set(items.map((mapping) => mapping.providerId));
+
+    return {
+      value,
+      providers: providerIds.size,
+      mappings: items.length,
+      linkedMappings: items.filter((mapping) => mapping.warehouseProductId).length,
+      items: items.slice(0, 10).map((mapping) => ({
+        mappingId: mapping.id,
+        providerId: mapping.providerId,
+        providerName: mapping.provider.name,
+        externalSku: mapping.externalSku,
+        externalEan: mapping.externalEan,
+        externalName: mapping.externalName,
+        warehouseProductId: mapping.warehouseProductId,
+        warehouseProductSku: mapping.warehouseProduct?.sku ?? null,
+      })),
+    };
+  });
+}
+
+function normalizeProviderDiagnosticKey(value: string) {
+  return value
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '');
 }
 
 export async function getWholesaleProviders(query: WholesaleProvidersQuery = {}) {
@@ -140,6 +308,64 @@ export async function getWholesaleProviderById(id: string) {
       },
     },
   }).then((provider) => provider ? withLatestWholesaleSyncLog(provider) : null);
+}
+
+export async function getWholesaleDiagnostics(): Promise<WholesaleDiagnosticsResult> {
+  const tenantId = requireTenantId();
+
+  const [providers, skuGroups, eanGroups] = await Promise.all([
+    prisma.wholesaleProvider.findMany({
+      where: { tenantId },
+      include: { _count: { select: { mappings: true } } },
+      orderBy: [{ name: 'asc' }, { createdAt: 'asc' }],
+    }),
+    prisma.wholesaleProductMapping.groupBy({
+      by: ['externalSku'],
+      where: { tenantId, isActive: true },
+      _count: { _all: true, providerId: true, warehouseProductId: true },
+    }),
+    prisma.wholesaleProductMapping.groupBy({
+      by: ['externalEan'],
+      where: {
+        tenantId,
+        isActive: true,
+        AND: [
+          { externalEan: { not: null } },
+          { externalEan: { not: '' } },
+        ],
+      },
+      _count: { _all: true, providerId: true, warehouseProductId: true },
+    }),
+  ]);
+
+  const duplicateProviderGroups = buildDuplicateProviderGroups(providers);
+  const duplicateSkuGroups = await hydrateDuplicateSkuGroups(
+    tenantId,
+    skuGroups
+      .filter((group) => group._count._all > 1)
+      .sort((a, b) => b._count._all - a._count._all)
+      .slice(0, 50)
+      .map((group) => group.externalSku),
+  );
+  const duplicateEanGroups = await hydrateDuplicateEanGroups(
+    tenantId,
+    eanGroups
+      .filter((group) => group.externalEan && group._count._all > 1)
+      .sort((a, b) => b._count._all - a._count._all)
+      .slice(0, 50)
+      .map((group) => group.externalEan as string),
+  );
+
+  return {
+    summary: {
+      duplicateProviderGroups: duplicateProviderGroups.length,
+      duplicateSkuGroups: skuGroups.filter((group) => group._count._all > 1).length,
+      duplicateEanGroups: eanGroups.filter((group) => group.externalEan && group._count._all > 1).length,
+    },
+    duplicateProviderGroups,
+    duplicateSkuGroups,
+    duplicateEanGroups,
+  };
 }
 
 export async function createWholesaleProvider(input: CreateWholesaleProviderInput) {

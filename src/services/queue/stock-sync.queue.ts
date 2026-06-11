@@ -14,7 +14,8 @@ export type StockSyncTriggeredBy =
   | 'WHOLESALE_SYNC'
   | 'SCHEDULED'
   | 'LEAD_TIME_UPDATE'
-  | 'SHOP_PUBLICATION';
+  | 'SHOP_PUBLICATION'
+  | 'MAPPING_CHANGE';
 
 export interface StockSyncLegacyJobData {
   logId: string;

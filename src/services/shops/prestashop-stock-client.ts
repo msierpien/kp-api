@@ -32,6 +32,22 @@ export interface BulkStockResult {
   }>;
 }
 
+interface BulkStockSnapshot {
+  productId: number;
+  idProductAttribute?: number;
+  idShop?: number;
+  quantity?: number;
+  stockAvailableId?: string | null;
+  outOfStockBehavior?: number | null;
+  availableForOrder?: boolean | null;
+  showPrice?: boolean | null;
+  availableNow?: string | null;
+  availableLater?: string | null;
+  syncedLeadTimeDays?: number | null;
+  effectiveLeadTimeDays?: number | null;
+  etaLabel?: string | null;
+}
+
 export class PrestaShopStockClient implements ShopStockClient {
   private baseUrl: string;
   private apiKey: string;
@@ -212,22 +228,36 @@ export class PrestaShopStockClient implements ShopStockClient {
   }
 
   async getProductInventorySnapshot(externalProductId: string): Promise<ShopProductInventorySnapshot> {
-    const [product, stockAvailable] = await Promise.all([
+    const [product, stockAvailable, bulkSnapshot] = await Promise.all([
       this.fetchWebService<any>(`products/${encodeURIComponent(externalProductId)}`),
       this.findStockAvailable(externalProductId),
+      this.fetchBulkStockSnapshot(externalProductId),
     ]);
 
     const productData = product.product || (product.products && product.products[0]) || product;
     const price = productData?.price === undefined || productData.price === ''
       ? undefined
       : Number(productData.price);
+    const stock = bulkSnapshot?.quantity ?? stockAvailable?.quantity;
+    const outOfStockBehavior = bulkSnapshot?.outOfStockBehavior ?? normalizeNullableNumber(stockAvailable?.outOfStock);
+    const availableForOrder = bulkSnapshot?.availableForOrder ?? normalizeNullableBoolean(productData?.available_for_order);
 
     return {
       externalProductId,
       price: Number.isFinite(price) ? price : undefined,
-      stock: stockAvailable?.quantity,
-      stockAvailableId: stockAvailable?.id,
-      idShop: stockAvailable?.idShop,
+      stock,
+      stockAvailableId: bulkSnapshot?.stockAvailableId ?? stockAvailable?.id,
+      idShop: bulkSnapshot?.idShop === undefined ? stockAvailable?.idShop : String(bulkSnapshot.idShop),
+      outOfStockBehavior,
+      availableForOrder,
+      showPrice: bulkSnapshot?.showPrice ?? normalizeNullableBoolean(productData?.show_price),
+      leadTimeDays: bulkSnapshot?.syncedLeadTimeDays ?? null,
+      effectiveLeadTimeDays: bulkSnapshot?.effectiveLeadTimeDays ?? null,
+      nativeAvailableNow: bulkSnapshot?.availableNow ?? null,
+      nativeAvailableLater: bulkSnapshot?.availableLater ?? null,
+      etaLabel: bulkSnapshot?.etaLabel ?? null,
+      availabilityPolicy: inferAvailabilityPolicy(stock, outOfStockBehavior, availableForOrder),
+      etaDiagnosticsAvailable: Boolean(bulkSnapshot),
     };
   }
 
@@ -340,6 +370,35 @@ export class PrestaShopStockClient implements ShopStockClient {
 
     return text;
   }
+
+  private async fetchBulkStockSnapshot(externalProductId: string): Promise<BulkStockSnapshot | null> {
+    if (!this.bulkStockApiKey) return null;
+
+    const productId = Number(externalProductId);
+    if (!Number.isInteger(productId) || productId <= 0) return null;
+
+    try {
+      const url = buildBulkStockSnapshotUrl(this.baseUrl, productId);
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'X-Api-Key': this.bulkStockApiKey,
+        },
+      });
+
+      if (!response.ok) {
+        return null;
+      }
+
+      const json = await response.json().catch(() => null) as { success?: boolean; data?: BulkStockSnapshot } | null;
+      if (!json?.success || !json.data) return null;
+
+      return json.data;
+    } catch {
+      return null;
+    }
+  }
 }
 
 function selectStockAvailableEntry(entries: any[], prestashopShopId: string | null) {
@@ -423,6 +482,10 @@ function normalizeAvailabilityPolicy(value: unknown) {
 
 export function buildBulkStockUrl(baseUrl: string) {
   return `${baseUrl}/index.php?fc=module&module=kp_bulkstock&controller=bulkupdate`;
+}
+
+export function buildBulkStockSnapshotUrl(baseUrl: string, productId: number) {
+  return `${baseUrl}/index.php?fc=module&module=kp_bulkstock&controller=snapshot&productId=${encodeURIComponent(String(productId))}`;
 }
 
 export function buildStockAvailableXml(input: {
@@ -539,16 +602,34 @@ function replaceLocalizedTextField(xml: string, field: string, value: string) {
 function buildAvailabilityMessages(
   options: Pick<ShopStockUpdateOptions, 'availabilityPolicy' | 'leadTimeDays' | 'warehouseAvailableAt'>,
 ) {
-  if (options.availabilityPolicy === 'OUT_OF_STOCK') {
-    return { availableNow: '', availableLater: '' };
-  }
+  void options;
+  return { availableNow: '', availableLater: '' };
+}
 
-  const promise = buildShippingPromiseMessage(options);
-  if (options.availabilityPolicy === 'BACKORDER_FROM_WHOLESALE') {
-    return { availableNow: '', availableLater: promise };
-  }
+function normalizeNullableBoolean(value: unknown) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') return value === '1' || value.toLowerCase() === 'true';
+  return null;
+}
 
-  return { availableNow: promise, availableLater: '' };
+function normalizeNullableNumber(value: unknown) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function inferAvailabilityPolicy(
+  stock?: number,
+  outOfStockBehavior?: number | null,
+  availableForOrder?: boolean | null,
+): ShopProductInventorySnapshot['availabilityPolicy'] {
+  if (availableForOrder === false) return 'OUT_OF_STOCK';
+  if ((stock ?? 0) > 0) return 'IN_STOCK';
+  if (availableForOrder === true && outOfStockBehavior === 1) return 'BACKORDER_FROM_WHOLESALE';
+  if (availableForOrder === true) return 'OUT_OF_STOCK';
+  return null;
 }
 
 function buildShippingPromiseMessage(

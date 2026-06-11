@@ -217,9 +217,29 @@ export const updateOrderStatusSchema = z.object({
   externalStatusId: z.string().min(1).optional(),
 });
 
+export const orderReturnItemSchema = z.object({
+  orderItemId: z.string().min(1),
+  quantity: z.coerce.number().positive(),
+});
+
+export const orderReturnActionSchema = z.object({
+  reason: z.string().max(1000).optional().nullable(),
+  items: z.array(orderReturnItemSchema).default([]),
+  refundShipping: z.boolean().default(false),
+  restockItems: z.boolean().default(true),
+  autoConfirmWarehouseDocument: z.boolean().default(true),
+  externalStatusId: z.string().min(1).optional().nullable(),
+});
+
+export const orderCancellationActionSchema = orderReturnActionSchema.omit({ items: true }).extend({
+  items: z.array(orderReturnItemSchema).optional(),
+});
+
 export type IfirmaSettingsInput = z.infer<typeof ifirmaSettingsSchema>;
 export type ShopOrderStatusMappingInput = z.infer<typeof shopOrderStatusMappingSchema>;
 export type UpdateOrderStatusInput = z.infer<typeof updateOrderStatusSchema>;
+export type OrderReturnActionInput = z.infer<typeof orderReturnActionSchema>;
+export type OrderCancellationActionInput = z.infer<typeof orderCancellationActionSchema>;
 
 // ============================================
 // Template Layout (wizualny edytor szablonów)

@@ -53,6 +53,8 @@ model Tenant {
   shopOrderStatuses     ShopOrderStatus[]
   ifirmaSettings        IfirmaSettings[]
   salesDocuments        SalesDocument[]
+  orderReturns          OrderReturn[]
+  orderReturnItems      OrderReturnItem[]
   invoiceEmailLogs      InvoiceEmailLog[]
 
   @@index([status])
@@ -110,6 +112,7 @@ model Shop {
   orderStatuses        ShopOrderStatus[]
   ifirmaSettings       IfirmaSettings?
   salesDocuments       SalesDocument[]
+  orderReturns         OrderReturn[]
 
   @@index([tenantId])
   @@index([status])
@@ -183,6 +186,7 @@ model Order {
   warehouseDocuments    WarehouseDocument[]
   warehouseReservations WarehouseReservation[]
   salesDocuments        SalesDocument[]
+  returns               OrderReturn[]
 
   @@unique([shopId, externalOrderId])
   @@index([shopId, orderReference])
@@ -224,6 +228,7 @@ model OrderItem {
   warehouseProduct      WarehouseProduct?      @relation(fields: [warehouseProductId], references: [id], onDelete: SetNull)
   personalizationCase   PersonalizationCase?
   warehouseReservations WarehouseReservation[]
+  returnItems           OrderReturnItem[]
 
   @@index([orderId])
   @@index([sku])
@@ -316,6 +321,7 @@ model ShopOrderStatus {
 
 enum SalesDocumentType {
   INVOICE
+  CORRECTION
 }
 
 enum SalesDocumentStatus {
@@ -365,7 +371,10 @@ model SalesDocument {
   orderId             String              @map("order_id")
   externalOrderId     String              @map("external_order_id")
   documentType        SalesDocumentType   @default(INVOICE) @map("document_type")
+  documentKey         String              @default("PRIMARY") @map("document_key")
   status              SalesDocumentStatus @default(DRAFT)
+  parentDocumentId    String?             @map("parent_document_id")
+  orderReturnId       String?             @unique @map("order_return_id")
   externalId          String?             @map("external_id")
   externalNumber      String?             @map("external_number")
   requestPayloadJson  Json?               @map("request_payload_json")
@@ -382,14 +391,109 @@ model SalesDocument {
   tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   shop      Shop              @relation(fields: [shopId], references: [id], onDelete: Cascade)
   order     Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  parentDocument SalesDocument? @relation("SalesDocumentCorrections", fields: [parentDocumentId], references: [id], onDelete: SetNull)
+  corrections     SalesDocument[] @relation("SalesDocumentCorrections")
+  orderReturn     OrderReturn? @relation(fields: [orderReturnId], references: [id], onDelete: SetNull)
   emailLogs InvoiceEmailLog[]
 
-  @@unique([shopId, externalOrderId, documentType])
+  @@unique([shopId, externalOrderId, documentType, documentKey])
+  @@index([tenantId])
+  @@index([shopId])
+  @@index([orderId])
+  @@index([parentDocumentId])
+  @@index([orderReturnId])
+  @@index([status])
+  @@map("sales_documents")
+}
+
+enum OrderReturnType {
+  CANCELLATION
+  RETURN
+}
+
+enum OrderReturnStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model OrderReturn {
+  id                         String            @id @default(cuid())
+  tenantId                   String            @map("tenant_id")
+  shopId                     String            @map("shop_id")
+  orderId                    String            @map("order_id")
+  externalOrderId            String            @map("external_order_id")
+  type                       OrderReturnType
+  status                     OrderReturnStatus @default(PENDING)
+  reason                     String?           @db.Text
+  refundShipping             Boolean           @default(false) @map("refund_shipping")
+  restockItems               Boolean           @default(true) @map("restock_items")
+  autoConfirmWarehouseDocument Boolean          @default(true) @map("auto_confirm_warehouse_document")
+  totalRefundTaxIncl         Decimal           @default(0) @map("total_refund_tax_incl") @db.Decimal(10, 2)
+  totalRefundTaxExcl         Decimal           @default(0) @map("total_refund_tax_excl") @db.Decimal(10, 2)
+  shippingRefundTaxIncl      Decimal           @default(0) @map("shipping_refund_tax_incl") @db.Decimal(10, 2)
+  shippingRefundTaxExcl      Decimal           @default(0) @map("shipping_refund_tax_excl") @db.Decimal(10, 2)
+  externalStatusId           String?           @map("external_status_id")
+  externalStatusName         String?           @map("external_status_name")
+  warehouseDocumentId        String?           @unique @map("warehouse_document_id")
+  ifirmaStatus               String?           @map("ifirma_status")
+  ifirmaRequestPayloadJson   Json?             @map("ifirma_request_payload_json")
+  ifirmaResponsePayloadJson  Json?             @map("ifirma_response_payload_json")
+  ifirmaErrorMessage         String?           @map("ifirma_error_message") @db.Text
+  prestashopStatus           String?           @map("prestashop_status")
+  prestashopOrderSlipId      String?           @map("prestashop_order_slip_id")
+  prestashopRequestPayloadJson Json?           @map("prestashop_request_payload_json")
+  prestashopResponsePayloadJson Json?          @map("prestashop_response_payload_json")
+  prestashopErrorMessage     String?           @map("prestashop_error_message") @db.Text
+  errorMessage               String?           @map("error_message") @db.Text
+  completedAt                DateTime?         @map("completed_at")
+  failedAt                   DateTime?         @map("failed_at")
+  createdAt                  DateTime          @default(now()) @map("created_at")
+  updatedAt                  DateTime          @updatedAt @map("updated_at")
+
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shop              Shop               @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  order             Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  warehouseDocument WarehouseDocument? @relation(fields: [warehouseDocumentId], references: [id], onDelete: SetNull)
+  items             OrderReturnItem[]
+  salesDocument     SalesDocument?
+
   @@index([tenantId])
   @@index([shopId])
   @@index([orderId])
   @@index([status])
-  @@map("sales_documents")
+  @@index([type])
+  @@map("order_returns")
+}
+
+model OrderReturnItem {
+  id                    String   @id @default(cuid())
+  tenantId              String   @map("tenant_id")
+  orderReturnId         String   @map("order_return_id")
+  orderItemId           String   @map("order_item_id")
+  externalItemId        String   @map("external_item_id")
+  sku                   String
+  productNameSnapshot   String   @map("product_name_snapshot")
+  quantity              Decimal  @db.Decimal(10, 3)
+  unitPriceTaxIncl      Decimal? @map("unit_price_tax_incl") @db.Decimal(10, 2)
+  unitPriceTaxExcl      Decimal? @map("unit_price_tax_excl") @db.Decimal(10, 2)
+  totalRefundTaxIncl    Decimal  @default(0) @map("total_refund_tax_incl") @db.Decimal(10, 2)
+  totalRefundTaxExcl    Decimal  @default(0) @map("total_refund_tax_excl") @db.Decimal(10, 2)
+  taxRate               Decimal? @map("tax_rate") @db.Decimal(5, 4)
+  warehouseProductId    String?  @map("warehouse_product_id")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orderReturn OrderReturn     @relation(fields: [orderReturnId], references: [id], onDelete: Cascade)
+  orderItem   OrderItem       @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([orderReturnId])
+  @@index([orderItemId])
+  @@index([warehouseProductId])
+  @@map("order_return_items")
 }
 
 model InvoiceEmailLog {
@@ -779,6 +883,7 @@ enum WarehouseDocumentType {
   PZ  // Przyjęcie Zewnętrzne (od dostawcy)
   PW  // Przyjęcie Wewnętrzne (np. z produkcji)
   WZ  // Wydanie Zewnętrzne (do klienta)
+  ZW  // Zwrot od klienta
   RW  // Rozchód Wewnętrzny (zużycie)
   INW // Inwentaryzacja (korekta stanu na bazie spisu)
 }
@@ -1094,6 +1199,7 @@ model WarehouseDocument {
 
   tenant        Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   order         Order?                  @relation(fields: [orderId], references: [id])
+  orderReturn   OrderReturn?
   items         WarehouseDocumentItem[]
   stockSyncLogs StockSyncLog[]
 

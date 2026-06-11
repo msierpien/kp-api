@@ -3,9 +3,16 @@ import prisma from '../../lib/prisma';
 import { createManualOrder, deleteOrder } from '../../services/admin/orders.service';
 import * as reservationService from '../../services/admin/warehouse-reservations.service';
 import * as invoicesService from '../../services/admin/invoices.service';
+import * as orderReturnsService from '../../services/admin/order-returns.service';
 import * as shopOrderStatusesService from '../../services/admin/shop-order-statuses.service';
 import { extractOrderShippingInfo } from '../../services/orders/order-shipping-info.service';
-import { createManualOrderSchema, updateOrderStatusSchema, type CreateManualOrderInput } from '../../schemas/admin.schema';
+import {
+  createManualOrderSchema,
+  orderCancellationActionSchema,
+  orderReturnActionSchema,
+  updateOrderStatusSchema,
+  type CreateManualOrderInput,
+} from '../../schemas/admin.schema';
 
 interface OrderParams {
   id: string;
@@ -161,9 +168,7 @@ export async function ordersRoutes(fastify: FastifyInstance) {
               },
           },
           salesDocuments: {
-            where: { documentType: 'INVOICE' },
             orderBy: { createdAt: 'desc' },
-            take: 1,
             include: { emailLogs: { orderBy: { createdAt: 'desc' }, take: 10 } },
           },
           warehouseDocuments: true,
@@ -289,6 +294,106 @@ export async function ordersRoutes(fastify: FastifyInstance) {
         });
       }
       const result = await shopOrderStatusesService.updateOrderStatus(request.params.id, parsed.data);
+      return reply.send(result);
+    },
+  );
+
+  fastify.get<{ Params: OrderParams }>(
+    '/:id/returns',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Lista anulowań i zwrotów zamówienia',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        response: { 200: { type: 'array', items: looseObjectResponse } },
+      },
+    },
+    async (request, reply) => {
+      const result = await orderReturnsService.listOrderReturns(request.params.id);
+      return reply.send(result);
+    },
+  );
+
+  fastify.post<{ Params: OrderParams; Body: unknown }>(
+    '/:id/cancel/preview',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Podgląd dokumentowego anulowania zamówienia',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        body: { type: 'object', additionalProperties: true },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      const parsed = orderCancellationActionSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.status(400).send({ error: 'Validation Error', message: parsed.error.errors[0].message, details: parsed.error.errors });
+      }
+      const result = await orderReturnsService.previewOrderCancellation(request.params.id, parsed.data);
+      return reply.send(result);
+    },
+  );
+
+  fastify.post<{ Params: OrderParams; Body: unknown }>(
+    '/:id/cancel',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Anuluj zamówienie z dokumentami magazynu, iFirma i PrestaShop',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        body: { type: 'object', additionalProperties: true },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      const parsed = orderCancellationActionSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.status(400).send({ error: 'Validation Error', message: parsed.error.errors[0].message, details: parsed.error.errors });
+      }
+      const result = await orderReturnsService.cancelOrder(request.params.id, parsed.data);
+      return reply.send(result);
+    },
+  );
+
+  fastify.post<{ Params: OrderParams; Body: unknown }>(
+    '/:id/returns/preview',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Podgląd zwrotu zamówienia',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        body: { type: 'object', additionalProperties: true },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      const parsed = orderReturnActionSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.status(400).send({ error: 'Validation Error', message: parsed.error.errors[0].message, details: parsed.error.errors });
+      }
+      const result = await orderReturnsService.previewOrderReturn(request.params.id, parsed.data);
+      return reply.send(result);
+    },
+  );
+
+  fastify.post<{ Params: OrderParams; Body: unknown }>(
+    '/:id/returns',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Utwórz zwrot zamówienia z dokumentami magazynu, iFirma i PrestaShop',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        body: { type: 'object', additionalProperties: true },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      const parsed = orderReturnActionSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.status(400).send({ error: 'Validation Error', message: parsed.error.errors[0].message, details: parsed.error.errors });
+      }
+      const result = await orderReturnsService.createOrderReturn(request.params.id, parsed.data);
       return reply.send(result);
     },
   );

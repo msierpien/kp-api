@@ -3,6 +3,7 @@ import { decrypt } from '../../lib/encryption';
 import { getTenantId } from '../../lib/tenant-context';
 import type { Prisma, Shop } from '@prisma/client';
 import { PrestaShopClient, type PrestaShopProductDetails } from '../prestashop/prestashop-client';
+import { publishInventoryToShops } from '../stock/stock-sync.service';
 import { resolveCatalogForProduct } from './warehouse-catalogs.service';
 
 export interface ImportProductsResult {
@@ -84,6 +85,7 @@ export interface AutoMapShopProductsResult {
   mappedBySku: number;
   mappedByEan: number;
   skippedNoProduct: number;
+  stockSyncEnqueued: number;
 }
 
 function requireTenantId() {
@@ -476,7 +478,9 @@ export async function autoMapShopProducts(input: AutoMapShopProductsInput = {}):
     mappedBySku: 0,
     mappedByEan: 0,
     skippedNoProduct: 0,
+    stockSyncEnqueued: 0,
   };
+  const mappedWarehouseProductIds = new Set<string>();
 
   for (const mapping of mappings) {
     let product = await prisma.warehouseProduct.findUnique({
@@ -506,9 +510,20 @@ export async function autoMapShopProducts(input: AutoMapShopProductsInput = {}):
       where: { id: mapping.id },
       data: { warehouseProductId: product.id },
     });
+    mappedWarehouseProductIds.add(product.id);
     result.mapped++;
     if (matchedBy === 'SKU') result.mappedBySku++;
     if (matchedBy === 'EAN') result.mappedByEan++;
+  }
+
+  if (mappedWarehouseProductIds.size > 0) {
+    const sync = await publishInventoryToShops({
+      tenantId,
+      shopId: input.shopId,
+      warehouseProductIds: Array.from(mappedWarehouseProductIds),
+      triggeredBy: 'MAPPING_CHANGE',
+    });
+    result.stockSyncEnqueued = sync.enqueued;
   }
 
   return result;

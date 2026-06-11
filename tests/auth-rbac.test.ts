@@ -183,6 +183,8 @@ describe('admin RBAC policy', () => {
 
     assert.equal(canAccessAdminPath('OPERATOR', 'GET', '/admin/stats'), true);
     assert.equal(canAccessAdminPath('OPERATOR', 'DELETE', '/admin/orders/1'), false);
+    assert.equal(canAccessAdminPath('OPERATOR', 'POST', '/admin/order-returns/1/retry'), true);
+    assert.equal(canAccessAdminPath('OPERATOR', 'DELETE', '/admin/order-returns/1'), true);
     assert.equal(canAccessAdminPath('OPERATOR', 'POST', '/admin/warehouse/documents'), true);
     assert.equal(canAccessAdminPath('OPERATOR', 'GET', '/admin/warehouse/products'), true);
     assert.equal(canAccessAdminPath('OPERATOR', 'POST', '/admin/warehouse/products'), false);

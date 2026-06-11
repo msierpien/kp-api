@@ -49,8 +49,9 @@ describe('warehouse inventory document (INW): schema i migracja', () => {
 });
 
 describe('warehouse inventory document (INW): logika serwisu', () => {
-  it('DocumentType zawiera INW', () => {
-    assert.match(DOCS_SERVICE, /export type DocumentType = 'PZ' \| 'PW' \| 'WZ' \| 'RW' \| 'INW'/);
+  it('DocumentType zawiera INW i ZW', () => {
+    assert.match(DOCS_SERVICE, /export type DocumentType = 'PZ' \| 'PW' \| 'WZ' \| 'ZW' \| 'RW' \| 'INW'/);
+    assert.match(DOCS_SERVICE, /STOCK_INCOMING_TYPES: DocumentType\[\] = \['PZ', 'PW', 'ZW'\]/);
   });
 
   it('prepareDocumentItems waliduje unique productId dla INW', () => {
@@ -92,7 +93,7 @@ describe('warehouse inventory document (INW): logika serwisu', () => {
 
 describe('warehouse inventory document (INW): routes i snapshot', () => {
   it('enum body dla POST /documents akceptuje INW', () => {
-    assert.match(DOCS_ROUTES, /enum: \['PZ', 'PW', 'WZ', 'RW', 'INW'\]/);
+    assert.match(DOCS_ROUTES, /enum: \['PZ', 'PW', 'WZ', 'ZW', 'RW', 'INW'\]/);
   });
 
   it('POST /documents items akceptują systemQuantity', () => {

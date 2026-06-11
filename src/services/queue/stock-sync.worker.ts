@@ -180,7 +180,7 @@ async function processBulkBatch(
           status: 'SUCCESS',
           syncMode: meta.syncMode,
           remoteQuantity: remote.quantity ?? item.quantity,
-          remoteLeadTimeDays: remote.leadTimeDays ?? item.leadTimeDays ?? null,
+          remoteLeadTimeDays: remote.leadTimeDays ?? null,
           remoteWarehouseAvailableAt: parseWarehouseAvailableAt(remote.warehouseAvailableAt ?? item.warehouseAvailableAt ?? null),
           stockAvailableId: null,
           prestashopShopId: meta.prestashopShopId,

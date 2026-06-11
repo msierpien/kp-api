@@ -21,6 +21,8 @@ export const TENANT_MODELS = new Set([
   'ShopOrderStatus',
   'IfirmaSettings',
   'SalesDocument',
+  'OrderReturn',
+  'OrderReturnItem',
   'InvoiceEmailLog',
   'StockSyncLog',
   'PriceSyncLog',

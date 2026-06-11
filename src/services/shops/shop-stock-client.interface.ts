@@ -21,4 +21,14 @@ export interface ShopProductInventorySnapshot {
   stock?: number;
   stockAvailableId?: string;
   idShop?: string;
+  outOfStockBehavior?: number | null;
+  availableForOrder?: boolean | null;
+  showPrice?: boolean | null;
+  leadTimeDays?: number | null;
+  effectiveLeadTimeDays?: number | null;
+  nativeAvailableNow?: string | null;
+  nativeAvailableLater?: string | null;
+  etaLabel?: string | null;
+  availabilityPolicy?: 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK' | null;
+  etaDiagnosticsAvailable?: boolean;
 }

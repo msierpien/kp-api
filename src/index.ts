@@ -37,6 +37,11 @@ import type { JwtPayload } from './types';
 import { getAccessTokenFromRequest } from './lib/auth-cookies';
 import { getReadinessHealth } from './services/ops/health.service';
 import { getPrometheusMetrics } from './services/ops/metrics.service';
+import {
+  API_CONTRACT_VERSION,
+  API_VERSION,
+  getApplicationVersionInfo,
+} from './services/ops/version.service';
 
 type TenantContextData = Pick<JwtPayload, 'tenantId' | 'userId' | 'role'> & {
   overrideTenantId?: string;
@@ -103,6 +108,8 @@ server.addHook('onRequest', async (request) => {
 
 server.addHook('onSend', async (request, reply, payload) => {
   reply.header('X-Request-Id', request.id);
+  reply.header('X-App-Version', API_VERSION);
+  reply.header('X-Api-Contract-Version', String(API_CONTRACT_VERSION));
   return payload;
 });
 
@@ -229,6 +236,7 @@ server.get('/health/live', async () => ({
   status: 'ok',
   timestamp: new Date().toISOString(),
   uptimeSeconds: Math.round(process.uptime()),
+  version: getApplicationVersionInfo(config.app.env),
   runtime: config.runtime,
 }));
 
@@ -249,13 +257,11 @@ server.get('/metrics', async (_request, reply) => {
     .send(metrics);
 });
 
+server.get('/version', async () => getApplicationVersionInfo(config.app.env));
+
 // Root endpoint
 server.get('/', async () => {
-  return { 
-    name: 'Personalization API',
-    version: '1.0.0',
-    environment: config.app.env,
-  };
+  return getApplicationVersionInfo(config.app.env);
 });
 
 // Graceful shutdown

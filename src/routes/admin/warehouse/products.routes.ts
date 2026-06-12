@@ -48,6 +48,46 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
     }
   });
 
+  // GET /admin/warehouse/products/view-counts
+  fastify.get('/products/view-counts', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Globalne liczniki widoków produktów (wszystkie/aktywne/niski stan/problemy)',
+      querystring: {
+        type: 'object',
+        properties: {
+          search: { type: 'string' },
+          catalogId: { type: 'string' },
+          shopId: { type: 'string' },
+        },
+      },
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            all: { type: 'integer' },
+            active: { type: 'integer' },
+            lowStock: { type: 'integer' },
+            withoutEan: { type: 'integer' },
+            withoutMapping: { type: 'integer' },
+            withoutWholesaleOffer: { type: 'integer' },
+            withoutPrice: { type: 'integer' },
+          },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: warehouseProductService.ProductViewCountsQuery }>, reply: FastifyReply) => {
+    try {
+      const result = await warehouseProductService.getProductViewCounts(request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się policzyć widoków produktów';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      fastify.log.error(error);
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   // POST /admin/warehouse/products
   fastify.post('/products', {
     schema: {
@@ -288,6 +328,60 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
       return reply.status(202).send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd ręcznej synchronizacji stanów';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/products/bulk/sync-price', {
+    schema: {
+      tags: ['price-sync'],
+      summary: 'Ręcznie wyślij ceny zaznaczonych produktów do aktywnych sklepów',
+      body: {
+        type: 'object',
+        required: ['productIds'],
+        properties: {
+          productIds: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 500,
+            items: { type: 'string' },
+          },
+          shopId: { type: 'string' },
+        },
+      },
+      response: {
+        202: {
+          type: 'object',
+          properties: {
+            requested: { type: 'integer' },
+            enqueued: { type: 'integer' },
+            skippedNoPrice: { type: 'integer' },
+            skippedNoMapping: { type: 'integer' },
+            failed: { type: 'integer' },
+            errors: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  productId: { type: 'string' },
+                  message: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: { productIds: string[]; shopId?: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await priceSyncService.syncPricesForProducts(request.body.productIds, {
+        shopId: request.body.shopId,
+        triggeredBy: 'MANUAL',
+      });
+      return reply.status(202).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd masowej synchronizacji cen';
       const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }

@@ -134,6 +134,52 @@ export async function syncProductPrice(
   return { enqueued, logs };
 }
 
+export interface BulkSyncProductPricesResult {
+  requested: number;
+  enqueued: number;
+  skippedNoPrice: number;
+  skippedNoMapping: number;
+  failed: number;
+  errors: Array<{ productId: string; message: string }>;
+}
+
+export async function syncPricesForProducts(
+  productIds: string[],
+  options: Pick<SyncProductPriceOptions, 'shopId' | 'triggeredBy'> = {},
+): Promise<BulkSyncProductPricesResult> {
+  requireTenantId();
+  const uniqueIds = [...new Set(productIds)];
+
+  const result: BulkSyncProductPricesResult = {
+    requested: uniqueIds.length,
+    enqueued: 0,
+    skippedNoPrice: 0,
+    skippedNoMapping: 0,
+    failed: 0,
+    errors: [],
+  };
+
+  for (const productId of uniqueIds) {
+    try {
+      const single = await syncProductPrice(productId, options);
+      if (single.enqueued === 0) result.skippedNoMapping += 1;
+      else result.enqueued += single.enqueued;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd synchronizacji ceny';
+      if (message.includes('ceny sprzedaży')) {
+        result.skippedNoPrice += 1;
+      } else if (message.includes('mapowania')) {
+        result.skippedNoMapping += 1;
+      } else {
+        result.failed += 1;
+        result.errors.push({ productId, message });
+      }
+    }
+  }
+
+  return result;
+}
+
 export async function retryPriceSyncLog(id: string) {
   const tenantId = requireTenantId();
   const log = await prisma.priceSyncLog.findFirst({

@@ -108,11 +108,10 @@ function requireTenantId() {
   return tenantId;
 }
 
-export async function getProducts(query: ProductsQuery = {}) {
-  const tenantId = requireTenantId();
+type ProductsWhereQuery = Omit<ProductsQuery, 'page' | 'limit'>;
+
+function buildProductsWhere(query: ProductsWhereQuery, tenantId: string | null | undefined) {
   const {
-    page = 1,
-    limit = 50,
     search,
     catalogId,
     shopId,
@@ -125,7 +124,6 @@ export async function getProducts(query: ProductsQuery = {}) {
     hasShopMapping,
     hasWholesaleOffer,
   } = query;
-  const skip = (page - 1) * limit;
 
   const where: any = {};
   if (tenantId) where.tenantId = tenantId;
@@ -179,8 +177,19 @@ export async function getProducts(query: ProductsQuery = {}) {
     where.OR = [
       { sku: { contains: search, mode: 'insensitive' } },
       { name: { contains: search, mode: 'insensitive' } },
+      { barcodes: { some: { isActive: true, ean: { contains: search, mode: 'insensitive' } } } },
     ];
   }
+
+  return where;
+}
+
+export async function getProducts(query: ProductsQuery = {}) {
+  const tenantId = requireTenantId();
+  const { page = 1, limit = 50, shopId } = query;
+  const skip = (page - 1) * limit;
+
+  const where = buildProductsWhere(query, tenantId);
 
   const [data, total] = await Promise.all([
     prisma.warehouseProduct.findMany({
@@ -228,6 +237,37 @@ export async function getProducts(query: ProductsQuery = {}) {
   ]);
 
   return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+}
+
+export interface ProductViewCountsQuery {
+  search?: string;
+  catalogId?: string;
+  shopId?: string;
+}
+
+const PRODUCT_VIEW_QUERIES = {
+  all: {},
+  active: { isActive: true },
+  lowStock: { isActive: true, stockStatus: 'low', stockBelow: 1 },
+  withoutEan: { isActive: true, hasBarcode: false },
+  withoutMapping: { isActive: true, hasShopMapping: false },
+  withoutWholesaleOffer: { isActive: true, hasWholesaleOffer: false },
+  withoutPrice: { isActive: true, missingPrice: 'retail' },
+} satisfies Record<string, ProductsWhereQuery>;
+
+export type ProductViewCounts = Record<keyof typeof PRODUCT_VIEW_QUERIES, number>;
+
+export async function getProductViewCounts(query: ProductViewCountsQuery = {}): Promise<ProductViewCounts> {
+  const tenantId = requireTenantId();
+  const viewIds = Object.keys(PRODUCT_VIEW_QUERIES) as Array<keyof typeof PRODUCT_VIEW_QUERIES>;
+
+  const counts = await prisma.$transaction(
+    viewIds.map((viewId) => prisma.warehouseProduct.count({
+      where: buildProductsWhere({ ...PRODUCT_VIEW_QUERIES[viewId], ...query }, tenantId),
+    })),
+  );
+
+  return Object.fromEntries(viewIds.map((viewId, index) => [viewId, counts[index]])) as ProductViewCounts;
 }
 
 export async function getProductById(id: string) {

@@ -149,7 +149,7 @@ function requireTenantId() {
 }
 
 function normalizeSource(source?: ReplenishmentSource) {
-  if (source === undefined) return 'all';
+  if (source === undefined) return 'order';
   if (!['order', 'low', 'all'].includes(source)) throw new Error('Nieprawidłowe źródło listy do zamówienia');
   return source;
 }

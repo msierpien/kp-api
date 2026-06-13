@@ -1,0 +1,29 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+
+describe('API version contract', () => {
+  it('publishes the admin compatibility contract expected by kp-admin', async () => {
+    const {
+      API_CONTRACT_VERSION,
+      API_VERSION,
+      COMPATIBILITY_PROFILE,
+      MIN_ADMIN_CONTRACT_VERSION,
+      MIN_ADMIN_VERSION,
+      getApplicationVersionInfo,
+    } = await import('../src/services/ops/version.service');
+
+    assert.equal(API_VERSION, '1.1.3');
+    assert.equal(API_CONTRACT_VERSION, 2);
+    assert.equal(MIN_ADMIN_CONTRACT_VERSION, 2);
+    assert.equal(MIN_ADMIN_VERSION, '0.3.0');
+    assert.equal(COMPATIBILITY_PROFILE, 'kp-admin-api');
+
+    const info = getApplicationVersionInfo('test');
+    assert.equal(info.version, '1.1.3');
+    assert.equal(info.compatibilityProfile, 'kp-admin-api');
+    assert.equal(info.apiContractVersion, 2);
+    assert.equal(info.minAdminContractVersion, 2);
+    assert.equal(info.minAdminVersion, '0.3.0');
+    assert.ok(info.features.includes('product-card-content-v1'));
+  });
+});

@@ -1,6 +1,7 @@
 import fp from 'fastify-plugin';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
+import { API_VERSION } from '../services/ops/version.service';
 
 export default fp(async (fastify) => {
   await fastify.register(swagger, {
@@ -9,7 +10,7 @@ export default fp(async (fastify) => {
       info: {
         title: 'KP Personalization API',
         description: 'API do zarządzania personalizacją produktów e-commerce',
-        version: '1.0.0',
+        version: API_VERSION,
       },
       components: {
         securitySchemes: {

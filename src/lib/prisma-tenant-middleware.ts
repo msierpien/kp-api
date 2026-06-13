@@ -30,6 +30,9 @@ export const TENANT_MODELS = new Set([
   'WholesaleProvider',
   'WholesaleProductMapping',
   'WholesaleSyncLog',
+  'ProductChannelSnapshot',
+  'ProductChannelSyncConfig',
+  'ProductCardOperationLog',
 ]);
 
 const DEBUG_TENANT_CONTEXT = process.env.DEBUG_TENANT_CONTEXT === 'true';

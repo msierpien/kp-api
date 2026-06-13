@@ -55,6 +55,9 @@ const MANAGED_SHOP_CONFIG_KEYS = [
   'bulkStockApiKey',
   'defaultLeadTimeDays',
   'bulkStockBatchSize',
+  'productContentUrl',
+  'productContentApiKey',
+  'productContentEnabled',
 ] as const;
 
 const DEFAULT_ORDER_SYNC_CONFIG = {
@@ -147,6 +150,7 @@ export function preserveManagedShopConfig(
 function publicShopConfig(configJson: Record<string, any>) {
   const safeConfig = { ...configJson };
   delete safeConfig.bulkStockApiKey;
+  delete safeConfig.productContentApiKey;
   const adminApi = normalizeShopConfig(safeConfig.adminApi);
 
   return {
@@ -176,6 +180,8 @@ const mapShop = (shop: any): ShopItem => {
     authType: configJson.authType || 'WEB_SERVICE',
     config: publicShopConfig(configJson),
     hasBulkStock: Boolean(configJson.bulkStockApiKey),
+    hasProductContent: Boolean(configJson.productContentApiKey),
+    productContentUrl: typeof configJson.productContentUrl === 'string' ? configJson.productContentUrl : null,
     bulkStockUrl: typeof configJson.bulkStockUrl === 'string' ? configJson.bulkStockUrl : null,
     defaultLeadTimeDays: normalizeLeadTimeDays(configJson.defaultLeadTimeDays),
     bulkStockBatchSize: normalizeBulkStockBatchSize(configJson.bulkStockBatchSize),

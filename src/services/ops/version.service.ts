@@ -1,7 +1,8 @@
-export const API_VERSION = process.env.APP_VERSION || '1.2.0';
+export const API_VERSION = process.env.APP_VERSION || '1.1.3';
 export const API_CONTRACT_VERSION = Number(process.env.API_CONTRACT_VERSION || 2);
 export const MIN_ADMIN_CONTRACT_VERSION = Number(process.env.MIN_ADMIN_CONTRACT_VERSION || 2);
-export const MIN_ADMIN_VERSION = process.env.MIN_ADMIN_VERSION || '0.2.0';
+export const MIN_ADMIN_VERSION = process.env.MIN_ADMIN_VERSION || '0.3.0';
+export const COMPATIBILITY_PROFILE = 'kp-admin-api';
 
 export type ApplicationVersionInfo = {
   name: string;
@@ -21,12 +22,12 @@ export function getApplicationVersionInfo(environment: string): ApplicationVersi
     name: 'Personalization API',
     version: API_VERSION,
     environment,
-    compatibilityProfile: 'kp-admin-api',
+    compatibilityProfile: COMPATIBILITY_PROFILE,
     apiContractVersion: API_CONTRACT_VERSION,
     minAdminContractVersion: MIN_ADMIN_CONTRACT_VERSION,
     minAdminVersion: MIN_ADMIN_VERSION,
     buildSha: process.env.GIT_SHA || process.env.COMMIT_SHA || null,
     builtAt: process.env.BUILD_DATE || null,
-    features: ['ifirma-invoices-v1', 'order-returns-v1'],
+    features: ['ifirma-invoices-v1', 'order-returns-v1', 'product-card-content-v1'],
   };
 }

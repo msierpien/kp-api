@@ -8,6 +8,7 @@ import * as priceSyncService from '../../../services/price/price-sync.service';
 import * as stockSyncService from '../../../services/stock/stock-sync.service';
 import * as shopProductPublicationService from '../../../services/admin/shop-product-publication.service';
 import * as pricingService from '../../../services/admin/warehouse-pricing.service';
+import * as productCardService from '../../../services/admin/product-card.service';
 import { pricingProductsBodySchema } from './pricing.routes';
 import { getProductStock } from '../../../services/admin/warehouse-stock.service';
 
@@ -498,6 +499,189 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
       const message = error instanceof Error ? error.message : 'Błąd ręcznej synchronizacji sklepu';
       const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.get('/products/:id/card', {
+    schema: {
+      tags: ['warehouse-product-card'],
+      summary: 'Snapshot karty produktu z treścią PrestaShop',
+      querystring: {
+        type: 'object',
+        properties: {
+          shopId: { type: 'string' },
+          sections: { type: 'string' },
+          refresh: { anyOf: [{ type: 'boolean' }, { type: 'string' }] },
+          langId: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Querystring: productCardService.ProductCardQuery;
+  }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await productCardService.getProductCard(request.params.id, request.query));
+    } catch (error) {
+      return reply
+        .status(productCardService.productCardErrorStatus(error))
+        .send(productCardService.productCardErrorBody(error));
+    }
+  });
+
+  fastify.post('/products/:id/card/refresh', {
+    schema: {
+      tags: ['warehouse-product-card'],
+      summary: 'Odśwież snapshot karty produktu z PrestaShop',
+      body: {
+        type: 'object',
+        properties: {
+          shopId: { type: 'string' },
+          langId: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: productCardService.ProductCardPatchInput;
+  }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await productCardService.refreshProductCard(request.params.id, request.body ?? {}));
+    } catch (error) {
+      return reply
+        .status(productCardService.productCardErrorStatus(error))
+        .send(productCardService.productCardErrorBody(error));
+    }
+  });
+
+  fastify.patch('/products/:id/card/content', {
+    schema: { tags: ['warehouse-product-card'], summary: 'Zapisz treści i SEO produktu w PrestaShop' },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: productCardService.ProductCardPatchInput;
+  }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await productCardService.patchProductCardContent(request.params.id, request.body ?? {}));
+    } catch (error) {
+      return reply
+        .status(productCardService.productCardErrorStatus(error))
+        .send(productCardService.productCardErrorBody(error));
+    }
+  });
+
+  fastify.patch('/products/:id/card/parameters', {
+    schema: { tags: ['warehouse-product-card'], summary: 'Zapisz parametry/kategorie produktu w PrestaShop' },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: productCardService.ProductCardPatchInput;
+  }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await productCardService.patchProductCardParameters(request.params.id, request.body ?? {}));
+    } catch (error) {
+      return reply
+        .status(productCardService.productCardErrorStatus(error))
+        .send(productCardService.productCardErrorBody(error));
+    }
+  });
+
+  fastify.post('/products/:id/card/media', {
+    schema: { tags: ['warehouse-product-card'], summary: 'Importuj zdjęcie produktu do PrestaShop z URL' },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: productCardService.ProductCardMediaInput;
+  }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await productCardService.importProductCardMedia(request.params.id, request.body ?? {}));
+    } catch (error) {
+      return reply
+        .status(productCardService.productCardErrorStatus(error))
+        .send(productCardService.productCardErrorBody(error));
+    }
+  });
+
+  fastify.patch('/products/:id/card/media', {
+    schema: { tags: ['warehouse-product-card'], summary: 'Edytuj zdjęcie produktu w PrestaShop' },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: productCardService.ProductCardMediaInput;
+  }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await productCardService.updateProductCardMedia(request.params.id, request.body ?? {}));
+    } catch (error) {
+      return reply
+        .status(productCardService.productCardErrorStatus(error))
+        .send(productCardService.productCardErrorBody(error));
+    }
+  });
+
+  fastify.put('/products/:id/card/media/order', {
+    schema: { tags: ['warehouse-product-card'], summary: 'Zmień kolejność zdjęć produktu w PrestaShop' },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: productCardService.ProductCardMediaInput;
+  }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await productCardService.orderProductCardMedia(request.params.id, request.body ?? {}));
+    } catch (error) {
+      return reply
+        .status(productCardService.productCardErrorStatus(error))
+        .send(productCardService.productCardErrorBody(error));
+    }
+  });
+
+  fastify.delete('/products/:id/card/media', {
+    schema: { tags: ['warehouse-product-card'], summary: 'Usuń zdjęcie produktu w PrestaShop' },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: productCardService.ProductCardMediaInput;
+  }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await productCardService.deleteProductCardMedia(request.params.id, request.body ?? {}));
+    } catch (error) {
+      return reply
+        .status(productCardService.productCardErrorStatus(error))
+        .send(productCardService.productCardErrorBody(error));
+    }
+  });
+
+  fastify.patch('/products/:id/card/channel-config', {
+    schema: {
+      tags: ['warehouse-product-card'],
+      summary: 'Zapisz konfigurację synchronizacji pól karty produktu',
+      body: {
+        type: 'object',
+        required: ['shopId', 'fields'],
+        properties: {
+          shopId: { type: 'string' },
+          fields: { type: 'object', additionalProperties: true },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: productCardService.ProductCardSyncConfigInput;
+  }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await productCardService.upsertProductCardSyncConfig(request.params.id, request.body));
+    } catch (error) {
+      return reply
+        .status(productCardService.productCardErrorStatus(error))
+        .send(productCardService.productCardErrorBody(error));
+    }
+  });
+
+  fastify.post('/products/:id/card/sync', {
+    schema: { tags: ['warehouse-product-card'], summary: 'Uruchom bezpieczną synchronizację karty produktu' },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: productCardService.ProductCardSyncInput;
+  }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await productCardService.syncProductCard(request.params.id, request.body ?? {}));
+    } catch (error) {
+      return reply
+        .status(productCardService.productCardErrorStatus(error))
+        .send(productCardService.productCardErrorBody(error));
     }
   });
 

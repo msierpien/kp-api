@@ -146,6 +146,8 @@ export interface ShopItem {
   authType?: 'WEB_SERVICE' | 'ADMIN_API' | 'REST_API' | 'OAUTH' | 'MANUAL';
   config: any;
   hasBulkStock?: boolean;
+  hasProductContent?: boolean;
+  productContentUrl?: string | null;
   bulkStockUrl?: string | null;
   defaultLeadTimeDays?: number | null;
   bulkStockBatchSize?: number | null;

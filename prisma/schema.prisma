@@ -57,6 +57,9 @@ model Tenant {
   orderReturns          OrderReturn[]
   orderReturnItems      OrderReturnItem[]
   invoiceEmailLogs      InvoiceEmailLog[]
+  productChannelSnapshots ProductChannelSnapshot[]
+  productChannelSyncConfigs ProductChannelSyncConfig[]
+  productCardOperationLogs ProductCardOperationLog[]
 
   @@index([status])
   @@index([slug])
@@ -109,6 +112,9 @@ model Shop {
   pricingRules         WarehousePricingRule[]
   productShopPrices    WarehouseProductShopPrice[]
   productImportLogs    ShopProductImportLog[]
+  productChannelSnapshots ProductChannelSnapshot[]
+  productChannelSyncConfigs ProductChannelSyncConfig[]
+  productCardOperationLogs ProductCardOperationLog[]
   webhookEvents        ShopWebhookEvent[]
   orderStatuses        ShopOrderStatus[]
   ifirmaSettings       IfirmaSettings?
@@ -959,6 +965,9 @@ model WarehouseProduct {
   wholesaleMappings     WholesaleProductMapping[]
   warehouseReservations WarehouseReservation[]
   orderItems            OrderItem[]
+  productChannelSnapshots ProductChannelSnapshot[]
+  productChannelSyncConfigs ProductChannelSyncConfig[]
+  productCardOperationLogs ProductCardOperationLog[]
 
   @@unique([tenantId, sku])
   @@index([tenantId])
@@ -966,6 +975,77 @@ model WarehouseProduct {
   @@index([leadTimeGroupId])
   @@index([tenantId, isActive])
   @@map("warehouse_products")
+}
+
+model ProductChannelSnapshot {
+  id                 String   @id @default(cuid())
+  tenantId           String   @map("tenant_id")
+  warehouseProductId String   @map("warehouse_product_id")
+  shopId             String   @map("shop_id")
+  hash               String
+  payloadJson        Json     @map("payload_json")
+  fetchedAt          DateTime @default(now()) @map("fetched_at")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseProduct WarehouseProduct @relation(fields: [warehouseProductId], references: [id], onDelete: Cascade)
+  shop             Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([warehouseProductId, shopId])
+  @@index([tenantId])
+  @@index([warehouseProductId])
+  @@index([shopId])
+  @@index([tenantId, fetchedAt])
+  @@map("product_channel_snapshots")
+}
+
+model ProductChannelSyncConfig {
+  id                 String   @id @default(cuid())
+  tenantId           String   @map("tenant_id")
+  warehouseProductId String   @map("warehouse_product_id")
+  shopId             String   @map("shop_id")
+  fieldsJson         Json     @map("fields_json")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseProduct WarehouseProduct @relation(fields: [warehouseProductId], references: [id], onDelete: Cascade)
+  shop             Shop             @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([warehouseProductId, shopId])
+  @@index([tenantId])
+  @@index([warehouseProductId])
+  @@index([shopId])
+  @@map("product_channel_sync_configs")
+}
+
+model ProductCardOperationLog {
+  id                 String   @id @default(cuid())
+  tenantId           String   @map("tenant_id")
+  warehouseProductId String   @map("warehouse_product_id")
+  shopId             String?  @map("shop_id")
+  section            String
+  operation          String
+  direction          String   @default("PANEL_TO_SHOP")
+  status             String   @default("SUCCESS")
+  requestHash        String?  @map("request_hash")
+  responseHash       String?  @map("response_hash")
+  errorMessage       String?  @map("error_message") @db.Text
+  payloadJson        Json?    @map("payload_json")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseProduct WarehouseProduct @relation(fields: [warehouseProductId], references: [id], onDelete: Cascade)
+  shop             Shop?            @relation(fields: [shopId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([warehouseProductId])
+  @@index([shopId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("product_card_operation_logs")
 }
 
 model WarehousePricingRule {

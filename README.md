@@ -12,6 +12,41 @@ Backend Fastify dla systemu obslugi sklepow, magazynu, zamowien i personalizacji
 
 Panel admina i portal klienta zawsze lacza sie z Fastify przez `NEXT_PUBLIC_API_URL`. Adres sklepu PrestaShop jest zapisywany tylko w konfiguracji integracji sklepu.
 
+## Wersjonowanie i zgodnosc z panelem
+
+API i panel admina maja osobne wersje aplikacji oraz wspolny numer kontraktu API.
+
+Aktualnie:
+
+- API: `1.1.2`
+- wymagany minimalny admin: `0.2.0`
+- kontrakt API/admin: `2`
+- profil zgodnosci: `kp-admin-api`
+
+Zrodla wersji w API:
+
+- `package.json` - wersja pakietu backendu.
+- `src/services/ops/version.service.ts` - wersja zwracana przez runtime, kontrakt, minimalny admin i profil zgodnosci.
+- `GET /version` - publiczny odczyt wersji API dla panelu i smoke testow.
+- `GET /health` - zwraca status uslug oraz ten sam blok `version`.
+
+Zasady podbijania wersji:
+
+- `PATCH`, np. `1.1.2 -> 1.1.3`: poprawki bledow, wydajnosci, dokumentacji runtime albo zachowania kompatybilnego wstecz.
+- `MINOR`, np. `1.1.x -> 1.2.0`: nowe endpointy, nowe pola odpowiedzi lub nowe funkcje bez lamania istniejacego panelu.
+- `MAJOR`, np. `1.x -> 2.0.0`: zmiana wymagajaca migracji klienta, usuniecie endpointu lub zmiana semantyki niekompatybilna wstecz.
+
+Numer kontraktu (`API_CONTRACT_VERSION`) jest niezalezny od wersji aplikacji. Zmieniaj go tylko wtedy, gdy obecny panel nie moze bezpiecznie pracowac z nowym API albo nowe API nie moze obslugiwac starego panelu. Nie podbijaj kontraktu dla zmian addytywnych, poprawek wydajnosci, nowych widokow opartych o nowe endpointy ani zmian UI.
+
+Po wdrozeniu sprawdz:
+
+```bash
+curl -fsS https://api.kreatywne-papierki.pl/version
+curl -fsS https://api.kreatywne-papierki.pl/health
+```
+
+Panel powinien pokazac w sidebarze status `Zgodne`, np. `Admin v0.2.2 · API v1.1.2 · kontrakt 2`.
+
 ## Start lokalny
 
 Wymagania:

@@ -47,6 +47,43 @@ export interface StatsResponse {
   submittedCases: number;
   readyForPrintCases: number;
   totalCases: number;
+  actionRequired?: number;
+  operations?: {
+    staleCases: number;
+    ordersToShip: number;
+    lowStockProducts: number;
+    failedSyncs: number;
+    failedRenderJobs: number;
+    failedQueues: number;
+  };
+  kpis?: {
+    todayOrders: number;
+    todayRevenue: number;
+    newCases: number;
+    submittedCases: number;
+    readyForPrintCases: number;
+  };
+  integrationHealth?: Array<{
+    id: string;
+    name: string;
+    platform: string;
+    status: string;
+    health: 'connected' | 'error' | 'manual' | 'inactive';
+    message: string;
+    lastSyncAt: Date | null;
+    ordersCount: number;
+    mappingsCount: number;
+    latestSyncStatus: string | null;
+  }>;
+  recentActivity?: Array<{
+    id: string;
+    type: string;
+    tone: string;
+    title: string;
+    description: string;
+    occurredAt: Date;
+    href: string;
+  }>;
 }
 
 export interface PaginatedResponse<T> {
@@ -113,6 +150,13 @@ export interface ShopItem {
   defaultLeadTimeDays?: number | null;
   bulkStockBatchSize?: number | null;
   prestashopShopId?: string | null;
+  health?: 'connected' | 'error' | 'manual' | 'inactive';
+  healthMessage?: string;
+  latestSyncStatus?: string | null;
+  latestSyncError?: string | null;
+  ordersCount?: number;
+  casesCount?: number;
+  mappingsCount?: number;
   tenantId: string;
 }
 

@@ -32,6 +32,7 @@ model Tenant {
   // Relations
   users                 User[]
   authSessions          AuthSession[]
+  automations           Automation[]
   shops                 Shop[]
   templates             PersonalizationTemplate[]
   emailSettings         EmailSettings[]
@@ -780,6 +781,7 @@ model EmailSettings {
 
 model Automation {
   id          String   @id @default(cuid())
+  tenantId    String   @map("tenant_id")
   name        String // Nazwa reguły np. "Wyślij email po utworzeniu case"
   description String? // Opcjonalny opis
   trigger     String // CASE_CREATED, CASE_STATUS_CHANGED, CASE_SUBMITTED, CASE_TIME_ELAPSED
@@ -787,9 +789,18 @@ model Automation {
   actions     Json // Akcje w formacie JSON (send_email, change_status, add_note, webhook)
   isActive    Boolean  @default(true) @map("is_active")
   priority    Int      @default(0) // Kolejność wykonywania (wyższy = wcześniej)
+  runCount    Int      @default(0) @map("run_count")
+  lastRunAt   DateTime? @map("last_run_at")
+  lastErrorAt DateTime? @map("last_error_at")
+  lastErrorMessage String? @map("last_error_message") @db.Text
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, trigger])
+  @@index([tenantId, isActive])
   @@index([trigger])
   @@index([isActive])
   @@index([priority])

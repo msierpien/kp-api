@@ -145,7 +145,8 @@ export function preserveManagedShopConfig(
 }
 
 function publicShopConfig(configJson: Record<string, any>) {
-  const { bulkStockApiKey: _bulkStockApiKey, ...safeConfig } = configJson;
+  const safeConfig = { ...configJson };
+  delete safeConfig.bulkStockApiKey;
   const adminApi = normalizeShopConfig(safeConfig.adminApi);
 
   return {
@@ -160,6 +161,9 @@ function publicShopConfig(configJson: Record<string, any>) {
 
 const mapShop = (shop: any): ShopItem => {
   const configJson = (shop.configJson as any) || {};
+  const latestSync = Array.isArray(shop.syncLogs) ? shop.syncLogs[0] : null;
+  const isManual = shop.platform === 'MANUAL';
+  const hasError = latestSync?.status === 'FAILED';
   return {
     id: shop.id,
     name: shop.name,
@@ -176,6 +180,19 @@ const mapShop = (shop: any): ShopItem => {
     defaultLeadTimeDays: normalizeLeadTimeDays(configJson.defaultLeadTimeDays),
     bulkStockBatchSize: normalizeBulkStockBatchSize(configJson.bulkStockBatchSize),
     prestashopShopId: resolvePrestaShopShopId(configJson),
+    health: isManual ? 'manual' : hasError ? 'error' : shop.status === 'ACTIVE' ? 'connected' : 'inactive',
+    healthMessage: isManual
+      ? 'Źródło ręczne'
+      : hasError
+        ? latestSync?.errorMessage || 'Błąd ostatniej synchronizacji'
+        : shop.status === 'ACTIVE'
+          ? 'Połączony'
+          : 'Nieaktywny',
+    latestSyncStatus: latestSync?.status ?? null,
+    latestSyncError: latestSync?.errorMessage ?? null,
+    ordersCount: shop._count?.orders ?? 0,
+    casesCount: shop.casesCount ?? 0,
+    mappingsCount: shop._count?.productMappings ?? 0,
     tenantId: shop.tenantId,
   };
 };
@@ -211,10 +228,27 @@ function resolvePrestaShopShopId(configJson: Record<string, any>) {
 export async function listShops(): Promise<ShopItem[]> {
   const shops = await prisma.shop.findMany({
     where: getShopAdminWhere(),
+    include: {
+      syncLogs: { orderBy: { startedAt: 'desc' }, take: 1 },
+      _count: {
+        select: {
+          orders: true,
+          productMappings: true,
+        },
+      },
+    },
     orderBy: { createdAt: 'desc' },
   });
 
-  return shops.map(mapShop);
+  const caseCounts = await Promise.all(
+    shops.map((shop) =>
+      prisma.personalizationCase.count({
+        where: { order: { shopId: shop.id } },
+      }),
+    ),
+  );
+
+  return shops.map((shop, index) => mapShop({ ...shop, casesCount: caseCounts[index] }));
 }
 
 export async function createShop(input: CreateShopInput): Promise<ShopItem> {
@@ -329,6 +363,47 @@ export async function deleteShop(id: string): Promise<void> {
   await prisma.shop.delete({
     where: { id },
   });
+}
+
+export async function getShopDeletePreview(id: string) {
+  const shop = await prisma.shop.findFirst({
+    where: getShopAdminWhere(id),
+    select: {
+      id: true,
+      name: true,
+      platform: true,
+      tenantId: true,
+    },
+  });
+
+  if (!shop) {
+    throw new NotFoundError('Integracja nie istnieje');
+  }
+
+  const [orders, cases, mappings, syncLogs, stockSyncLogs, priceSyncLogs] = await Promise.all([
+    prisma.order.count({ where: { shopId: shop.id } }),
+    prisma.personalizationCase.count({ where: { order: { shopId: shop.id } } }),
+    prisma.shopProductMapping.count({ where: { shopId: shop.id, tenantId: shop.tenantId } }),
+    prisma.syncLog.count({ where: { shopId: shop.id } }),
+    prisma.stockSyncLog.count({ where: { shopId: shop.id, tenantId: shop.tenantId } }),
+    prisma.priceSyncLog.count({ where: { shopId: shop.id, tenantId: shop.tenantId } }),
+  ]);
+
+  return {
+    shop: {
+      id: shop.id,
+      name: shop.name,
+      platform: shop.platform,
+    },
+    counts: {
+      orders,
+      cases,
+      mappings,
+      syncLogs,
+      stockSyncLogs,
+      priceSyncLogs,
+    },
+  };
 }
 
 export async function testShopConnection(id: string) {

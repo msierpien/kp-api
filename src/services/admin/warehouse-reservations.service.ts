@@ -167,13 +167,20 @@ async function reserveQuantityForProduct(
   tx: Tx,
   productId: string,
   requestedQuantity: Prisma.Decimal,
-  _allowNegativeStock: boolean,
+  allowNegativeStock: boolean,
 ): Promise<ReservationAvailability> {
   const product = await tx.warehouseProduct.findUnique({
     where: { id: productId },
     select: { currentStock: true },
   });
   const available = new Prisma.Decimal(product?.currentStock ?? 0);
+  if (allowNegativeStock) {
+    return {
+      quantity: requestedQuantity,
+      source: 'LOCAL_STOCK',
+    };
+  }
+
   if (available.gt(0)) {
     return {
       quantity: Prisma.Decimal.min(available, requestedQuantity),

@@ -254,7 +254,7 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
       logId: log.id,
       warehouseProductId: product.id,
       externalProductId: mapping.externalProductId,
-      quantity: Math.max(0, Math.floor(Number(decision.publishedQuantity))),
+      quantity: publishedQuantityForQueue(decision.publishedQuantity),
       leadTimeDays: publishedLeadTimeDays,
       warehouseAvailableAt: formatWarehouseAvailableAt(decision.warehouseAvailableAt),
       outOfStockBehavior: decision.outOfStockBehavior,
@@ -341,6 +341,11 @@ export async function syncStockForShop(
 
 function normalizeProductIds(productIds?: string[]) {
   return Array.from(new Set((productIds ?? []).map((id) => id.trim()).filter(Boolean)));
+}
+
+export function publishedQuantityForQueue(quantity: Prisma.Decimal) {
+  const normalized = Prisma.Decimal.max(quantity, ZERO);
+  return Number(normalized.toDecimalPlaces(3).toString());
 }
 
 function resolveProductLeadTime(product: ProductForPublication): ProductLeadTimeResolution {

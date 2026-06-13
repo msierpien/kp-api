@@ -1,4 +1,4 @@
-export const API_VERSION = process.env.APP_VERSION || '1.1.3';
+export const API_VERSION = process.env.APP_VERSION || '1.2.0';
 export const API_CONTRACT_VERSION = Number(process.env.API_CONTRACT_VERSION || 2);
 export const MIN_ADMIN_CONTRACT_VERSION = Number(process.env.MIN_ADMIN_CONTRACT_VERSION || 2);
 export const MIN_ADMIN_VERSION = process.env.MIN_ADMIN_VERSION || '0.2.0';

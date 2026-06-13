@@ -10,6 +10,7 @@ import {
   getPrestaShopCategories,
   getShopAdminWhere,
   getShopImportReadiness,
+  getShopDeletePreview,
   listShops,
   testShopConnection,
   updateShop,
@@ -130,6 +131,8 @@ export const shopsUseCases = {
       message: 'Integracja została usunięta',
     };
   },
+
+  deletePreview: (id: string) => getShopDeletePreview(id),
 
   getPrestaShopCategories: (id: string) => getPrestaShopCategories(id),
 

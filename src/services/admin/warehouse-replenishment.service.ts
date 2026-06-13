@@ -334,8 +334,8 @@ async function loadBestOffersForProducts(tenantId: string, productIds: string[],
   const bestByProductId = new Map<string, BestOffer>();
   for (const offer of offers) {
     if (!offer.warehouseProductId || bestByProductId.has(offer.warehouseProductId)) continue;
-    const { warehouseProductId: _warehouseProductId, ...bestOffer } = offer;
-    bestByProductId.set(offer.warehouseProductId, bestOffer);
+    const { warehouseProductId, ...bestOffer } = offer;
+    bestByProductId.set(warehouseProductId, bestOffer);
   }
 
   return bestByProductId;

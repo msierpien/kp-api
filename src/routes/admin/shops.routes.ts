@@ -29,6 +29,13 @@ const shopResponseSchema = {
     apiSecret: { anyOf: [{ type: 'string' }, { type: 'null' }] },
     authType: { type: 'string' },
     config: { type: 'object', additionalProperties: true },
+    health: { type: 'string' },
+    healthMessage: { type: 'string' },
+    latestSyncStatus: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    latestSyncError: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    ordersCount: { type: 'number' },
+    casesCount: { type: 'number' },
+    mappingsCount: { type: 'number' },
   },
   additionalProperties: true,
 };
@@ -387,6 +394,23 @@ export async function shopsRoutes(fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const result = await shopsUseCases.getBulkStockDiagnostics(request.params.id);
+      return reply.send(result);
+    },
+  );
+
+  fastify.get<{ Params: ShopIdParamsInput }>(
+    '/:id/delete-preview',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Podgląd skutków usunięcia integracji',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        response: { 200: { type: 'object', additionalProperties: true } },
+      },
+    },
+    async (request, reply) => {
+      const params = parseShopParams(request.params);
+      const result = await shopsUseCases.deletePreview(params.id);
       return reply.send(result);
     },
   );

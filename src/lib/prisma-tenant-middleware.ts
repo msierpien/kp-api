@@ -5,6 +5,7 @@ import { createLogger } from './logger';
 export const TENANT_MODELS = new Set([
   'User',
   'AuthSession',
+  'Automation',
   'Shop',
   'PersonalizationTemplate',
   'EmailSettings',

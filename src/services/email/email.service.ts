@@ -34,6 +34,13 @@ export interface InvoiceEmailData {
   pdfPath?: string | null;
 }
 
+export interface AutomationEmailData {
+  to: string;
+  subject: string;
+  body: string;
+  shopName: string;
+}
+
 export class EmailService {
   private transporter: Transporter | null = null;
   private config: EmailConfig | null = null;
@@ -92,6 +99,28 @@ export class EmailService {
       if (error instanceof Error && error.stack) {
         console.error('[Email] Stack trace:', error.stack);
       }
+      return false;
+    }
+  }
+
+  async sendAutomationEmail(data: AutomationEmailData): Promise<boolean> {
+    if (!this.transporter || !this.config) {
+      console.warn('[Email] Service not configured, skipping automation email');
+      return false;
+    }
+
+    try {
+      const result = await this.transporter.sendMail({
+        from: this.formatFrom(data.shopName),
+        to: data.to,
+        subject: data.subject,
+        text: data.body,
+        html: data.body.replace(/\n/g, '<br>'),
+      });
+      console.log('[Email] ✅ Successfully sent automation email to:', data.to, 'messageId:', result.messageId);
+      return true;
+    } catch (error) {
+      console.error('[Email] ❌ Failed to send automation email:', error instanceof Error ? error.message : error);
       return false;
     }
   }

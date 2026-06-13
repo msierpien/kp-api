@@ -239,12 +239,14 @@ function resolveRule(product: ProductForPricing, shopId: string, rules: RuleForP
     .sort((a, b) => b.priority - a.priority)[0]?.rule ?? null;
 }
 
-function roundPrice(value: Prisma.Decimal, mode: PricingRoundingMode) {
+export function roundPrice(value: Prisma.Decimal, mode: PricingRoundingMode) {
   const n = Number(value);
   if (!Number.isFinite(n)) return new Prisma.Decimal(0);
   if (mode === 'TENTH') return new Prisma.Decimal((Math.ceil(n * 10) / 10).toFixed(2));
   if (mode === 'CENT') return new Prisma.Decimal((Math.ceil(n * 100) / 100).toFixed(2));
 
+  const cents = Math.round((n - Math.floor(n)) * 100);
+  if (cents === 0 || cents === 99) return new Prisma.Decimal(n.toFixed(2));
   const ceil = Math.ceil(n);
   const candidate = ceil <= 0 ? 0.99 : ceil - 0.01;
   return new Prisma.Decimal((candidate + 0.0000001 < n ? candidate + 1 : candidate).toFixed(2));
@@ -272,6 +274,8 @@ function calculatePrice(product: ProductForPricing, shop: ShopForPricing, rules:
       netPrice: null,
       grossPrice: null,
       marginPercent: Number(marginPercent),
+      configuredMarginPercent: Number(marginPercent),
+      realizedMarginPercent: null,
       profitAmount: null,
       warningCode: 'MISSING_COST' as PricingWarningCode,
       warningMessage: 'Brak kosztu bazowego produktu',
@@ -306,6 +310,8 @@ function calculatePrice(product: ProductForPricing, shop: ShopForPricing, rules:
     netPrice: Number(netPrice),
     grossPrice: Number(grossPrice),
     marginPercent: costBasis && profitAmount ? Number(profitAmount.div(costBasis).mul(100).toFixed(3)) : Number(marginPercent),
+    configuredMarginPercent: Number(marginPercent),
+    realizedMarginPercent: costBasis && profitAmount ? Number(profitAmount.div(costBasis).mul(100).toFixed(3)) : null,
     profitAmount: numberOrNull(profitAmount),
     warningCode,
     warningMessage,
@@ -381,7 +387,7 @@ export async function bulkUpdateProductPrices(input: BulkUpdatePricesInput) {
   const rules = [];
 
   for (const productId of input.productIds.slice(0, MAX_PRICING_PRODUCTS)) {
-    rules.push(await createPricingRule({
+    const data = normalizeRuleInput({
       level: 'PRODUCT',
       warehouseProductId: productId,
       shopId: input.shopIds?.length === 1 ? input.shopIds[0] : null,
@@ -392,7 +398,38 @@ export async function bulkUpdateProductPrices(input: BulkUpdatePricesInput) {
       roundingMode: input.roundingMode,
       syncMode: input.syncMode,
       isActive: true,
-    }));
+    });
+    await assertRuleTargets(tenantId, data);
+
+    const existingRules = await prisma.warehousePricingRule.findMany({
+      where: {
+        tenantId,
+        level: 'PRODUCT',
+        warehouseProductId: data.warehouseProductId,
+        shopId: data.shopId,
+        isActive: true,
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    const primary = existingRules[0];
+    if (primary) {
+      rules.push(await prisma.warehousePricingRule.update({
+        where: { id: primary.id },
+        data,
+      }));
+      if (existingRules.length > 1) {
+        await prisma.warehousePricingRule.updateMany({
+          where: {
+            id: { in: existingRules.slice(1).map((rule) => rule.id) },
+            tenantId,
+          },
+          data: { isActive: false },
+        });
+      }
+    } else {
+      rules.push(await prisma.warehousePricingRule.create({ data: { tenantId, ...data } }));
+    }
   }
 
   const preview = await recalculatePricing({ productIds: input.productIds, shopIds: input.shopIds });

@@ -11,7 +11,7 @@ export interface StockEntry {
 }
 
 // Typy dokumentów które dodają do stanu
-const INCOMING_TYPES = ['PZ', 'PW'];
+const INCOMING_TYPES = ['PZ', 'PW', 'ZW'];
 // Typy dokumentów które odejmują od stanu
 const OUTGOING_TYPES = ['WZ', 'RW'];
 
@@ -28,8 +28,8 @@ export async function getStock(): Promise<StockEntry[]> {
         where: { document: { status: 'CONFIRMED' } },
       },
       warehouseReservations: {
-        where: { status: 'ACTIVE' },
-        select: { quantity: true },
+        where: { status: 'ACTIVE', source: 'LOCAL_STOCK' },
+        select: { quantity: true, source: true },
       },
     },
     orderBy: { name: 'asc' },
@@ -54,8 +54,8 @@ export async function getProductStock(productId: string): Promise<StockEntry | n
         where: { document: { status: 'CONFIRMED' } },
       },
       warehouseReservations: {
-        where: { status: 'ACTIVE' },
-        select: { quantity: true },
+        where: { status: 'ACTIVE', source: 'LOCAL_STOCK' },
+        select: { quantity: true, source: true },
       },
     },
   });
@@ -79,8 +79,8 @@ export async function recalculateStockCache() {
         where: { document: { status: 'CONFIRMED' } },
       },
       warehouseReservations: {
-        where: { status: 'ACTIVE' },
-        select: { quantity: true },
+        where: { status: 'ACTIVE', source: 'LOCAL_STOCK' },
+        select: { quantity: true, source: true },
       },
     },
   });
@@ -98,8 +98,8 @@ export async function recalculateStockCache() {
 }
 
 function calculateQuantity(
-  items: Array<{ quantity: Prisma.Decimal; document: { type: string } }>,
-  reservations: Array<{ quantity: Prisma.Decimal }> = [],
+  items: Array<{ quantity: Prisma.Decimal; systemQuantity?: Prisma.Decimal | null; document: { type: string } }>,
+  reservations: Array<{ quantity: Prisma.Decimal; source?: string }> = [],
 ) {
   let quantity = 0;
   for (const item of items) {
@@ -109,9 +109,12 @@ function calculateQuantity(
       quantity += qty;
     } else if (OUTGOING_TYPES.includes(type)) {
       quantity -= qty;
+    } else if (type === 'INW') {
+      quantity += qty - Number(item.systemQuantity ?? 0);
     }
   }
   for (const reservation of reservations) {
+    if (reservation.source && reservation.source !== 'LOCAL_STOCK') continue;
     quantity -= Number(reservation.quantity);
   }
   return quantity;

@@ -392,6 +392,7 @@ export async function getInventorySnapshot(productId: string) {
       tenantId: product.tenantId,
       warehouseProductId: product.id,
       status: 'ACTIVE',
+      source: 'LOCAL_STOCK',
     },
     orderBy: { createdAt: 'asc' },
     include: {
@@ -406,7 +407,8 @@ export async function getInventorySnapshot(productId: string) {
   );
 
   const currentStock = new Prisma.Decimal(product.currentStock);
-  const availableStock = currentStock.minus(totalReserved);
+  const availableStock = currentStock;
+  const physicalStock = currentStock.plus(totalReserved);
 
   return {
     productId: product.id,
@@ -414,6 +416,7 @@ export async function getInventorySnapshot(productId: string) {
     name: product.name,
     unit: product.unit,
     currentStock: Number(currentStock),
+    physicalStock: Number(physicalStock),
     totalReserved: Number(totalReserved),
     availableStock: Number(availableStock),
     activeReservations: activeReservations.map((reservation) => ({

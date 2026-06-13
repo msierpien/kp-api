@@ -602,8 +602,12 @@ function replaceLocalizedTextField(xml: string, field: string, value: string) {
 function buildAvailabilityMessages(
   options: Pick<ShopStockUpdateOptions, 'availabilityPolicy' | 'leadTimeDays' | 'warehouseAvailableAt'>,
 ) {
-  void options;
-  return { availableNow: '', availableLater: '' };
+  if (options.availabilityPolicy === 'OUT_OF_STOCK') return { availableNow: '', availableLater: '' };
+
+  const message = buildShippingPromiseMessage(options);
+  return options.availabilityPolicy === 'IN_STOCK'
+    ? { availableNow: message, availableLater: '' }
+    : { availableNow: '', availableLater: message };
 }
 
 function normalizeNullableBoolean(value: unknown) {

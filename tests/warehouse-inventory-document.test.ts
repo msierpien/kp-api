@@ -17,6 +17,14 @@ const PRODUCTS_SERVICE = readFileSync(
   join(ROOT, 'src/services/admin/warehouse-products.service.ts'),
   'utf8',
 );
+const STOCK_SERVICE = readFileSync(
+  join(ROOT, 'src/services/admin/warehouse-stock.service.ts'),
+  'utf8',
+);
+const DIAGNOSTICS_SERVICE = readFileSync(
+  join(ROOT, 'src/services/admin/warehouse-diagnostics.service.ts'),
+  'utf8',
+);
 const DOCS_ROUTES = readFileSync(
   join(ROOT, 'src/routes/admin/warehouse/documents.routes.ts'),
   'utf8',
@@ -76,11 +84,16 @@ describe('warehouse inventory document (INW): logika serwisu', () => {
     );
   });
 
-  it('calculateProductStock uwzględnia INW jako wkład delta', () => {
-    assert.match(
-      DOCS_SERVICE,
-      /item\.document\.type === 'INW'[\s\S]{0,200}quantity - systemQuantity/,
-    );
+  it('recalculateStockCache uwzględnia ZW, INW i tylko lokalne aktywne rezerwacje', () => {
+    assert.match(STOCK_SERVICE, /const INCOMING_TYPES = \['PZ', 'PW', 'ZW'\]/);
+    assert.match(STOCK_SERVICE, /type === 'INW'[\s\S]{0,160}qty - Number\(item\.systemQuantity \?\? 0\)/);
+    assert.match(STOCK_SERVICE, /where: \{ status: 'ACTIVE', source: 'LOCAL_STOCK' \}/);
+  });
+
+  it('diagnostyka rozbieżności liczy ZW i INW tak samo jak cache stanów', () => {
+    assert.match(DIAGNOSTICS_SERVICE, /type DocumentType = 'PZ' \| 'PW' \| 'WZ' \| 'ZW' \| 'RW' \| 'INW'/);
+    assert.match(DIAGNOSTICS_SERVICE, /\['PZ', 'PW', 'ZW'\]\.includes\(type\)/);
+    assert.match(DIAGNOSTICS_SERVICE, /item\.document\.type === 'INW'[\s\S]{0,120}Number\(item\.quantity\) - Number\(item\.systemQuantity \?\? 0\)/);
   });
 
   it('assertCanConfirmWithoutNegativeStock blokuje ujemny stan policzony w INW', () => {

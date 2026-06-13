@@ -5,7 +5,7 @@ import { addStockSyncBatchJobs, addStockSyncJob, getStockSyncQueue, type StockSy
 import { getInventoryPublicationDecision } from '../stock/stock-sync.service';
 
 type StockSyncStatus = 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'FAILED';
-type DocumentType = 'PZ' | 'PW' | 'WZ' | 'RW';
+type DocumentType = 'PZ' | 'PW' | 'WZ' | 'ZW' | 'RW' | 'INW';
 
 export interface StockSyncLogsQuery {
   page?: number;
@@ -311,15 +311,13 @@ export async function getProductMovements(productId: string, query: ProductMovem
   ]);
 
   const data = items.map((item) => {
-    const quantity = Number(item.quantity);
-    const direction = getDocumentDirection(item.document.type);
-    const stockDelta = item.document.status === 'CONFIRMED' ? quantity * direction : 0;
+    const stockDelta = item.document.status === 'CONFIRMED' ? getDocumentStockDelta(item) : 0;
 
     return {
       id: item.id,
       document: item.document,
       barcode: item.barcode,
-      quantity,
+      quantity: Number(item.quantity),
       stockDelta,
       unitPrice: item.unitPrice,
       scannedEan: item.scannedEan,
@@ -519,8 +517,8 @@ export async function getStockDiscrepancies(query: StockDiscrepanciesQuery = {})
         include: { document: { select: { type: true } } },
       },
       warehouseReservations: {
-        where: { status: 'ACTIVE' },
-        select: { quantity: true },
+        where: { status: 'ACTIVE', source: 'LOCAL_STOCK' },
+        select: { quantity: true, source: true },
       },
     },
     orderBy: { name: 'asc' },
@@ -529,7 +527,7 @@ export async function getStockDiscrepancies(query: StockDiscrepanciesQuery = {})
   const data = products
     .map((product) => {
       const calculatedStock = product.items.reduce((stock, item) => {
-        return stock + Number(item.quantity) * getDocumentDirection(item.document.type);
+        return stock + getDocumentStockDelta(item);
       }, 0);
       const activeReservedQuantity = product.warehouseReservations.reduce((sum, reservation) => {
         return sum + Number(reservation.quantity);
@@ -579,7 +577,15 @@ function normalizeFailedSinceDays(value?: number) {
 }
 
 function getDocumentDirection(type: string) {
-  if (['PZ', 'PW'].includes(type)) return 1;
+  if (['PZ', 'PW', 'ZW'].includes(type)) return 1;
   if (['WZ', 'RW'].includes(type)) return -1;
   return 0;
+}
+
+function getDocumentStockDelta(item: { quantity: Prisma.Decimal; systemQuantity?: Prisma.Decimal | null; document: { type: string } }) {
+  if (item.document.type === 'INW') {
+    return Number(item.quantity) - Number(item.systemQuantity ?? 0);
+  }
+
+  return Number(item.quantity) * getDocumentDirection(item.document.type);
 }

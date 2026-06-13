@@ -18,7 +18,7 @@ API i panel admina maja osobne wersje aplikacji oraz wspolny numer kontraktu API
 
 Aktualnie:
 
-- API: `1.1.2`
+- API: `1.1.3`
 - wymagany minimalny admin: `0.2.0`
 - kontrakt API/admin: `2`
 - profil zgodnosci: `kp-admin-api`
@@ -45,7 +45,7 @@ curl -fsS https://api.kreatywne-papierki.pl/version
 curl -fsS https://api.kreatywne-papierki.pl/health
 ```
 
-Panel powinien pokazac w sidebarze status `Zgodne`, np. `Admin v0.2.2 · API v1.1.2 · kontrakt 2`.
+Panel powinien pokazac w sidebarze status `Zgodne`, np. `Admin v0.2.3 · API v1.1.3 · kontrakt 2`.
 
 ## Start lokalny
 

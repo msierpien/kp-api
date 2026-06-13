@@ -35,6 +35,8 @@ export async function registerWarehouseReplenishmentRoutes(fastify: FastifyInsta
           source: sourceSchema,
           providerId: { type: 'string' },
           lowStockThreshold: { type: 'number', default: 1 },
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
         },
       },
     },
@@ -63,6 +65,8 @@ export async function registerWarehouseReplenishmentRoutes(fastify: FastifyInsta
         properties: {
           source: sourceSchema,
           lowStockThreshold: { type: 'number', default: 1 },
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
           format: { type: 'string', enum: ['ean', 'symbol', 'full'], default: 'full' },
           separator: separatorSchema,
           includeHeader: { type: 'boolean', default: true },
@@ -105,6 +109,8 @@ export async function registerWarehouseReplenishmentRoutes(fastify: FastifyInsta
         properties: {
           source: sourceSchema,
           lowStockThreshold: { type: 'number', default: 1 },
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
           items: {
             type: 'array',
             items: {

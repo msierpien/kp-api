@@ -11,6 +11,8 @@ export interface ReplenishmentQuery {
   source?: ReplenishmentSource;
   providerId?: string;
   lowStockThreshold?: number;
+  page?: number;
+  limit?: number;
 }
 
 export interface ReplenishmentQuantityOverride {
@@ -76,6 +78,13 @@ export interface ReplenishmentUncoveredItem {
 export interface ReplenishmentResponse {
   providers: ReplenishmentProviderGroup[];
   uncovered: ReplenishmentUncoveredItem[];
+  pagination: {
+    source: 'low';
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  } | null;
   summary: {
     items: number;
     orderItems: number;
@@ -159,6 +168,20 @@ function normalizeLowStockThreshold(value?: number) {
   const threshold = Number(value);
   if (!Number.isFinite(threshold) || threshold < 0) throw new Error('lowStockThreshold musi być liczbą nieujemną');
   return threshold;
+}
+
+function normalizePage(value?: number) {
+  if (value === undefined) return 1;
+  const page = Number(value);
+  if (!Number.isInteger(page) || page < 1) throw new Error('page musi być liczbą całkowitą większą od 0');
+  return page;
+}
+
+function normalizeLimit(value?: number) {
+  if (value === undefined) return 50;
+  const limit = Number(value);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new Error('limit musi być liczbą całkowitą od 1 do 200');
+  return limit;
 }
 
 function normalizeCsvFormat(format?: ReplenishmentCsvFormat) {
@@ -387,17 +410,26 @@ async function getLowStockReplenishment(
   tenantId: string,
   providers: Map<string, ReplenishmentProviderAccumulator>,
   lowStockThreshold: number,
+  page: number,
+  limit: number,
   providerId?: string,
 ) {
-  const products = await prisma.warehouseProduct.findMany({
-    where: {
-      tenantId,
-      isActive: true,
-      currentStock: { lt: lowStockThreshold },
-    },
-    select: { id: true, sku: true, name: true, unit: true, currentStock: true },
-    orderBy: { name: 'asc' },
-  });
+  const where: Prisma.WarehouseProductWhereInput = {
+    tenantId,
+    isActive: true,
+    currentStock: { lt: lowStockThreshold },
+  };
+
+  const [total, products] = await prisma.$transaction([
+    prisma.warehouseProduct.count({ where }),
+    prisma.warehouseProduct.findMany({
+      where,
+      skip: (page - 1) * limit,
+      take: limit,
+      select: { id: true, sku: true, name: true, unit: true, currentStock: true },
+      orderBy: [{ currentStock: 'asc' }, { name: 'asc' }],
+    }),
+  ]);
 
   const offersByProductId = await loadBestOffersForProducts(
     tenantId,
@@ -419,6 +451,8 @@ async function getLowStockReplenishment(
       { currentStock, lowStockThreshold },
     );
   }
+
+  return total;
 }
 
 async function getUncoveredFromBlockedWz(tenantId: string) {
@@ -509,15 +543,18 @@ export async function getReplenishment(query: ReplenishmentQuery = {}): Promise<
   const tenantId = requireTenantId();
   const source = normalizeSource(query.source);
   const lowStockThreshold = normalizeLowStockThreshold(query.lowStockThreshold);
+  const lowStockPage = normalizePage(query.page);
+  const lowStockLimit = normalizeLimit(query.limit);
   const providers = new Map<string, ReplenishmentProviderAccumulator>();
   const uncovered = source === 'low' || query.providerId ? [] : await getUncoveredFromBlockedWz(tenantId);
+  let lowStockTotal = 0;
 
   if (source === 'order' || source === 'all') {
     await getOrderReplenishment(tenantId, providers, uncovered, query.providerId);
   }
 
   if (source === 'low' || source === 'all') {
-    await getLowStockReplenishment(tenantId, providers, lowStockThreshold, query.providerId);
+    lowStockTotal = await getLowStockReplenishment(tenantId, providers, lowStockThreshold, lowStockPage, lowStockLimit, query.providerId);
   }
 
   const providerGroups = finalizeProviders(providers);
@@ -531,10 +568,21 @@ export async function getReplenishment(query: ReplenishmentQuery = {}): Promise<
   return {
     providers: providerGroups,
     uncovered,
+    pagination: source === 'low' || source === 'all'
+      ? {
+          source: 'low',
+          page: lowStockPage,
+          limit: lowStockLimit,
+          total: lowStockTotal,
+          totalPages: Math.max(1, Math.ceil(lowStockTotal / lowStockLimit)),
+        }
+      : null,
     summary: {
       items: allItems.length,
       orderItems: allItems.filter((item) => item.reasons.includes('ORDER')).length,
-      lowStockItems: allItems.filter((item) => item.reasons.includes('LOW_STOCK')).length,
+      lowStockItems: source === 'low' || source === 'all'
+        ? lowStockTotal
+        : allItems.filter((item) => item.reasons.includes('LOW_STOCK')).length,
       providers: providerGroups.length,
       quantity: roundQuantity(allItems.reduce((sum, item) => sum + item.quantity, 0)),
       value: roundMoney(providerGroups.reduce((sum, provider) => sum + provider.totalValue, 0)),

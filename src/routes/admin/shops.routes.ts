@@ -78,6 +78,35 @@ const bulkStockDiagnosticsResponseSchema = {
   },
 };
 
+const moduleHealthResponseSchema = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    checkedAt: { type: 'string' },
+    checks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          key: { type: 'string' },
+          label: { type: 'string' },
+          configured: { type: 'boolean' },
+          ok: { type: 'boolean' },
+          status: { type: 'string' },
+          message: { type: 'string' },
+          latencyMs: { type: 'number' },
+          url: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+          httpStatus: { type: 'number' },
+          capabilities: {},
+          details: { type: 'object', additionalProperties: true },
+        },
+        additionalProperties: true,
+      },
+    },
+  },
+  additionalProperties: true,
+};
+
 const webhookSettingsResponseSchema = {
   type: 'object',
   properties: {
@@ -394,6 +423,24 @@ export async function shopsRoutes(fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const result = await shopsUseCases.getBulkStockDiagnostics(request.params.id);
+      return reply.send(result);
+    },
+  );
+
+  // GET /admin/shops/:id/module-health
+  fastify.get<{ Params: ShopIdParamsInput }>(
+    '/:id/module-health',
+    {
+      schema: {
+        tags: ['shops'],
+        summary: 'Kontrola modułów integracji PrestaShop',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        response: { 200: moduleHealthResponseSchema },
+      },
+    },
+    async (request, reply) => {
+      const params = parseShopParams(request.params);
+      const result = await shopsUseCases.getModuleHealth(params.id);
       return reply.send(result);
     },
   );

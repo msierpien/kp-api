@@ -23,6 +23,7 @@ import {
   updateShopSyncInterval,
 } from '../../services/scheduler/scheduler.service';
 import {
+  buildAdminConnectorControllerUrl,
   buildBulkStockUrl,
   DEFAULT_BULK_STOCK_BATCH_SIZE,
   MAX_BULK_STOCK_BATCH_SIZE,
@@ -55,11 +56,120 @@ export type ManualSyncInput = {
   limit?: number;
 };
 
+type ModuleDiagnostic = {
+  key: string;
+  label: string;
+  configured: boolean;
+  ok: boolean;
+  status: 'ok' | 'warning' | 'error' | 'missing_config';
+  message: string;
+  latencyMs?: number;
+  url?: string | null;
+  httpStatus?: number;
+  capabilities?: unknown;
+  details?: Record<string, unknown>;
+};
+
 function normalizeOptionalString(value: unknown) {
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed || null;
+}
+
+function secretFromConfig(value: unknown) {
+  const secret = normalizeOptionalString(value);
+  return secret ? decrypt(secret) : null;
+}
+
+function moduleControllerUrl(moduleUrl: string | null, controller: string) {
+  if (!moduleUrl) return null;
+  const trimmed = moduleUrl.replace(/\/+$/, '');
+
+  if (!trimmed.includes('?')) {
+    return `${trimmed}/${encodeURIComponent(controller)}`;
+  }
+
+  if (trimmed.includes('controller=')) {
+    return trimmed.replace(/([?&]controller=)[^&]*/, `$1${encodeURIComponent(controller)}`);
+  }
+
+  return `${trimmed}&controller=${encodeURIComponent(controller)}`;
+}
+
+async function checkJsonEndpoint(input: {
+  key: string;
+  label: string;
+  configured: boolean;
+  url: string | null;
+  apiKey: string | null;
+  missingMessage: string;
+}): Promise<ModuleDiagnostic> {
+  if (!input.configured || !input.url || !input.apiKey) {
+    return {
+      key: input.key,
+      label: input.label,
+      configured: false,
+      ok: false,
+      status: 'missing_config',
+      message: input.missingMessage,
+      url: input.url,
+    };
+  }
+
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    const response = await fetch(input.url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'X-Api-Key': input.apiKey,
+      },
+      signal: controller.signal,
+    });
+    const text = await response.text().catch(() => '');
+    let json: Record<string, unknown> | null = null;
+    try {
+      json = text ? JSON.parse(text) as Record<string, unknown> : null;
+    } catch {
+      json = null;
+    }
+
+    const errors = Array.isArray(json?.errors) ? json.errors.filter((item) => typeof item === 'string') : [];
+    const ok = response.ok && Boolean(json) && json?.success !== false;
+    return {
+      key: input.key,
+      label: input.label,
+      configured: true,
+      ok,
+      status: ok ? 'ok' : 'error',
+      message: ok
+        ? 'Endpoint modułu odpowiada poprawnym JSON.'
+        : errors[0] || `Endpoint nie zwrócił poprawnej odpowiedzi JSON modułu. HTTP ${response.status}.`,
+      latencyMs: Date.now() - startedAt,
+      url: input.url,
+      httpStatus: response.status,
+      capabilities: json?.data,
+      details: ok ? undefined : { bodyPreview: text.slice(0, 400) },
+    };
+  } catch (error) {
+    return {
+      key: input.key,
+      label: input.label,
+      configured: true,
+      ok: false,
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Nie udało się połączyć z endpointem modułu.',
+      latencyMs: Date.now() - startedAt,
+      url: input.url,
+      httpStatus: 0,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export function normalizeBulkStockUrl(value: unknown) {
@@ -263,6 +373,109 @@ export const shopsUseCases = {
     } finally {
       clearTimeout(timeout);
     }
+  },
+
+  getModuleHealth: async (id: string) => {
+    const shop = await prisma.shop.findFirst({
+      where: getShopAdminWhere(id),
+      select: { id: true, platform: true, baseUrl: true, configJson: true },
+    });
+    if (!shop) {
+      throw new NotFoundError('Sklep nie znaleziony');
+    }
+
+    const config = (shop.configJson && typeof shop.configJson === 'object' && !Array.isArray(shop.configJson))
+      ? shop.configJson as Record<string, unknown>
+      : {};
+
+    if (shop.platform !== 'PRESTASHOP') {
+      return {
+        ok: false,
+        checkedAt: new Date().toISOString(),
+        checks: [{
+          key: 'platform',
+          label: 'Platforma',
+          configured: false,
+          ok: false,
+          status: 'warning',
+          message: 'Kontrola modułów jest dostępna dla integracji PrestaShop.',
+        }],
+      };
+    }
+
+    const baseUrl = shop.baseUrl.replace(/\/+$/, '').replace(/\/api$/, '');
+    const adminConnectorUrl = normalizeOptionalString(config.adminConnectorUrl);
+    const adminConnectorApiKey = secretFromConfig(config.adminConnectorApiKey);
+    const productContentApiKey = secretFromConfig(config.productContentApiKey ?? config.contentModuleApiKey);
+    const bulkStockApiKey = secretFromConfig(config.bulkStockApiKey);
+
+    const adminConnectorCheck = await checkJsonEndpoint({
+      key: 'admin_connector',
+      label: 'KP Admin Connector',
+      configured: Boolean(adminConnectorApiKey),
+      url: buildAdminConnectorControllerUrl(adminConnectorUrl, 'capabilities')
+        ?? `${baseUrl}/index.php?fc=module&module=kp_adminconnector&controller=capabilities`,
+      apiKey: adminConnectorApiKey,
+      missingMessage: 'Nie skonfigurowano wspólnego modułu KP Admin Connector.',
+    });
+
+    const productContentUrl = moduleControllerUrl(
+      normalizeOptionalString(config.productContentUrl ?? config.contentModuleUrl),
+      'capabilities',
+    ) ?? `${baseUrl}/index.php?fc=module&module=kp_productcontent&controller=capabilities`;
+    const productContentCheck = await checkJsonEndpoint({
+      key: 'product_content',
+      label: 'Karta produktu',
+      configured: Boolean(productContentApiKey),
+      url: productContentUrl,
+      apiKey: productContentApiKey,
+      missingMessage: 'Brak klucza dla modułu treści produktu.',
+    });
+
+    const bulkDiagnostics = await shopsUseCases.getBulkStockDiagnostics(id);
+    const bulkStockCheck: ModuleDiagnostic = {
+      key: 'bulk_stock',
+      label: 'Stany i dostępność',
+      configured: Boolean(bulkStockApiKey),
+      ok: Boolean(bulkStockApiKey && (bulkDiagnostics.expectedGet405 || bulkDiagnostics.ok)),
+      status: !bulkStockApiKey ? 'missing_config' : bulkDiagnostics.expectedGet405 || bulkDiagnostics.ok ? 'ok' : 'error',
+      message: bulkStockApiKey ? bulkDiagnostics.message : 'Brak klucza dla modułu stanów.',
+      latencyMs: bulkDiagnostics.latencyMs,
+      url: bulkDiagnostics.url,
+      httpStatus: bulkDiagnostics.status,
+      details: {
+        expectedGet405: bulkDiagnostics.expectedGet405,
+        contentType: bulkDiagnostics.contentType,
+      },
+    };
+
+    const webhook = await shopWebhookService.getShopWebhookSettings(id);
+    const webhookConfigured = Boolean(webhook.enabled && webhook.webhookUrl && webhook.secret);
+    const webhookCheck: ModuleDiagnostic = {
+      key: 'order_webhook',
+      label: 'Webhook zamówień',
+      configured: webhookConfigured,
+      ok: webhookConfigured,
+      status: webhookConfigured ? 'ok' : webhook.enabled ? 'error' : 'warning',
+      message: webhookConfigured
+        ? 'Webhook jest skonfigurowany po stronie API. Potwierdzenie hooków sklepu zapewnia KP Admin Connector.'
+        : webhook.enabled
+          ? 'Webhook jest włączony, ale brakuje URL lub sekretu.'
+          : 'Webhook jest wyłączony.',
+      url: webhook.webhookUrl,
+      details: {
+        enabled: webhook.enabled,
+        hasSecret: Boolean(webhook.secret),
+        eventTypes: webhook.eventTypes,
+      },
+    };
+
+    const checks = [adminConnectorCheck, productContentCheck, bulkStockCheck, webhookCheck];
+    return {
+      ok: checks.every((check) => check.status === 'ok' || check.status === 'warning'),
+      checkedAt: new Date().toISOString(),
+      checks,
+    };
   },
 
   getWebhookSettings: (id: string) => translateShopErrors(() => shopWebhookService.getShopWebhookSettings(id)),

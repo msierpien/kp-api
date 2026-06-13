@@ -147,6 +147,8 @@ export interface ShopItem {
   config: any;
   hasBulkStock?: boolean;
   hasProductContent?: boolean;
+  hasAdminConnector?: boolean;
+  adminConnectorUrl?: string | null;
   productContentUrl?: string | null;
   bulkStockUrl?: string | null;
   defaultLeadTimeDays?: number | null;

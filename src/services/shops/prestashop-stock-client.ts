@@ -488,6 +488,30 @@ export function buildBulkStockSnapshotUrl(baseUrl: string, productId: number) {
   return `${baseUrl}/index.php?fc=module&module=kp_bulkstock&controller=snapshot&productId=${encodeURIComponent(String(productId))}`;
 }
 
+export function buildAdminConnectorControllerUrl(
+  moduleUrl: string | null,
+  controller: string,
+  params: Record<string, string | number> = {},
+) {
+  if (!moduleUrl) return null;
+
+  const trimmed = moduleUrl.replace(/\/+$/, '');
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => query.set(key, String(value)));
+  const suffix = query.toString();
+
+  if (trimmed.includes('?')) {
+    const separator = trimmed.includes('controller=') ? '&' : '&';
+    if (trimmed.includes('controller=')) {
+      const replaced = trimmed.replace(/([?&]controller=)[^&]*/, `$1${encodeURIComponent(controller)}`);
+      return suffix ? `${replaced}&${suffix}` : replaced;
+    }
+    return `${trimmed}${separator}controller=${encodeURIComponent(controller)}${suffix ? `&${suffix}` : ''}`;
+  }
+
+  return `${trimmed}/${encodeURIComponent(controller)}${suffix ? `?${suffix}` : ''}`;
+}
+
 export function buildStockAvailableXml(input: {
   id: string;
   idProduct: string;

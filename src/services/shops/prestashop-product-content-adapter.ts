@@ -3,6 +3,8 @@ import type { Shop } from '@prisma/client';
 import { decrypt } from '../../lib/encryption';
 
 type ProductContentModuleConfig = {
+  adminConnectorUrl?: string | null;
+  adminConnectorApiKey?: string | null;
   productContentUrl?: string | null;
   contentModuleUrl?: string | null;
   productContentApiKey?: string | null;
@@ -29,7 +31,7 @@ export class PrestaShopProductContentAdapter {
   constructor(private readonly shop: Shop) {
     const config = this.config();
     this.baseUrl = shop.baseUrl.replace(/\/+$/, '');
-    this.apiKey = String(config.productContentApiKey ?? config.contentModuleApiKey ?? '').trim();
+    this.apiKey = configSecret(config.productContentApiKey ?? config.contentModuleApiKey);
     this.explicitModuleUrl = normalizeUrl(config.productContentUrl ?? config.contentModuleUrl);
   }
 
@@ -122,9 +124,9 @@ export class PrestaShopProductContentAdapter {
   private endpoint(controller: string) {
     const [name, qs] = controller.split('&', 2);
     const base = this.explicitModuleUrl
-      ? `${this.explicitModuleUrl.replace(/\/+$/, '')}/${encodeURIComponent(name)}`
+      ? buildModuleControllerUrl(this.explicitModuleUrl, name)
       : `${this.baseUrl}/index.php?fc=module&module=kp_productcontent&controller=${encodeURIComponent(name)}`;
-    if (this.explicitModuleUrl) return qs ? `${base}?${qs}` : base;
+    if (this.explicitModuleUrl) return qs ? `${base}${base.includes('?') ? '&' : '?'}${qs}` : base;
     return qs ? `${base}&${qs}` : base;
   }
 
@@ -137,6 +139,25 @@ function normalizeUrl(value: unknown) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function configSecret(value: unknown) {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  return trimmed ? decrypt(trimmed) : '';
+}
+
+function buildModuleControllerUrl(moduleUrl: string, controller: string) {
+  const trimmed = moduleUrl.replace(/\/+$/, '');
+  if (!trimmed.includes('?')) {
+    return `${trimmed}/${encodeURIComponent(controller)}`;
+  }
+
+  if (trimmed.includes('controller=')) {
+    return trimmed.replace(/([?&]controller=)[^&]*/, `$1${encodeURIComponent(controller)}`);
+  }
+
+  return `${trimmed}&controller=${encodeURIComponent(controller)}`;
 }
 
 export function buildPrestaShopProductContentAdapter(shop: Shop) {

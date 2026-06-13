@@ -51,6 +51,9 @@ export async function assertShopAdminAccess(id: string) {
 }
 
 const MANAGED_SHOP_CONFIG_KEYS = [
+  'adminConnectorUrl',
+  'adminConnectorApiKey',
+  'adminConnectorEnabled',
   'bulkStockUrl',
   'bulkStockApiKey',
   'defaultLeadTimeDays',
@@ -58,6 +61,12 @@ const MANAGED_SHOP_CONFIG_KEYS = [
   'productContentUrl',
   'productContentApiKey',
   'productContentEnabled',
+] as const;
+
+const MANAGED_SHOP_SECRET_KEYS = [
+  'adminConnectorApiKey',
+  'bulkStockApiKey',
+  'productContentApiKey',
 ] as const;
 
 const DEFAULT_ORDER_SYNC_CONFIG = {
@@ -103,11 +112,23 @@ function normalizeOrderSyncForStorage(orderSyncInput: unknown) {
   return orderSync;
 }
 
-function normalizeShopConfigForStorage(config: unknown) {
+function normalizeShopConfigForStorage(config: unknown, options: { encryptManagedSecrets?: boolean } = {}) {
   const configJson = normalizeShopConfig(config);
   const orderSync = normalizeOrderSyncForStorage(configJson.orderSync);
   if (Object.keys(orderSync).length > 0) {
     configJson.orderSync = orderSync;
+  }
+
+  if (options.encryptManagedSecrets !== false) {
+    for (const key of MANAGED_SHOP_SECRET_KEYS) {
+      if (!hasOwn(configJson, key)) continue;
+      if (typeof configJson[key] !== 'string') {
+        configJson[key] = null;
+        continue;
+      }
+      const secret = configJson[key].trim();
+      configJson[key] = secret ? encrypt(decrypt(secret)) : null;
+    }
   }
 
   return configJson;
@@ -128,10 +149,14 @@ export function preserveManagedShopConfig(
 ): Record<string, any> {
   const next = normalizeShopConfig(inputConfig);
   const existing = normalizeShopConfig(existingConfig);
+  const preservedSecrets: Partial<Record<typeof MANAGED_SHOP_SECRET_KEYS[number], unknown>> = {};
 
   for (const key of MANAGED_SHOP_CONFIG_KEYS) {
     if (!(key in next) && key in existing) {
       next[key] = existing[key];
+      if ((MANAGED_SHOP_SECRET_KEYS as readonly string[]).includes(key)) {
+        preservedSecrets[key as typeof MANAGED_SHOP_SECRET_KEYS[number]] = existing[key];
+      }
     }
   }
 
@@ -144,13 +169,21 @@ export function preserveManagedShopConfig(
     next.orderSync = nextOrderSync;
   }
 
-  return normalizeShopConfigForStorage(next);
+  const normalized = normalizeShopConfigForStorage(next);
+  for (const key of MANAGED_SHOP_SECRET_KEYS) {
+    if (hasOwn(preservedSecrets, key)) {
+      normalized[key] = preservedSecrets[key];
+    }
+  }
+
+  return normalized;
 }
 
 function publicShopConfig(configJson: Record<string, any>) {
   const safeConfig = { ...configJson };
   delete safeConfig.bulkStockApiKey;
   delete safeConfig.productContentApiKey;
+  delete safeConfig.adminConnectorApiKey;
   const adminApi = normalizeShopConfig(safeConfig.adminApi);
 
   return {
@@ -181,6 +214,8 @@ const mapShop = (shop: any): ShopItem => {
     config: publicShopConfig(configJson),
     hasBulkStock: Boolean(configJson.bulkStockApiKey),
     hasProductContent: Boolean(configJson.productContentApiKey),
+    hasAdminConnector: Boolean(configJson.adminConnectorApiKey),
+    adminConnectorUrl: typeof configJson.adminConnectorUrl === 'string' ? configJson.adminConnectorUrl : null,
     productContentUrl: typeof configJson.productContentUrl === 'string' ? configJson.productContentUrl : null,
     bulkStockUrl: typeof configJson.bulkStockUrl === 'string' ? configJson.bulkStockUrl : null,
     defaultLeadTimeDays: normalizeLeadTimeDays(configJson.defaultLeadTimeDays),
@@ -342,7 +377,7 @@ export async function updateShopOrderSyncConfig(
       configJson: normalizeShopConfigForStorage({
         ...configJson,
         orderSync,
-      }),
+      }, { encryptManagedSecrets: false }),
     },
   });
 

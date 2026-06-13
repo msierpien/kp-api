@@ -4,8 +4,8 @@ Backend Fastify dla systemu obslugi sklepow, magazynu, zamowien i personalizacji
 
 ## Srodowiska
 
-- Produkcyjne API: `https://api.kreatywneparty.pl`
-- Swagger: `https://api.kreatywneparty.pl/docs`
+- Produkcyjne API: `https://api.kreatywne-papierki.pl`
+- Swagger: `https://api.kreatywne-papierki.pl/docs`
 - Lokalne API: `http://localhost:3001`
 - Sklep PrestaShop Kreatywnych Papierkow: `https://kp.kreatywneparty.pl`
 - PrestaShop Webservice: `https://kp.kreatywneparty.pl/api`

@@ -8,13 +8,13 @@
 
 ## 0. Adresy środowisk i integracji
 
-- **Globalne API backendu Fastify:** `https://api.kreatywneparty.pl`
-- **Swagger produkcyjnego API:** `https://api.kreatywneparty.pl/docs`
+- **Globalne API backendu Fastify:** `https://api.kreatywne-papierki.pl`
+- **Swagger produkcyjnego API:** `https://api.kreatywne-papierki.pl/docs`
 - **Lokalne API developerskie:** `http://localhost:3001`
 - **Produkcyjny sklep PrestaShop:** `https://kp.kreatywneparty.pl`
 - **PrestaShop Webservice:** `https://kp.kreatywneparty.pl/api`
 
-W panelu admina i portalu klienta `NEXT_PUBLIC_API_URL` ma wskazywać na backend Fastify. Dla produkcji jest to `https://api.kreatywneparty.pl`. Adres `https://kp.kreatywneparty.pl` jest adresem sklepu PrestaShop i trafia do konfiguracji integracji sklepu, razem z ręcznie podanym kluczem Webservice.
+W panelu admina i portalu klienta `NEXT_PUBLIC_API_URL` ma wskazywać na backend Fastify. Dla produkcji jest to `https://api.kreatywne-papierki.pl`. Adres `https://kp.kreatywneparty.pl` jest adresem sklepu PrestaShop i trafia do konfiguracji integracji sklepu, razem z ręcznie podanym kluczem Webservice.
 
 ---
 

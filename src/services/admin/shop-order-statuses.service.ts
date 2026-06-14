@@ -62,6 +62,17 @@ export async function syncShopOrderStatuses(shopId: string) {
       shipped: status.shipped,
       delivery: status.delivery,
     });
+    const existingStatus = await prisma.shopOrderStatus.findUnique({
+      where: {
+        shopId_externalStatusId: {
+          shopId: shop.id,
+          externalStatusId: status.id,
+        },
+      },
+      select: {
+        operationalStatus: true,
+      },
+    });
 
     await prisma.shopOrderStatus.upsert({
       where: {
@@ -75,6 +86,7 @@ export async function syncShopOrderStatuses(shopId: string) {
         color: status.color ?? null,
         isPaid: status.paid,
         isCancelled: status.deleted,
+        ...(existingStatus?.operationalStatus ? {} : { operationalStatus }),
         sortOrder: Number(status.id) || 0,
         payloadJson: status.payload as Prisma.InputJsonValue,
         lastSyncedAt: now,

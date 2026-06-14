@@ -40,6 +40,8 @@ type Logger = {
 
 export type UpdateOrderSyncConfigInput = {
   fromDate?: string | null;
+  orderStatus?: 'ALL' | 'PAID' | 'CUSTOM';
+  currentStateIds?: Array<string | number> | string | null;
 };
 
 export type UpdateBulkStockConfigInput = {

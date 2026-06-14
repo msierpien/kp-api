@@ -1,9 +1,12 @@
 import { z } from 'zod';
+import { ORDER_OPERATIONAL_STATUSES } from '../lib/order-statuses';
 
 export const paginationSchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
+
+const orderOperationalStatusSchema = z.enum(ORDER_OPERATIONAL_STATUSES);
 
 export const casesQuerySchema = paginationSchema.extend({
   status: z.enum(['NEW', 'WAITING_FOR_CUSTOMER', 'SUBMITTED', 'READY_FOR_PRINT', 'ARCHIVED', '']).optional(),
@@ -205,6 +208,7 @@ export const ifirmaSettingsSchema = z.object({
 export const shopOrderStatusMappingSchema = z.object({
   statuses: z.array(z.object({
     externalStatusId: z.string().min(1),
+    operationalStatus: orderOperationalStatusSchema.optional().nullable(),
     isPaid: z.boolean().optional(),
     isCancelled: z.boolean().optional(),
     isReadyForInvoice: z.boolean().optional(),
@@ -213,8 +217,33 @@ export const shopOrderStatusMappingSchema = z.object({
 });
 
 export const updateOrderStatusSchema = z.object({
-  operationalStatus: z.string().min(1).optional(),
+  operationalStatus: orderOperationalStatusSchema.optional(),
   externalStatusId: z.string().min(1).optional(),
+});
+
+export const ordersListQuerySchema = paginationSchema.extend({
+  q: z.string().trim().optional(),
+  statusGroup: z.enum(['active', 'cancelled', 'returned', 'all', '']).optional(),
+  operationalStatus: orderOperationalStatusSchema.optional(),
+  shopId: z.string().trim().optional(),
+  payment: z.enum(['all', 'paid', 'unpaid', '']).default('all'),
+  invoice: z.enum(['all', 'issued', 'missing', '']).default('all'),
+  personalization: z.enum(['all', 'required', 'waiting', 'ready', '']).default('all'),
+  datePreset: z.enum(['all', '7d', '30d', '90d', '']).default('all'),
+  dateFrom: z.string().trim().optional(),
+  dateTo: z.string().trim().optional(),
+  shipBy: z.enum(['overdue', 'today', 'tomorrow', 'future', 'shipped', '']).optional(),
+  sortBy: z.enum(['createdAtShop', 'totalPaid', 'maxShippingDate', 'orderReference']).default('createdAtShop'),
+  sortOrder: z.enum(['asc', 'desc']).default('desc'),
+});
+
+export const ordersCountsQuerySchema = ordersListQuerySchema.omit({
+  page: true,
+  limit: true,
+  operationalStatus: true,
+  statusGroup: true,
+}).extend({
+  scope: z.enum(['sidebar', 'list', '']).default('sidebar'),
 });
 
 export const orderReturnItemSchema = z.object({
@@ -238,6 +267,8 @@ export const orderCancellationActionSchema = orderReturnActionSchema.omit({ item
 export type IfirmaSettingsInput = z.infer<typeof ifirmaSettingsSchema>;
 export type ShopOrderStatusMappingInput = z.infer<typeof shopOrderStatusMappingSchema>;
 export type UpdateOrderStatusInput = z.infer<typeof updateOrderStatusSchema>;
+export type OrdersListQueryInput = z.infer<typeof ordersListQuerySchema>;
+export type OrdersCountsQueryInput = z.infer<typeof ordersCountsQuerySchema>;
 export type OrderReturnActionInput = z.infer<typeof orderReturnActionSchema>;
 export type OrderCancellationActionInput = z.infer<typeof orderCancellationActionSchema>;
 

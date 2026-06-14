@@ -19,6 +19,7 @@ import {
   type ShippingPromise,
 } from '../orders/shipping-promise.service';
 import { resolveOrderSyncFromDate } from './order-sync-date';
+import { inferOperationalStatusFromShopStatus } from '../../lib/order-statuses';
 
 const DEBUG_SHOP_SYNC = process.env.DEBUG_SHOP_SYNC === 'true';
 
@@ -91,7 +92,17 @@ export interface SyncShopOrdersOptions {
 
 function resolvePaidOrderStatusIds(config: any): number[] | undefined {
   const orderSync = config?.orderSync ?? {};
-  const rawStatusIds = orderSync.paidStatusIds ?? orderSync.currentStateIds ?? orderSync.currentStates;
+  const orderStatus = typeof orderSync.orderStatus === 'string'
+    ? orderSync.orderStatus.trim().toUpperCase()
+    : 'PAID';
+
+  if (orderStatus === 'ALL') {
+    return undefined;
+  }
+
+  const rawStatusIds = orderStatus === 'CUSTOM'
+    ? orderSync.currentStateIds ?? orderSync.currentStates
+    : orderSync.paidStatusIds ?? orderSync.currentStateIds ?? orderSync.currentStates;
   const values = Array.isArray(rawStatusIds)
     ? rawStatusIds
     : typeof rawStatusIds === 'string'
@@ -110,7 +121,7 @@ function resolvePaidOrderStatusIds(config: any): number[] | undefined {
     return statusIds;
   }
 
-  return orderSync.orderStatus === 'PAID' ? [2] : undefined;
+  return orderStatus === 'PAID' ? [2] : undefined;
 }
 
 async function fetchOrdersByStatus(
@@ -469,6 +480,17 @@ async function createOrderFromDetails(
     }
   }
   const orderShippingPromise = maxShippingPromise(Array.from(shippingPromisesByItemId.values()));
+  const externalStatusId = details.order.current_state == null ? null : String(details.order.current_state);
+  const mappedStatus = externalStatusId
+    ? await prisma.shopOrderStatus.findUnique({
+        where: {
+          shopId_externalStatusId: {
+            shopId: context.shop.id,
+            externalStatusId,
+          },
+        },
+      })
+    : null;
 
   const order = await prisma.order.create({
     data: {
@@ -485,7 +507,8 @@ async function createOrderFromDetails(
       totalDiscountsTaxIncl: decimalOrNull(details.order.total_discounts_tax_incl),
       totalDiscountsTaxExcl: decimalOrNull(details.order.total_discounts_tax_excl),
       paymentMethod: details.order.payment || details.order.module || null,
-      externalStatusId: details.order.current_state == null ? null : String(details.order.current_state),
+      operationalStatus: inferOperationalStatusFromShopStatus(mappedStatus),
+      externalStatusId,
       externalStatusName: details.orderStatus?.name ?? null,
       createdAtShop: new Date(details.order.date_add),
       maxShippingDate: orderShippingPromise?.shippingDate ?? null,

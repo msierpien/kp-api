@@ -4,6 +4,10 @@ import { decrypt } from '../../lib/encryption';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
 import { PrestaShopClient } from '../prestashop/prestashop-client';
 import type { ShopOrderStatusMappingInput, UpdateOrderStatusInput } from '../../schemas/admin.schema';
+import {
+  assertOrderOperationalStatus,
+  inferOperationalStatusFromShopStatus,
+} from '../../lib/order-statuses';
 
 function tenantScopedWhere(id: string) {
   const tenantId = getTenantId();
@@ -95,6 +99,7 @@ export async function updateShopOrderStatusMappings(shopId: string, input: ShopO
           externalStatusId: status.externalStatusId,
         },
         data: {
+          ...(status.operationalStatus === undefined ? {} : { operationalStatus: status.operationalStatus }),
           ...(status.isPaid === undefined ? {} : { isPaid: status.isPaid }),
           ...(status.isCancelled === undefined ? {} : { isCancelled: status.isCancelled }),
           ...(status.isReadyForInvoice === undefined ? {} : { isReadyForInvoice: status.isReadyForInvoice }),
@@ -130,6 +135,7 @@ export async function updateOrderExternalStatusFromWebhook(input: {
     data: {
       externalStatusId: input.externalStatusId,
       externalStatusName: input.externalStatusName ?? status?.name ?? null,
+      ...(status ? { operationalStatus: inferOperationalStatusFromShopStatus(status) } : {}),
       statusSyncedAt: new Date(),
     },
   });
@@ -148,13 +154,29 @@ export async function updateOrderStatus(orderId: string, input: UpdateOrderStatu
   if (!order) throw new Error('Zamówienie nie znalezione');
 
   const localUpdate: any = {};
-  if (input.operationalStatus) localUpdate.operationalStatus = input.operationalStatus;
+  const operationalStatus = input.operationalStatus
+    ? assertOrderOperationalStatus(input.operationalStatus)
+    : null;
+
+  if (operationalStatus) localUpdate.operationalStatus = operationalStatus;
 
   if (Object.keys(localUpdate).length > 0) {
     await prisma.order.update({ where: { id: order.id }, data: localUpdate });
   }
 
-  if (!input.externalStatusId) {
+  let externalStatusId = input.externalStatusId ?? null;
+  if (!externalStatusId && operationalStatus && order.shop.platform === 'PRESTASHOP') {
+    const mappedStatus = await prisma.shopOrderStatus.findFirst({
+      where: {
+        shopId: order.shopId,
+        operationalStatus,
+      },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+    externalStatusId = mappedStatus?.externalStatusId ?? null;
+  }
+
+  if (!externalStatusId || order.shop.platform !== 'PRESTASHOP') {
     return prisma.order.findUnique({ where: { id: order.id } });
   }
 
@@ -162,7 +184,7 @@ export async function updateOrderStatus(orderId: string, input: UpdateOrderStatu
     where: {
       shopId_externalStatusId: {
         shopId: order.shopId,
-        externalStatusId: input.externalStatusId,
+        externalStatusId,
       },
     },
   });
@@ -170,14 +192,15 @@ export async function updateOrderStatus(orderId: string, input: UpdateOrderStatu
   try {
     await createClient(order.shop).createOrderHistory({
       orderId: order.externalOrderId,
-      orderStateId: input.externalStatusId,
+      orderStateId: externalStatusId,
     });
 
     return prisma.order.update({
       where: { id: order.id },
       data: {
-        externalStatusId: input.externalStatusId,
+        externalStatusId,
         externalStatusName: status?.name ?? null,
+        ...(status ? { operationalStatus: inferOperationalStatusFromShopStatus(status) } : {}),
         statusSyncedAt: new Date(),
         statusSyncError: null,
       },

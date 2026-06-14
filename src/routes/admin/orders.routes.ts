@@ -1,6 +1,11 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import prisma from '../../lib/prisma';
-import { createManualOrder, deleteOrder } from '../../services/admin/orders.service';
+import {
+  createManualOrder,
+  deleteOrder,
+  getOrderCounts,
+  getOrdersList,
+} from '../../services/admin/orders.service';
 import * as reservationService from '../../services/admin/warehouse-reservations.service';
 import * as invoicesService from '../../services/admin/invoices.service';
 import * as orderReturnsService from '../../services/admin/order-returns.service';
@@ -9,9 +14,13 @@ import { extractOrderShippingInfo } from '../../services/orders/order-shipping-i
 import {
   createManualOrderSchema,
   orderCancellationActionSchema,
+  ordersCountsQuerySchema,
+  ordersListQuerySchema,
   orderReturnActionSchema,
   updateOrderStatusSchema,
   type CreateManualOrderInput,
+  type OrdersCountsQueryInput,
+  type OrdersListQueryInput,
 } from '../../schemas/admin.schema';
 
 interface OrderParams {
@@ -31,6 +40,107 @@ function withOrderComputedFields<T extends { payloadJson: unknown; currency?: st
 }
 
 export async function ordersRoutes(fastify: FastifyInstance) {
+  fastify.get<{ Querystring: OrdersListQueryInput }>(
+    '/list',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Lekka lista zamówień z paginacją i filtrami',
+        querystring: {
+          type: 'object',
+          properties: {
+            page: { type: 'integer', minimum: 1, default: 1 },
+            limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+            q: { type: 'string' },
+            statusGroup: { type: 'string', enum: ['active', 'cancelled', 'returned', 'all', ''] },
+            operationalStatus: { type: 'string' },
+            shopId: { type: 'string' },
+            payment: { type: 'string', enum: ['all', 'paid', 'unpaid', ''], default: 'all' },
+            invoice: { type: 'string', enum: ['all', 'issued', 'missing', ''], default: 'all' },
+            personalization: { type: 'string', enum: ['all', 'required', 'waiting', 'ready', ''], default: 'all' },
+            datePreset: { type: 'string', enum: ['all', '7d', '30d', '90d', ''], default: 'all' },
+            dateFrom: { type: 'string' },
+            dateTo: { type: 'string' },
+            shipBy: { type: 'string', enum: ['overdue', 'today', 'tomorrow', 'future', 'shipped', ''] },
+            sortBy: { type: 'string', enum: ['createdAtShop', 'totalPaid', 'maxShippingDate', 'orderReference'], default: 'createdAtShop' },
+            sortOrder: { type: 'string', enum: ['asc', 'desc'], default: 'desc' },
+          },
+        },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      const parsed = ordersListQuerySchema.safeParse(request.query);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: parsed.error.errors[0].message,
+          details: parsed.error.errors,
+        });
+      }
+
+      try {
+        const result = await getOrdersList(parsed.data);
+        return reply.send(result);
+      } catch (error) {
+        fastify.log.error(error);
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Nie udało się pobrać listy zamówień',
+        });
+      }
+    },
+  );
+
+  fastify.get<{ Querystring: OrdersCountsQueryInput }>(
+    '/counts',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Liczniki statusów zamówień',
+        querystring: {
+          type: 'object',
+          properties: {
+            q: { type: 'string' },
+            shopId: { type: 'string' },
+            payment: { type: 'string', enum: ['all', 'paid', 'unpaid', ''], default: 'all' },
+            invoice: { type: 'string', enum: ['all', 'issued', 'missing', ''], default: 'all' },
+            personalization: { type: 'string', enum: ['all', 'required', 'waiting', 'ready', ''], default: 'all' },
+            datePreset: { type: 'string', enum: ['all', '7d', '30d', '90d', ''], default: 'all' },
+            dateFrom: { type: 'string' },
+            dateTo: { type: 'string' },
+            shipBy: { type: 'string', enum: ['overdue', 'today', 'tomorrow', 'future', 'shipped', ''] },
+            sortBy: { type: 'string', enum: ['createdAtShop', 'totalPaid', 'maxShippingDate', 'orderReference'], default: 'createdAtShop' },
+            sortOrder: { type: 'string', enum: ['asc', 'desc'], default: 'desc' },
+            scope: { type: 'string', enum: ['sidebar', 'list', ''], default: 'sidebar' },
+          },
+        },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      const parsed = ordersCountsQuerySchema.safeParse(request.query);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: parsed.error.errors[0].message,
+          details: parsed.error.errors,
+        });
+      }
+
+      try {
+        const result = await getOrderCounts(parsed.data);
+        return reply.send(result);
+      } catch (error) {
+        fastify.log.error(error);
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Nie udało się pobrać liczników zamówień',
+        });
+      }
+    },
+  );
+
   // GET /admin/orders - List all orders
   fastify.get('/', {
     schema: {

@@ -352,7 +352,14 @@ export async function shopsRoutes(fastify: FastifyInstance) {
   );
 
   // PATCH /admin/shops/:id/order-sync-config
-  fastify.patch<{ Params: ShopIdParamsInput; Body: { fromDate?: string | null } }>(
+  fastify.patch<{
+    Params: ShopIdParamsInput;
+    Body: {
+      fromDate?: string | null;
+      orderStatus?: 'ALL' | 'PAID' | 'CUSTOM';
+      currentStateIds?: Array<string | number> | string | null;
+    };
+  }>(
     '/:id/order-sync-config',
     {
       schema: {
@@ -365,6 +372,19 @@ export async function shopsRoutes(fastify: FastifyInstance) {
             fromDate: {
               anyOf: [{ type: 'string' }, { type: 'null' }],
               description: 'Najwcześniejsza data importu zamówień (YYYY-MM-DD). Null usuwa ograniczenie.',
+            },
+            orderStatus: {
+              type: 'string',
+              enum: ['ALL', 'PAID', 'CUSTOM'],
+              description: 'Zakres importu zamówień: wszystkie, tylko opłacone albo własna lista statusów PrestaShop.',
+            },
+            currentStateIds: {
+              anyOf: [
+                { type: 'array', items: { anyOf: [{ type: 'string' }, { type: 'number' }] } },
+                { type: 'string' },
+                { type: 'null' },
+              ],
+              description: 'Lista ID statusów PrestaShop dla orderStatus=CUSTOM.',
             },
           },
         },

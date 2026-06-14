@@ -199,6 +199,8 @@ model Order {
   @@index([shopId, orderReference])
   @@index([shopId, operationalStatus])
   @@index([shopId, externalStatusId])
+  @@index([shopId, createdAtShop])
+  @@index([shopId, maxShippingDate])
   @@index([customerEmail])
   @@map("orders")
 }
@@ -306,6 +308,7 @@ model ShopOrderStatus {
   externalStatusId  String    @map("external_status_id")
   name              String
   color             String?
+  operationalStatus String?   @map("operational_status")
   isPaid            Boolean   @default(false) @map("is_paid")
   isCancelled       Boolean   @default(false) @map("is_cancelled")
   isReadyForInvoice Boolean   @default(false) @map("is_ready_for_invoice")
@@ -322,6 +325,7 @@ model ShopOrderStatus {
   @@unique([shopId, externalStatusId])
   @@index([tenantId])
   @@index([shopId])
+  @@index([tenantId, operationalStatus])
   @@index([tenantId, isReadyForInvoice])
   @@map("shop_order_statuses")
 }

@@ -72,7 +72,7 @@ const MANAGED_SHOP_SECRET_KEYS = [
 const DEFAULT_ORDER_SYNC_CONFIG = {
   enabled: true,
   intervalMinutes: 10,
-  orderStatus: 'PAID',
+  orderStatus: 'ALL',
   fromDate: null as string | null,
 };
 
@@ -110,6 +110,29 @@ function normalizeOrderSyncForStorage(orderSyncInput: unknown) {
   }
 
   return orderSync;
+}
+
+function normalizeOrderSyncStatus(value: unknown) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toUpperCase();
+  if (normalized === 'ALL' || normalized === 'PAID' || normalized === 'CUSTOM') return normalized;
+  throw new ValidationError('Nieprawidlowy zakres synchronizacji zamowien');
+}
+
+function normalizeCurrentStateIds(value: unknown): number[] {
+  const rawValues = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',')
+      : value === null || value === undefined
+        ? []
+        : [value];
+
+  return Array.from(new Set(
+    rawValues
+      .map((item) => Number(String(item).trim()))
+      .filter((item) => Number.isInteger(item) && item > 0),
+  ));
 }
 
 function normalizeShopConfigForStorage(config: unknown, options: { encryptManagedSecrets?: boolean } = {}) {
@@ -362,7 +385,7 @@ export async function updateShop(id: string, input: UpdateShopInput): Promise<Sh
 
 export async function updateShopOrderSyncConfig(
   id: string,
-  input: { fromDate?: string | null },
+  input: { fromDate?: string | null; orderStatus?: 'ALL' | 'PAID' | 'CUSTOM'; currentStateIds?: Array<string | number> | string | null },
 ): Promise<ShopItem> {
   const existingShop = await prisma.shop.findFirst({
     where: getShopAdminWhere(id),
@@ -378,6 +401,27 @@ export async function updateShopOrderSyncConfig(
 
   if (hasOwn(input, 'fromDate')) {
     orderSync.fromDate = assertValidOrderSyncDate(input.fromDate, 'fromDate');
+  }
+  if (hasOwn(input, 'orderStatus')) {
+    const status = normalizeOrderSyncStatus(input.orderStatus);
+    if (status) {
+      orderSync.orderStatus = status;
+      if (status === 'ALL') {
+        orderSync.currentStateIds = [];
+        delete orderSync.paidStatusIds;
+        delete orderSync.currentStates;
+      }
+      if (status === 'PAID') {
+        orderSync.currentStateIds = [];
+      }
+    }
+  }
+  if (hasOwn(input, 'currentStateIds')) {
+    const ids = normalizeCurrentStateIds(input.currentStateIds);
+    orderSync.currentStateIds = ids;
+    if (ids.length > 0 && !hasOwn(input, 'orderStatus')) {
+      orderSync.orderStatus = 'CUSTOM';
+    }
   }
 
   const shop = await prisma.shop.update({

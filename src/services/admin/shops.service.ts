@@ -198,6 +198,11 @@ function publicShopConfig(configJson: Record<string, any>) {
 
 const mapShop = (shop: any): ShopItem => {
   const configJson = (shop.configJson as any) || {};
+  const hasAdminConnectorKey = Boolean(configJson.adminConnectorApiKey);
+  const contentUrl = typeof configJson.productContentUrl === 'string' ? configJson.productContentUrl : null;
+  const bulkUrl = typeof configJson.bulkStockUrl === 'string' ? configJson.bulkStockUrl : null;
+  const contentUsesConnector = isAdminConnectorModuleUrl(contentUrl) || (!contentUrl && isAdminConnectorModuleUrl(configJson.adminConnectorUrl));
+  const bulkUsesConnector = isAdminConnectorModuleUrl(bulkUrl) || (!bulkUrl && isAdminConnectorModuleUrl(configJson.adminConnectorUrl));
   const latestSync = Array.isArray(shop.syncLogs) ? shop.syncLogs[0] : null;
   const isManual = shop.platform === 'MANUAL';
   const hasError = latestSync?.status === 'FAILED';
@@ -212,9 +217,9 @@ const mapShop = (shop: any): ShopItem => {
     apiSecret: shop.apiSecret ? decrypt(shop.apiSecret) : null,
     authType: configJson.authType || 'WEB_SERVICE',
     config: publicShopConfig(configJson),
-    hasBulkStock: Boolean(configJson.bulkStockApiKey),
-    hasProductContent: Boolean(configJson.productContentApiKey),
-    hasAdminConnector: Boolean(configJson.adminConnectorApiKey),
+    hasBulkStock: Boolean(configJson.bulkStockApiKey) || (hasAdminConnectorKey && bulkUsesConnector),
+    hasProductContent: Boolean(configJson.productContentApiKey) || (hasAdminConnectorKey && contentUsesConnector),
+    hasAdminConnector: hasAdminConnectorKey,
     adminConnectorUrl: typeof configJson.adminConnectorUrl === 'string' ? configJson.adminConnectorUrl : null,
     productContentUrl: typeof configJson.productContentUrl === 'string' ? configJson.productContentUrl : null,
     bulkStockUrl: typeof configJson.bulkStockUrl === 'string' ? configJson.bulkStockUrl : null,
@@ -237,6 +242,10 @@ const mapShop = (shop: any): ShopItem => {
     tenantId: shop.tenantId,
   };
 };
+
+function isAdminConnectorModuleUrl(value: unknown) {
+  return typeof value === 'string' && /\bmodule=kp_adminconnector\b|\/kp_adminconnector(?:\/|$)/i.test(value);
+}
 
 function normalizeLeadTimeDays(value: unknown) {
   const days = Number(value);

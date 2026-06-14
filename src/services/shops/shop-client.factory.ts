@@ -1,7 +1,7 @@
 import type { Shop } from '@prisma/client';
 import { decrypt } from '../../lib/encryption';
 import type { ShopStockClient } from './shop-stock-client.interface';
-import { PrestaShopStockClient } from './prestashop-stock-client';
+import { buildAdminConnectorControllerUrl, PrestaShopStockClient } from './prestashop-stock-client';
 
 function getConfigJson(shop: Shop): Record<string, unknown> {
   if (!shop.configJson || typeof shop.configJson !== 'object' || Array.isArray(shop.configJson)) return {};
@@ -11,14 +11,22 @@ function getConfigJson(shop: Shop): Record<string, unknown> {
 export function createShopStockClient(shop: Shop): ShopStockClient {
   if (shop.platform === 'PRESTASHOP') {
     const config = getConfigJson(shop);
-    const bulkStockApiKey = typeof config.bulkStockApiKey === 'string' && config.bulkStockApiKey
-      ? decrypt(config.bulkStockApiKey)
+    const configuredBulkStockUrl = typeof config.bulkStockUrl === 'string' && config.bulkStockUrl.trim()
+      ? config.bulkStockUrl
       : null;
+    const connectorBulkStockUrl = adminConnectorStockUrl(config);
+    const bulkStockUrl = configuredBulkStockUrl ?? connectorBulkStockUrl;
+    const bulkStockUsesConnector = isAdminConnectorModuleUrl(bulkStockUrl);
+    const bulkStockApiKey = bulkStockUsesConnector && typeof config.adminConnectorApiKey === 'string' && config.adminConnectorApiKey
+        ? decrypt(String(config.adminConnectorApiKey))
+      : typeof config.bulkStockApiKey === 'string' && config.bulkStockApiKey
+        ? decrypt(config.bulkStockApiKey)
+        : null;
 
     return new PrestaShopStockClient({
       baseUrl: shop.baseUrl,
       apiKey: decrypt(shop.apiKey),
-      bulkStockUrl: typeof config.bulkStockUrl === 'string' ? config.bulkStockUrl : null,
+      bulkStockUrl,
       bulkStockApiKey,
       bulkStockBatchSize: config.bulkStockBatchSize as number | string | null | undefined,
       prestashopShopId: getPrestaShopShopId(config),
@@ -26,6 +34,10 @@ export function createShopStockClient(shop: Shop): ShopStockClient {
   }
 
   throw new Error(`Stock sync is not implemented for platform ${shop.platform}`);
+}
+
+function isAdminConnectorModuleUrl(value: string | null | undefined) {
+  return Boolean(value && /\bmodule=kp_adminconnector\b|\/kp_adminconnector(?:\/|$)/i.test(value));
 }
 
 function getPrestaShopShopId(config: Record<string, unknown>) {
@@ -48,4 +60,17 @@ function getPrestaShopShopId(config: Record<string, unknown>) {
   }
 
   return null;
+}
+
+function adminConnectorStockUrl(config: Record<string, unknown>) {
+  if (
+    typeof config.adminConnectorUrl !== 'string' ||
+    !config.adminConnectorUrl.trim() ||
+    typeof config.adminConnectorApiKey !== 'string' ||
+    !config.adminConnectorApiKey.trim()
+  ) {
+    return null;
+  }
+
+  return buildAdminConnectorControllerUrl(config.adminConnectorUrl, 'bulkupdate');
 }

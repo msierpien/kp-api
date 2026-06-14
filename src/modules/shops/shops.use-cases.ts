@@ -87,7 +87,7 @@ function moduleControllerUrl(moduleUrl: string | null, controller: string) {
   const trimmed = moduleUrl.replace(/\/+$/, '');
 
   if (!trimmed.includes('?')) {
-    return `${trimmed}/${encodeURIComponent(controller)}`;
+    return `${stripKnownModuleController(trimmed)}/${encodeURIComponent(controller)}`;
   }
 
   if (trimmed.includes('controller=')) {
@@ -95,6 +95,32 @@ function moduleControllerUrl(moduleUrl: string | null, controller: string) {
   }
 
   return `${trimmed}&controller=${encodeURIComponent(controller)}`;
+}
+
+function stripKnownModuleController(url: string) {
+  return url.replace(/\/(?:bulkupdate|snapshot|stocksnapshot|capabilities|patch|mediaimport|mediaorder|mediaupdate|mediadelete)$/i, '');
+}
+
+function isAdminConnectorModuleUrl(value: string | null | undefined) {
+  return Boolean(value && /\bmodule=kp_adminconnector\b|\/kp_adminconnector(?:\/|$)/i.test(value));
+}
+
+function prestashopShopIdFromConfig(config: Record<string, unknown>) {
+  const defaults = config.prestashopProductDefaults;
+  const productCreate = config.productCreate;
+
+  if (typeof config.idShopDefault === 'string' || typeof config.idShopDefault === 'number') return config.idShopDefault;
+  if (typeof config.prestashopShopId === 'string' || typeof config.prestashopShopId === 'number') return config.prestashopShopId;
+  if (defaults && typeof defaults === 'object' && !Array.isArray(defaults)) {
+    const value = (defaults as Record<string, unknown>).idShopDefault;
+    if (typeof value === 'string' || typeof value === 'number') return value;
+  }
+  if (productCreate && typeof productCreate === 'object' && !Array.isArray(productCreate)) {
+    const value = (productCreate as Record<string, unknown>).idShopDefault;
+    if (typeof value === 'string' || typeof value === 'number') return value;
+  }
+
+  return null;
 }
 
 async function checkJsonEndpoint(input: {
@@ -314,9 +340,18 @@ export const shopsUseCases = {
       ? shop.configJson as Record<string, unknown>
       : {};
     const configuredUrl = normalizeOptionalString(config.bulkStockUrl);
-    const url = configuredUrl ?? buildBulkStockUrl(shop.baseUrl.replace(/\/+$/, '').replace(/\/api$/, ''));
-    const apiKey = typeof config.bulkStockApiKey === 'string' && config.bulkStockApiKey
-      ? decrypt(config.bulkStockApiKey)
+    const adminConnectorUrl = normalizeOptionalString(config.adminConnectorUrl);
+    const adminConnectorBulkUrl = buildAdminConnectorControllerUrl(adminConnectorUrl, 'bulkupdate');
+    const prestashopShopId = prestashopShopIdFromConfig(config);
+    const url = configuredUrl
+      ?? adminConnectorBulkUrl
+      ?? buildBulkStockUrl(shop.baseUrl.replace(/\/+$/, '').replace(/\/api$/, ''), normalizeOptionalString(prestashopShopId));
+    const usesAdminConnector = isAdminConnectorModuleUrl(url);
+    const configuredApiKey = usesAdminConnector
+      ? config.adminConnectorApiKey ?? config.bulkStockApiKey
+      : config.bulkStockApiKey;
+    const apiKey = typeof configuredApiKey === 'string' && configuredApiKey
+      ? decrypt(configuredApiKey)
       : null;
 
     const startedAt = Date.now();
@@ -337,14 +372,16 @@ export const shopsUseCases = {
       const bodyPreview = text.slice(0, 400);
       const looksJson = contentType.includes('application/json') || bodyPreview.trim().startsWith('{');
       const expectedGet405 = res.status === 405 && looksJson;
-      const ok = looksJson && res.status !== 503;
+      const ok = expectedGet405 || (looksJson && res.ok);
       const message = expectedGet405
         ? 'Endpoint modułu jest osiągalny. GET zwrócił oczekiwane HTTP 405 JSON.'
         : res.status === 503 && !looksJson
           ? 'Endpoint zwraca HTML 503 przed kontrolerem modułu. Sprawdź maintenance/CDN/IP whitelist lub URL sklepu multistore.'
           : ok
             ? `Endpoint zwraca JSON HTTP ${res.status}; moduł prawdopodobnie odpowiada, ale oczekiwany test GET to HTTP 405.`
-            : `Endpoint nie zwrócił odpowiedzi JSON modułu. HTTP ${res.status}.`;
+            : looksJson
+              ? `Endpoint zwrócił JSON HTTP ${res.status}, ale to nie jest poprawny status modułu. Sprawdź, czy właściwy moduł i kontroler są włączone.`
+              : `Endpoint nie zwrócił odpowiedzi JSON modułu. HTTP ${res.status}.`;
 
       return {
         ok,
@@ -419,27 +456,33 @@ export const shopsUseCases = {
       missingMessage: 'Nie skonfigurowano wspólnego modułu KP Admin Connector.',
     });
 
-    const productContentUrl = moduleControllerUrl(
-      normalizeOptionalString(config.productContentUrl ?? config.contentModuleUrl),
-      'capabilities',
-    ) ?? `${baseUrl}/index.php?fc=module&module=kp_productcontent&controller=capabilities`;
+    const productContentModuleBaseUrl = normalizeOptionalString(config.productContentUrl ?? config.contentModuleUrl)
+      ?? adminConnectorUrl;
+    const productContentUsesAdminConnector = isAdminConnectorModuleUrl(productContentModuleBaseUrl);
+    const productContentUrl = moduleControllerUrl(productContentModuleBaseUrl, 'capabilities')
+      ?? `${baseUrl}/index.php?fc=module&module=kp_productcontent&controller=capabilities`;
+    const productContentCheckApiKey = productContentUsesAdminConnector
+      ? adminConnectorApiKey ?? productContentApiKey
+      : productContentApiKey;
     const productContentCheck = await checkJsonEndpoint({
       key: 'product_content',
       label: 'Karta produktu',
-      configured: Boolean(productContentApiKey),
+      configured: Boolean(productContentCheckApiKey),
       url: productContentUrl,
-      apiKey: productContentApiKey,
+      apiKey: productContentCheckApiKey,
       missingMessage: 'Brak klucza dla modułu treści produktu.',
     });
 
     const bulkDiagnostics = await shopsUseCases.getBulkStockDiagnostics(id);
+    const bulkUsesAdminConnector = isAdminConnectorModuleUrl(bulkDiagnostics.url);
+    const bulkConfigured = Boolean(bulkStockApiKey || (bulkUsesAdminConnector && adminConnectorApiKey));
     const bulkStockCheck: ModuleDiagnostic = {
       key: 'bulk_stock',
       label: 'Stany i dostępność',
-      configured: Boolean(bulkStockApiKey),
-      ok: Boolean(bulkStockApiKey && (bulkDiagnostics.expectedGet405 || bulkDiagnostics.ok)),
-      status: !bulkStockApiKey ? 'missing_config' : bulkDiagnostics.expectedGet405 || bulkDiagnostics.ok ? 'ok' : 'error',
-      message: bulkStockApiKey ? bulkDiagnostics.message : 'Brak klucza dla modułu stanów.',
+      configured: bulkConfigured,
+      ok: Boolean(bulkConfigured && (bulkDiagnostics.expectedGet405 || bulkDiagnostics.ok)),
+      status: !bulkConfigured ? 'missing_config' : bulkDiagnostics.expectedGet405 || bulkDiagnostics.ok ? 'ok' : 'error',
+      message: bulkConfigured ? bulkDiagnostics.message : 'Brak klucza dla modułu stanów.',
       latencyMs: bulkDiagnostics.latencyMs,
       url: bulkDiagnostics.url,
       httpStatus: bulkDiagnostics.status,

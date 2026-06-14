@@ -5,6 +5,7 @@ import { decrypt } from '../../lib/encryption';
 type ProductContentModuleConfig = {
   adminConnectorUrl?: string | null;
   adminConnectorApiKey?: string | null;
+  adminConnectorEnabled?: boolean;
   productContentUrl?: string | null;
   contentModuleUrl?: string | null;
   productContentApiKey?: string | null;
@@ -31,8 +32,11 @@ export class PrestaShopProductContentAdapter {
   constructor(private readonly shop: Shop) {
     const config = this.config();
     this.baseUrl = shop.baseUrl.replace(/\/+$/, '');
-    this.apiKey = configSecret(config.productContentApiKey ?? config.contentModuleApiKey);
-    this.explicitModuleUrl = normalizeUrl(config.productContentUrl ?? config.contentModuleUrl);
+    this.explicitModuleUrl = normalizeUrl(config.productContentUrl ?? config.contentModuleUrl)
+      ?? normalizeUrl(config.adminConnectorUrl);
+    this.apiKey = this.usesAdminConnector()
+      ? configSecret(config.adminConnectorApiKey ?? config.productContentApiKey ?? config.contentModuleApiKey)
+      : configSecret(config.productContentApiKey ?? config.contentModuleApiKey);
   }
 
   get configured(): boolean {
@@ -91,7 +95,7 @@ export class PrestaShopProductContentAdapter {
 
   private async request(controller: string, init: RequestInit) {
     if (!this.apiKey) {
-      throw new Error('Moduł kp_productcontent nie ma skonfigurowanego klucza API');
+      throw new Error('Moduł treści produktu nie ma skonfigurowanego klucza API');
     }
 
     const url = this.endpoint(controller);
@@ -115,7 +119,7 @@ export class PrestaShopProductContentAdapter {
     if (!response.ok || !json?.success) {
       const message = json?.errors?.join(', ') || text.slice(0, 160) || `HTTP ${response.status}`;
       if (response.status === 409) throw new ProductContentConflictError(message, json?.data);
-      throw new Error(`kp_productcontent ${response.status}: ${message}`);
+      throw new Error(`${this.usesAdminConnector() ? 'kp_adminconnector' : 'kp_productcontent'} ${response.status}: ${message}`);
     }
 
     return json.data;
@@ -132,6 +136,10 @@ export class PrestaShopProductContentAdapter {
 
   private config(): ProductContentModuleConfig {
     return (this.shop.configJson || {}) as ProductContentModuleConfig;
+  }
+
+  private usesAdminConnector() {
+    return Boolean(this.explicitModuleUrl && /\bmodule=kp_adminconnector\b|\/kp_adminconnector(?:\/|$)/i.test(this.explicitModuleUrl));
   }
 }
 
@@ -150,7 +158,7 @@ function configSecret(value: unknown) {
 function buildModuleControllerUrl(moduleUrl: string, controller: string) {
   const trimmed = moduleUrl.replace(/\/+$/, '');
   if (!trimmed.includes('?')) {
-    return `${trimmed}/${encodeURIComponent(controller)}`;
+    return `${stripKnownModuleController(trimmed)}/${encodeURIComponent(controller)}`;
   }
 
   if (trimmed.includes('controller=')) {
@@ -158,6 +166,10 @@ function buildModuleControllerUrl(moduleUrl: string, controller: string) {
   }
 
   return `${trimmed}&controller=${encodeURIComponent(controller)}`;
+}
+
+function stripKnownModuleController(url: string) {
+  return url.replace(/\/(?:bulkupdate|snapshot|stocksnapshot|capabilities|patch|mediaimport|mediaorder|mediaupdate|mediadelete)$/i, '');
 }
 
 export function buildPrestaShopProductContentAdapter(shop: Shop) {

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildAdminConnectorControllerUrl,
+  buildBulkStockSnapshotUrl,
+  buildBulkStockUrl,
   normalizeBulkStockBatchSize,
   replaceProductOrderAvailabilityXml,
 } from '../src/services/shops/prestashop-stock-client';
@@ -54,6 +57,32 @@ test('bulk stock client defaults invalid batch sizes to 500', () => {
   assert.equal(normalizeBulkStockBatchSize(250), 250);
   assert.equal(normalizeBulkStockBatchSize(0), 500);
   assert.equal(normalizeBulkStockBatchSize(501), 500);
+});
+
+test('module URL helpers replace existing connector controllers', () => {
+  assert.equal(
+    buildAdminConnectorControllerUrl('https://shop.test/module/kp_adminconnector/capabilities', 'bulkupdate'),
+    'https://shop.test/module/kp_adminconnector/bulkupdate',
+  );
+  assert.equal(
+    buildAdminConnectorControllerUrl(
+      'https://shop.test/index.php?fc=module&module=kp_adminconnector&controller=capabilities',
+      'stocksnapshot',
+      { productId: 123, idShop: 2 },
+    ),
+    'https://shop.test/index.php?fc=module&module=kp_adminconnector&controller=stocksnapshot&productId=123&idShop=2',
+  );
+});
+
+test('bulk stock URLs carry multistore shop context', () => {
+  assert.equal(
+    buildBulkStockUrl('https://shop.test', '2'),
+    'https://shop.test/index.php?fc=module&module=kp_bulkstock&controller=bulkupdate&idShop=2',
+  );
+  assert.equal(
+    buildBulkStockSnapshotUrl('https://shop.test', 123, '2'),
+    'https://shop.test/index.php?fc=module&module=kp_bulkstock&controller=snapshot&productId=123&idShop=2',
+  );
 });
 
 function formatExpectedLeadTimeDate(days: number) {

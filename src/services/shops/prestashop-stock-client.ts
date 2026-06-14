@@ -66,10 +66,10 @@ export class PrestaShopStockClient implements ShopStockClient {
   }) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '').replace(/\/api$/, '');
     this.apiKey = config.apiKey;
-    this.bulkStockUrl = normalizeNullableString(config.bulkStockUrl) ?? buildBulkStockUrl(this.baseUrl);
+    this.prestashopShopId = normalizeNullableString(config.prestashopShopId);
+    this.bulkStockUrl = normalizeNullableString(config.bulkStockUrl) ?? buildBulkStockUrl(this.baseUrl, this.prestashopShopId);
     this.bulkStockApiKey = normalizeNullableString(config.bulkStockApiKey);
     this.bulkStockBatchSize = normalizeBulkStockBatchSize(config.bulkStockBatchSize);
-    this.prestashopShopId = normalizeNullableString(config.prestashopShopId);
   }
 
   get hasBulkModule(): boolean {
@@ -103,7 +103,7 @@ export class PrestaShopStockClient implements ShopStockClient {
           throw new Error(`kp_bulkstock item for product ${item.productId} requires quantity or leadTimeDays`);
         }
       }
-      const res = await fetch(this.bulkStockUrl, {
+      const res = await fetch(this.moduleUrl(this.bulkStockUrl, 'bulkupdate'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -378,7 +378,9 @@ export class PrestaShopStockClient implements ShopStockClient {
     if (!Number.isInteger(productId) || productId <= 0) return null;
 
     try {
-      const url = buildBulkStockSnapshotUrl(this.baseUrl, productId);
+      const url = this.bulkStockUrl
+        ? this.moduleUrl(this.bulkStockUrl, this.usesAdminConnectorBulkStock() ? 'stocksnapshot' : 'snapshot', { productId })
+        : buildBulkStockSnapshotUrl(this.baseUrl, productId, this.prestashopShopId);
       const response = await fetch(url, {
         method: 'GET',
         headers: {
@@ -398,6 +400,17 @@ export class PrestaShopStockClient implements ShopStockClient {
     } catch {
       return null;
     }
+  }
+
+  private moduleUrl(url: string, controller: string, params: Record<string, string | number | null | undefined> = {}) {
+    return buildModuleControllerUrl(url, controller, {
+      ...params,
+      idShop: this.prestashopShopId,
+    });
+  }
+
+  private usesAdminConnectorBulkStock() {
+    return Boolean(this.bulkStockUrl && /\bmodule=kp_adminconnector\b|\/kp_adminconnector(?:\/|$)/i.test(this.bulkStockUrl));
   }
 }
 
@@ -480,12 +493,17 @@ function normalizeAvailabilityPolicy(value: unknown) {
   throw new Error('availabilityPolicy must be IN_STOCK, BACKORDER_FROM_WHOLESALE or OUT_OF_STOCK');
 }
 
-export function buildBulkStockUrl(baseUrl: string) {
-  return `${baseUrl}/index.php?fc=module&module=kp_bulkstock&controller=bulkupdate`;
+export function buildBulkStockUrl(baseUrl: string, prestashopShopId?: string | null) {
+  return withQueryParams(`${baseUrl}/index.php?fc=module&module=kp_bulkstock&controller=bulkupdate`, {
+    idShop: prestashopShopId,
+  });
 }
 
-export function buildBulkStockSnapshotUrl(baseUrl: string, productId: number) {
-  return `${baseUrl}/index.php?fc=module&module=kp_bulkstock&controller=snapshot&productId=${encodeURIComponent(String(productId))}`;
+export function buildBulkStockSnapshotUrl(baseUrl: string, productId: number, prestashopShopId?: string | null) {
+  return withQueryParams(`${baseUrl}/index.php?fc=module&module=kp_bulkstock&controller=snapshot`, {
+    productId,
+    idShop: prestashopShopId,
+  });
 }
 
 export function buildAdminConnectorControllerUrl(
@@ -509,7 +527,42 @@ export function buildAdminConnectorControllerUrl(
     return `${trimmed}${separator}controller=${encodeURIComponent(controller)}${suffix ? `&${suffix}` : ''}`;
   }
 
-  return `${trimmed}/${encodeURIComponent(controller)}${suffix ? `?${suffix}` : ''}`;
+  const base = stripKnownModuleController(trimmed);
+  return `${base}/${encodeURIComponent(controller)}${suffix ? `?${suffix}` : ''}`;
+}
+
+function buildModuleControllerUrl(
+  moduleUrl: string,
+  controller: string,
+  params: Record<string, string | number | null | undefined> = {},
+) {
+  const trimmed = moduleUrl.replace(/\/+$/, '');
+
+  if (trimmed.includes('?')) {
+    const url = trimmed.includes('controller=')
+      ? trimmed.replace(/([?&]controller=)[^&]*/, `$1${encodeURIComponent(controller)}`)
+      : `${trimmed}&controller=${encodeURIComponent(controller)}`;
+    return withQueryParams(url, params);
+  }
+
+  const base = stripKnownModuleController(trimmed);
+  return withQueryParams(`${base}/${encodeURIComponent(controller)}`, params);
+}
+
+function stripKnownModuleController(url: string) {
+  return url.replace(/\/(?:bulkupdate|snapshot|stocksnapshot|capabilities|patch|mediaimport|mediaorder|mediaupdate|mediadelete)$/i, '');
+}
+
+function withQueryParams(url: string, params: Record<string, string | number | null | undefined>) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return;
+    query.set(key, String(value));
+  });
+
+  const suffix = query.toString();
+  if (!suffix) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}${suffix}`;
 }
 
 export function buildStockAvailableXml(input: {

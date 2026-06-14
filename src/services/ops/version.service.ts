@@ -1,4 +1,4 @@
-export const API_VERSION = process.env.APP_VERSION || '1.1.3';
+export const API_VERSION = process.env.APP_VERSION || '1.1.4';
 export const API_CONTRACT_VERSION = Number(process.env.API_CONTRACT_VERSION || 2);
 export const MIN_ADMIN_CONTRACT_VERSION = Number(process.env.MIN_ADMIN_CONTRACT_VERSION || 2);
 export const MIN_ADMIN_VERSION = process.env.MIN_ADMIN_VERSION || '0.3.0';
@@ -28,6 +28,11 @@ export function getApplicationVersionInfo(environment: string): ApplicationVersi
     minAdminVersion: MIN_ADMIN_VERSION,
     buildSha: process.env.GIT_SHA || process.env.COMMIT_SHA || null,
     builtAt: process.env.BUILD_DATE || null,
-    features: ['ifirma-invoices-v1', 'order-returns-v1', 'product-card-content-v1'],
+    features: [
+      'ifirma-invoices-v1',
+      'order-returns-v1',
+      'product-card-content-v1',
+      'prestashop-admin-connector-bridge-v1',
+    ],
   };
 }

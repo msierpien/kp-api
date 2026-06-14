@@ -188,6 +188,7 @@ export interface CreatePrestaShopOrderSlipResult {
 
 export interface PublishPrestaShopInvoiceLinkInput {
   orderId: number | string;
+  cartId?: number | string | null;
   customerId?: number | string | null;
   customerEmail?: string | null;
   customerHasAccount?: boolean;
@@ -686,6 +687,7 @@ export class PrestaShopClient {
     const customerId = normalizeId(input.customerId);
     const orderMessageId = await this.createOrderMessage({
       orderId,
+      cartId: normalizeId(input.cartId),
       customerId,
       message: input.message,
       private: false,
@@ -841,6 +843,7 @@ export class PrestaShopClient {
 
   private async createOrderMessage(input: {
     orderId: string;
+    cartId: string;
     customerId: string;
     message: string;
     private: boolean;
@@ -1039,10 +1042,11 @@ function buildOrderHistoryXml(input: { orderId: string; orderStateId: string }) 
 </prestashop>`;
 }
 
-function buildOrderMessageXml(input: { orderId: string; customerId?: string; message: string; private: boolean }) {
+function buildOrderMessageXml(input: { orderId: string; cartId?: string; customerId?: string; message: string; private: boolean }) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
   <message>
+    ${input.cartId ? `<id_cart>${escapeXml(input.cartId)}</id_cart>` : ''}
     <id_order>${escapeXml(input.orderId)}</id_order>
     ${input.customerId ? `<id_customer>${escapeXml(input.customerId)}</id_customer>` : ''}
     <message><![CDATA[${cdata(input.message)}]]></message>

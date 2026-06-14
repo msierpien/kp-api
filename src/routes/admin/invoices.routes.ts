@@ -30,7 +30,7 @@ export async function invoicesRoutes(fastify: FastifyInstance) {
     },
   );
 
-  fastify.post<{ Params: { id: string } }>(
+  fastify.post<{ Params: { id: string }; Body: { force?: boolean } }>(
     '/:id/publish-prestashop',
     {
       schema: {
@@ -41,11 +41,18 @@ export async function invoicesRoutes(fastify: FastifyInstance) {
           required: ['id'],
           properties: { id: { type: 'string' } },
         },
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { force: { type: 'boolean' } },
+        },
         response: { 200: looseObjectResponse },
       },
     },
     async (request, reply) => {
-      const result = await invoicesService.publishInvoiceToPrestaShop(request.params.id);
+      const result = await invoicesService.publishInvoiceToPrestaShop(request.params.id, {
+        force: request.body?.force === true,
+      });
       return reply.send(result);
     },
   );

@@ -229,7 +229,7 @@ export async function getPublicInvoicePdf(invoiceId: string, token: string) {
   };
 }
 
-export async function publishInvoiceToPrestaShop(invoiceId: string) {
+export async function publishInvoiceToPrestaShop(invoiceId: string, options: { force?: boolean } = {}) {
   const document = await prisma.salesDocument.findFirst({
     where: {
       id: invoiceId,
@@ -248,7 +248,7 @@ export async function publishInvoiceToPrestaShop(invoiceId: string) {
   }
 
   const existingDelivery = getPrestaShopDeliveryMetadata(document.responsePayloadJson);
-  if (existingDelivery?.orderMessageId) {
+  if (!options.force && existingDelivery?.orderMessageId) {
     return {
       invoiceId: document.id,
       status: 'ALREADY_PUBLISHED' as const,
@@ -269,6 +269,7 @@ export async function publishInvoiceToPrestaShop(invoiceId: string) {
   const customerHasAccount = Boolean(customerId) && !isBooleanishTrue(details.customer.is_guest);
   const delivery = await client.publishInvoiceLinkToOrder({
     orderId: document.externalOrderId,
+    cartId: details.order.id_cart ?? null,
     customerId,
     customerEmail: details.customer.email || document.order.customerEmail,
     customerHasAccount,

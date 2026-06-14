@@ -54,6 +54,15 @@ export async function syncShopOrderStatuses(shopId: string) {
   const now = new Date();
 
   for (const status of statuses) {
+    const operationalStatus = inferOperationalStatusFromShopStatus({
+      externalStatusId: status.id,
+      name: status.name,
+      isPaid: status.paid,
+      isCancelled: status.deleted,
+      shipped: status.shipped,
+      delivery: status.delivery,
+    });
+
     await prisma.shopOrderStatus.upsert({
       where: {
         shopId_externalStatusId: {
@@ -76,6 +85,7 @@ export async function syncShopOrderStatuses(shopId: string) {
         externalStatusId: status.id,
         name: status.name,
         color: status.color ?? null,
+        operationalStatus,
         isPaid: status.paid,
         isCancelled: status.deleted,
         sortOrder: Number(status.id) || 0,
@@ -135,7 +145,10 @@ export async function updateOrderExternalStatusFromWebhook(input: {
     data: {
       externalStatusId: input.externalStatusId,
       externalStatusName: input.externalStatusName ?? status?.name ?? null,
-      ...(status ? { operationalStatus: inferOperationalStatusFromShopStatus(status) } : {}),
+      operationalStatus: inferOperationalStatusFromShopStatus(status ?? {
+        externalStatusId: input.externalStatusId,
+        name: input.externalStatusName,
+      }),
       statusSyncedAt: new Date(),
     },
   });

@@ -18,6 +18,7 @@ export interface PrestaShopOrder {
   total_shipping_tax_excl?: string;
   total_paid: string;
   date_add: string;
+  date_upd?: string;
   associations?: {
     order_rows?: Array<{
       id: number;
@@ -131,6 +132,7 @@ export interface CreatePrestaShopProductInput {
 export function buildPrestaShopOrdersQuery(params: {
   limit?: number;
   dateFrom?: string;
+  dateField?: 'date_add' | 'date_upd';
   idFrom?: string;
   currentState?: number;
 }) {
@@ -141,7 +143,7 @@ export function buildPrestaShopOrdersQuery(params: {
   });
 
   if (params.dateFrom) {
-    queryParams.set('filter[date_add]', `>[${params.dateFrom}]`);
+    queryParams.set(`filter[${params.dateField ?? 'date_add'}]`, `>[${params.dateFrom}]`);
     queryParams.set('date', '1');
   }
   if (params.idFrom) {
@@ -310,6 +312,7 @@ export class PrestaShopClient {
   async fetchOrders(params: {
     limit?: number;
     dateFrom?: string;
+    dateField?: 'date_add' | 'date_upd';
     idFrom?: string;
     currentState?: number;
   }): Promise<PrestaShopOrder[]> {

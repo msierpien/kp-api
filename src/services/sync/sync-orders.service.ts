@@ -128,7 +128,8 @@ async function fetchOrdersByStatus(
   client: PrestaShopClient,
   params: {
     limit: number;
-    dateFrom: string;
+    dateFrom?: string;
+    dateField?: 'date_add' | 'date_upd';
     idFrom?: string;
   },
   currentStates: number[] | undefined,
@@ -178,7 +179,8 @@ export async function syncShopOrders(shopId: string, options: SyncShopOrdersOpti
 
     const orders = await fetchOrdersByStatus(context.client, {
       limit: syncLimit,
-      dateFrom,
+      dateFrom: options.fromOrderId ? undefined : dateFrom,
+      dateField: 'date_upd',
       idFrom: options.fromOrderId,
     }, resolvePaidOrderStatusIds(context.config));
 
@@ -193,7 +195,7 @@ export async function syncShopOrders(shopId: string, options: SyncShopOrdersOpti
           reserveStock: true,
           autoCreateWz,
           sendPersonalizationEmail: true,
-        });
+        }, orderData);
 
         if (imported.created) result.ordersCreated++;
         if (imported.skipped) result.ordersSkipped++;
@@ -325,10 +327,70 @@ async function createShopSyncContext(shopId: string): Promise<ShopSyncContext> {
   };
 }
 
+async function resolveOrderStatusSnapshot(
+  context: ShopSyncContext,
+  externalOrderId: string,
+  sourceOrder?: PrestaShopOrder,
+) {
+  let externalStatusId = sourceOrder?.current_state == null ? null : String(sourceOrder.current_state);
+  let externalStatusName: string | null = null;
+  let orderStatus: PrestaShopOrderDetails['orderStatus'] = null;
+
+  if (!externalStatusId) {
+    const details = await context.client.fetchOrderDetails(Number(externalOrderId));
+    externalStatusId = details.order.current_state == null ? null : String(details.order.current_state);
+    externalStatusName = details.orderStatus?.name ?? null;
+    orderStatus = details.orderStatus;
+  }
+
+  if (!externalStatusId) return null;
+
+  const mappedStatus = await prisma.shopOrderStatus.findUnique({
+    where: {
+      shopId_externalStatusId: {
+        shopId: context.shop.id,
+        externalStatusId,
+      },
+    },
+  });
+  const statusName = mappedStatus?.name ?? externalStatusName ?? null;
+
+  return {
+    externalStatusId,
+    externalStatusName: statusName,
+    operationalStatus: inferOperationalStatusFromShopStatus(mappedStatus ?? orderStatus ?? {
+      externalStatusId,
+      name: statusName,
+    }),
+  };
+}
+
+async function refreshExistingOrderStatus(
+  context: ShopSyncContext,
+  existingOrder: { id: string },
+  externalOrderId: string,
+  sourceOrder?: PrestaShopOrder,
+) {
+  const status = await resolveOrderStatusSnapshot(context, externalOrderId, sourceOrder);
+  if (!status) return;
+
+  await prisma.order.update({
+    where: { id: existingOrder.id },
+    data: {
+      externalStatusId: status.externalStatusId,
+      externalStatusName: status.externalStatusName,
+      operationalStatus: status.operationalStatus,
+      statusSyncedAt: new Date(),
+      statusSyncError: null,
+    },
+  });
+}
+
 async function importPrestaShopOrderWithContext(
   context: ShopSyncContext,
   externalOrderId: string,
-  options: Required<ImportPrestaShopOrderOptions>
+  options: Required<ImportPrestaShopOrderOptions>,
+  sourceOrder?: PrestaShopOrder,
 ): Promise<ImportPrestaShopOrderResult> {
   const result: ImportPrestaShopOrderResult = {
     success: false,
@@ -352,6 +414,13 @@ async function importPrestaShopOrderWithContext(
   if (existingOrder) {
     result.orderId = existingOrder.id;
     result.skipped = true;
+
+    try {
+      await refreshExistingOrderStatus(context, existingOrder, externalOrderId, sourceOrder);
+    } catch (statusError) {
+      const message = statusError instanceof Error ? statusError.message : 'Unknown status refresh error';
+      result.errors.push(`Order ${externalOrderId}: status not refreshed: ${message}`);
+    }
 
     if (options.reserveStock) {
       try {
@@ -491,6 +560,14 @@ async function createOrderFromDetails(
         },
       })
     : null;
+  const operationalStatus = inferOperationalStatusFromShopStatus(mappedStatus ?? {
+    externalStatusId,
+    name: details.orderStatus?.name ?? null,
+    isPaid: details.orderStatus?.paid ?? null,
+    isCancelled: details.orderStatus?.deleted ?? null,
+    shipped: details.orderStatus?.shipped ?? null,
+    delivery: details.orderStatus?.delivery ?? null,
+  });
 
   const order = await prisma.order.create({
     data: {
@@ -507,7 +584,7 @@ async function createOrderFromDetails(
       totalDiscountsTaxIncl: decimalOrNull(details.order.total_discounts_tax_incl),
       totalDiscountsTaxExcl: decimalOrNull(details.order.total_discounts_tax_excl),
       paymentMethod: details.order.payment || details.order.module || null,
-      operationalStatus: inferOperationalStatusFromShopStatus(mappedStatus),
+      operationalStatus,
       externalStatusId,
       externalStatusName: details.orderStatus?.name ?? null,
       createdAtShop: new Date(details.order.date_add),

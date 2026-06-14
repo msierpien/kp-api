@@ -20,6 +20,7 @@ import {
 } from '../orders/shipping-promise.service';
 import { resolveOrderSyncFromDate } from './order-sync-date';
 import { inferOperationalStatusFromShopStatus } from '../../lib/order-statuses';
+import { findShopOrderStatusRecord } from '../shop-order-statuses.repository';
 
 const DEBUG_SHOP_SYNC = process.env.DEBUG_SHOP_SYNC === 'true';
 
@@ -345,14 +346,7 @@ async function resolveOrderStatusSnapshot(
 
   if (!externalStatusId) return null;
 
-  const mappedStatus = await prisma.shopOrderStatus.findUnique({
-    where: {
-      shopId_externalStatusId: {
-        shopId: context.shop.id,
-        externalStatusId,
-      },
-    },
-  });
+  const mappedStatus = await findShopOrderStatusRecord(context.shop.id, externalStatusId);
   const statusName = mappedStatus?.name ?? externalStatusName ?? null;
 
   return {
@@ -551,14 +545,7 @@ async function createOrderFromDetails(
   const orderShippingPromise = maxShippingPromise(Array.from(shippingPromisesByItemId.values()));
   const externalStatusId = details.order.current_state == null ? null : String(details.order.current_state);
   const mappedStatus = externalStatusId
-    ? await prisma.shopOrderStatus.findUnique({
-        where: {
-          shopId_externalStatusId: {
-            shopId: context.shop.id,
-            externalStatusId,
-          },
-        },
-      })
+    ? await findShopOrderStatusRecord(context.shop.id, externalStatusId)
     : null;
   const operationalStatus = inferOperationalStatusFromShopStatus(mappedStatus ?? {
     externalStatusId,

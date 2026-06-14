@@ -9,6 +9,12 @@ import {
   inferOperationalStatusFromShopStatus,
 } from '../../lib/order-statuses';
 import type { OrderOperationalStatus } from '../../lib/order-statuses';
+import {
+  findShopOrderStatusRecord,
+  listShopOrderStatusRecords,
+  updateShopOrderStatusMappingRecord,
+  upsertShopOrderStatusRecord,
+} from '../shop-order-statuses.repository';
 
 function tenantScopedWhere(id: string) {
   const tenantId = getTenantId();
@@ -42,21 +48,14 @@ function createClient(shop: any) {
 }
 
 async function findMappedExternalStatusId(shopId: string, operationalStatus: OrderOperationalStatus) {
-  const statuses = await prisma.shopOrderStatus.findMany({
-    where: { shopId },
-    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-  });
-
+  const statuses = await listShopOrderStatusRecords(shopId);
   const mappedStatus = statuses.find((status) => inferOperationalStatusFromShopStatus(status) === operationalStatus);
   return mappedStatus?.externalStatusId ?? null;
 }
 
 export async function listShopOrderStatuses(shopId: string) {
   const shop = await getShop(shopId);
-  return prisma.shopOrderStatus.findMany({
-    where: { shopId: shop.id },
-    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-  });
+  return listShopOrderStatusRecords(shop.id);
 }
 
 export async function syncShopOrderStatuses(shopId: string) {
@@ -73,48 +72,18 @@ export async function syncShopOrderStatuses(shopId: string) {
       shipped: status.shipped,
       delivery: status.delivery,
     });
-    const existingStatus = await prisma.shopOrderStatus.findUnique({
-      where: {
-        shopId_externalStatusId: {
-          shopId: shop.id,
-          externalStatusId: status.id,
-        },
-      },
-      select: {
-        operationalStatus: true,
-      },
-    });
-
-    await prisma.shopOrderStatus.upsert({
-      where: {
-        shopId_externalStatusId: {
-          shopId: shop.id,
-          externalStatusId: status.id,
-        },
-      },
-      update: {
-        name: status.name,
-        color: status.color ?? null,
-        isPaid: status.paid,
-        isCancelled: status.deleted,
-        ...(existingStatus?.operationalStatus ? {} : { operationalStatus }),
-        sortOrder: Number(status.id) || 0,
-        payloadJson: status.payload as Prisma.InputJsonValue,
-        lastSyncedAt: now,
-      },
-      create: {
-        tenantId: shop.tenantId,
-        shopId: shop.id,
-        externalStatusId: status.id,
-        name: status.name,
-        color: status.color ?? null,
-        operationalStatus,
-        isPaid: status.paid,
-        isCancelled: status.deleted,
-        sortOrder: Number(status.id) || 0,
-        payloadJson: status.payload as Prisma.InputJsonValue,
-        lastSyncedAt: now,
-      },
+    await upsertShopOrderStatusRecord({
+      tenantId: shop.tenantId,
+      shopId: shop.id,
+      externalStatusId: status.id,
+      name: status.name,
+      color: status.color ?? null,
+      operationalStatus,
+      isPaid: status.paid,
+      isCancelled: status.deleted,
+      sortOrder: Number(status.id) || 0,
+      payloadJson: status.payload as Prisma.InputJsonValue,
+      lastSyncedAt: now,
     });
   }
 
@@ -124,23 +93,17 @@ export async function syncShopOrderStatuses(shopId: string) {
 export async function updateShopOrderStatusMappings(shopId: string, input: ShopOrderStatusMappingInput) {
   const shop = await getShop(shopId);
 
-  await prisma.$transaction(async (tx) => {
-    for (const status of input.statuses) {
-      await tx.shopOrderStatus.updateMany({
-        where: {
-          shopId: shop.id,
-          externalStatusId: status.externalStatusId,
-        },
-        data: {
-          ...(status.operationalStatus === undefined ? {} : { operationalStatus: status.operationalStatus }),
-          ...(status.isPaid === undefined ? {} : { isPaid: status.isPaid }),
-          ...(status.isCancelled === undefined ? {} : { isCancelled: status.isCancelled }),
-          ...(status.isReadyForInvoice === undefined ? {} : { isReadyForInvoice: status.isReadyForInvoice }),
-          ...(status.isInvoiceTarget === undefined ? {} : { isInvoiceTarget: status.isInvoiceTarget }),
-        },
-      });
-    }
-  });
+  for (const status of input.statuses) {
+    await updateShopOrderStatusMappingRecord({
+      shopId: shop.id,
+      externalStatusId: status.externalStatusId,
+      operationalStatus: status.operationalStatus,
+      isPaid: status.isPaid,
+      isCancelled: status.isCancelled,
+      isReadyForInvoice: status.isReadyForInvoice,
+      isInvoiceTarget: status.isInvoiceTarget,
+    });
+  }
 
   return listShopOrderStatuses(shop.id);
 }
@@ -151,14 +114,7 @@ export async function updateOrderExternalStatusFromWebhook(input: {
   externalStatusId: string;
   externalStatusName?: string | null;
 }) {
-  const status = await prisma.shopOrderStatus.findUnique({
-    where: {
-      shopId_externalStatusId: {
-        shopId: input.shopId,
-        externalStatusId: input.externalStatusId,
-      },
-    },
-  });
+  const status = await findShopOrderStatusRecord(input.shopId, input.externalStatusId);
 
   await prisma.order.updateMany({
     where: {
@@ -209,14 +165,7 @@ export async function updateOrderStatus(orderId: string, input: UpdateOrderStatu
     return prisma.order.findUnique({ where: { id: order.id } });
   }
 
-  const status = await prisma.shopOrderStatus.findUnique({
-    where: {
-      shopId_externalStatusId: {
-        shopId: order.shopId,
-        externalStatusId,
-      },
-    },
-  });
+  const status = await findShopOrderStatusRecord(order.shopId, externalStatusId);
 
   try {
     await createClient(order.shop).createOrderHistory({

@@ -14,6 +14,7 @@ import { authRoutes } from './routes/auth.routes';
 import { adminRoutes } from './routes/admin';
 import { personalizationRoutes } from './routes/public/personalization.routes';
 import { prestashopWebhooksRoutes } from './routes/public/prestashop-webhooks.routes';
+import { publicInvoicesRoutes } from './routes/public/invoices.routes';
 import { reloadEmailService } from './services/admin/email-settings.service';
 import { initializeEmailService } from './services/email/email.service';
 import { initializeScheduler } from './services/scheduler/scheduler.service';
@@ -226,6 +227,7 @@ server.register(authRoutes, { prefix: '/auth' });
 server.register(adminRoutes, { prefix: '/admin' });
 server.register(personalizationRoutes, { prefix: '/personalization' });
 server.register(prestashopWebhooksRoutes, { prefix: '/webhooks/prestashop' });
+server.register(publicInvoicesRoutes, { prefix: '/public/invoices' });
 
 // Bull Board Dashboard (tylko w development lub z flagą)
 if (config.app.isDevelopment) {

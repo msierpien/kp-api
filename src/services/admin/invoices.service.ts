@@ -1,7 +1,10 @@
 import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { Buffer } from 'node:buffer';
 import path from 'node:path';
 import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
+import { config } from '../../config';
 import { decrypt } from '../../lib/encryption';
 import { getTenantId } from '../../lib/tenant-context';
 import { IfirmaClient } from '../ifirma/ifirma-client';
@@ -206,8 +209,114 @@ export async function getInvoicePdf(invoiceId: string) {
   };
 }
 
+export async function getPublicInvoicePdf(invoiceId: string, token: string) {
+  const document = await prisma.salesDocument.findUnique({
+    where: { id: invoiceId },
+    include: { order: true },
+  });
+
+  if (!document) throw new Error('Faktura nie znaleziona');
+  if (!verifyPublicInvoiceToken(document, token)) {
+    throw new Error('Nieprawidłowy token faktury');
+  }
+
+  const pdfPath = await ensureInvoicePdf(document);
+  const label = document.externalNumber || document.externalId || document.order.orderReference || document.id;
+  const safeLabel = label.replace(/[^\w.-]+/g, '_');
+  return {
+    path: pdfPath,
+    filename: `faktura-${safeLabel}.pdf`,
+  };
+}
+
+export async function publishInvoiceToPrestaShop(invoiceId: string) {
+  const document = await prisma.salesDocument.findFirst({
+    where: {
+      id: invoiceId,
+      ...(getTenantId() ? { tenantId: getTenantId() as string } : {}),
+    },
+    include: { order: { include: { shop: true } } },
+  });
+
+  if (!document) throw new Error('Faktura nie znaleziona');
+  if (document.documentType !== 'INVOICE') throw new Error('Do PrestaShop można przekazać tylko fakturę pierwotną');
+  if (!['ISSUED', 'SENT'].includes(document.status)) {
+    throw new Error('Faktura musi być wystawiona przed przekazaniem do PrestaShop');
+  }
+  if (document.order.shop.platform !== 'PRESTASHOP') {
+    throw new Error('Przekazywanie faktury obsługiwane jest tylko dla PrestaShop');
+  }
+
+  const existingDelivery = getPrestaShopDeliveryMetadata(document.responsePayloadJson);
+  if (existingDelivery?.orderMessageId) {
+    return {
+      invoiceId: document.id,
+      status: 'ALREADY_PUBLISHED' as const,
+      ...existingDelivery,
+    };
+  }
+
+  await ensureInvoicePdf(document);
+  const publicUrl = buildPublicInvoicePdfUrl(document);
+  const externalOrderId = Number(document.externalOrderId);
+  if (!Number.isFinite(externalOrderId) || externalOrderId <= 0) {
+    throw new Error('Zamówienie nie ma prawidłowego ID PrestaShop');
+  }
+
+  const client = createPrestaShopClient(document.order.shop);
+  const details = await client.fetchOrderDetails(externalOrderId);
+  const customerId = details.order.id_customer ?? details.customer.id;
+  const customerHasAccount = Boolean(customerId) && !isBooleanishTrue(details.customer.is_guest);
+  const delivery = await client.publishInvoiceLinkToOrder({
+    orderId: document.externalOrderId,
+    customerId,
+    customerEmail: details.customer.email || document.order.customerEmail,
+    customerHasAccount,
+    languageId: details.order.id_lang ?? null,
+    shopId: details.order.id_shop ?? null,
+    message: buildPrestaShopInvoiceMessage({
+      invoiceNumber: document.externalNumber || document.externalId || document.id,
+      orderReference: document.order.orderReference,
+      publicUrl,
+    }),
+  });
+
+  const deliveryMetadata = {
+    publicUrl,
+    invoiceNumber: document.externalNumber || document.externalId || null,
+    deliveredAt: new Date().toISOString(),
+    customerHasAccount,
+    ...delivery,
+  };
+
+  await prisma.salesDocument.update({
+    where: { id: document.id },
+    data: {
+      pdfUrl: publicUrl,
+      responsePayloadJson: mergePrestaShopDeliveryMetadata(document.responsePayloadJson, deliveryMetadata),
+    },
+  });
+
+  return {
+    invoiceId: document.id,
+    status: 'PUBLISHED' as const,
+    ...deliveryMetadata,
+  };
+}
+
+export function buildPublicInvoicePdfUrl(document: {
+  id: string;
+  tenantId: string;
+  externalId: string | null;
+}) {
+  const baseUrl = config.app.url.replace(/\/+$/, '');
+  const token = signPublicInvoiceToken(document);
+  return `${baseUrl}/public/invoices/${encodeURIComponent(document.id)}/pdf?token=${encodeURIComponent(token)}`;
+}
+
 async function ensureInvoicePdf(document: {
   id: string;
+  tenantId?: string;
   shopId: string;
   externalId: string | null;
   pdfPath: string | null;
@@ -253,6 +362,99 @@ async function resolveStoredInvoicePdfPath(pdfPath: string | null) {
   } catch {
     return null;
   }
+}
+
+function createPrestaShopClient(shop: {
+  baseUrl: string;
+  apiKey: string;
+  configJson?: Prisma.JsonValue | null;
+}) {
+  const shopConfig = (shop.configJson && typeof shop.configJson === 'object' && !Array.isArray(shop.configJson))
+    ? shop.configJson as Record<string, any>
+    : {};
+  const authType = shopConfig.authType === 'ADMIN_API' ? 'ADMIN_API' : 'WEB_SERVICE';
+  return new PrestaShopClient({
+    baseUrl: shop.baseUrl,
+    apiKey: decrypt(shop.apiKey),
+    authType,
+    adminApiConfig: authType === 'ADMIN_API' ? shopConfig.adminApi : undefined,
+  });
+}
+
+function signPublicInvoiceToken(document: { id: string; tenantId: string; externalId: string | null }) {
+  return createHmac('sha256', config.auth.jwtAccessSecret)
+    .update(`${document.tenantId}:${document.id}:${document.externalId ?? ''}`)
+    .digest('base64url');
+}
+
+function verifyPublicInvoiceToken(
+  document: { id: string; tenantId: string; externalId: string | null },
+  token: string,
+) {
+  const expected = signPublicInvoiceToken(document);
+  const expectedBuffer = Buffer.from(expected);
+  const tokenBuffer = Buffer.from(token);
+  return expectedBuffer.length === tokenBuffer.length && timingSafeEqual(expectedBuffer, tokenBuffer);
+}
+
+function buildPrestaShopInvoiceMessage(input: {
+  invoiceNumber: string;
+  orderReference: string;
+  publicUrl: string;
+}) {
+  const invoiceNumber = escapeHtml(input.invoiceNumber);
+  const orderReference = escapeHtml(input.orderReference);
+  const publicUrl = escapeHtml(input.publicUrl);
+  return [
+    'Dzień dobry,',
+    `faktura ${invoiceNumber} do zamówienia ${orderReference} jest dostępna pod adresem:`,
+    `<a href="${publicUrl}" target="_blank" rel="noopener">${publicUrl}</a>`,
+    'Pozdrawiamy',
+  ].join('<br>');
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function isBooleanishTrue(value: unknown) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value === 1;
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes';
+}
+
+function getPrestaShopDeliveryMetadata(value: unknown) {
+  const payload = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, any>
+    : {};
+  const metadata = payload.kp?.prestashopInvoiceDelivery;
+  return metadata && typeof metadata === 'object' ? metadata as Record<string, unknown> : null;
+}
+
+function mergePrestaShopDeliveryMetadata(value: unknown, deliveryMetadata: Record<string, unknown>) {
+  const payload: Record<string, unknown> = value && typeof value === 'object' && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : value == null
+      ? {}
+      : { ifirma: value };
+  const kp = payload.kp && typeof payload.kp === 'object' && !Array.isArray(payload.kp)
+    ? { ...(payload.kp as Record<string, unknown>) }
+    : {};
+
+  return toJson({
+    ...payload,
+    kp: {
+      ...kp,
+      prestashopInvoiceDelivery: deliveryMetadata,
+    },
+  });
 }
 
 async function issuePreparedInvoice(documentId: string, shopId: string, payload: Record<string, unknown>) {

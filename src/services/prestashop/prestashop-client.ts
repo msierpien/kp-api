@@ -1,5 +1,6 @@
 /// <reference lib="dom" />
 import { Buffer } from 'node:buffer';
+import { randomBytes } from 'node:crypto';
 
 export interface PrestaShopOrder {
   id: number;
@@ -8,6 +9,8 @@ export interface PrestaShopOrder {
   id_address_delivery?: number;
   id_address_invoice?: number;
   id_carrier?: number;
+  id_lang?: number | string;
+  id_shop?: number | string;
   reference: string;
   current_state: number;
   payment?: string;
@@ -43,6 +46,7 @@ interface PrestaShopCustomer {
   email: string;
   firstname: string;
   lastname: string;
+  is_guest?: string | number | boolean;
 }
 
 export interface PrestaShopAddress {
@@ -180,6 +184,24 @@ export interface CreatePrestaShopOrderSlipInput {
 export interface CreatePrestaShopOrderSlipResult {
   id: string | null;
   raw: string;
+}
+
+export interface PublishPrestaShopInvoiceLinkInput {
+  orderId: number | string;
+  customerId?: number | string | null;
+  customerEmail?: string | null;
+  customerHasAccount?: boolean;
+  languageId?: number | string | null;
+  shopId?: number | string | null;
+  message: string;
+}
+
+export interface PublishPrestaShopInvoiceLinkResult {
+  orderMessageId: string | null;
+  customerThreadId: string | null;
+  customerMessageId: string | null;
+  customerPanelDelivered: boolean;
+  customerPanelSkippedReason?: string;
 }
 
 export interface PrestaShopOrderDetails {
@@ -657,6 +679,81 @@ export class PrestaShopClient {
     return { id, raw: text };
   }
 
+  async publishInvoiceLinkToOrder(input: PublishPrestaShopInvoiceLinkInput): Promise<PublishPrestaShopInvoiceLinkResult> {
+    const orderId = normalizeId(input.orderId);
+    if (!orderId) throw new Error('PrestaShop order id is required');
+
+    const customerId = normalizeId(input.customerId);
+    const orderMessageId = await this.createOrderMessage({
+      orderId,
+      customerId,
+      message: input.message,
+      private: false,
+    });
+
+    if (!input.customerHasAccount) {
+      return {
+        orderMessageId,
+        customerThreadId: null,
+        customerMessageId: null,
+        customerPanelDelivered: false,
+        customerPanelSkippedReason: 'Klient nie ma konta w sklepie albo zamówienie jest gościnne',
+      };
+    }
+
+    if (!customerId) {
+      return {
+        orderMessageId,
+        customerThreadId: null,
+        customerMessageId: null,
+        customerPanelDelivered: false,
+        customerPanelSkippedReason: 'Brak ID klienta PrestaShop',
+      };
+    }
+
+    try {
+      const contactId = await this.fetchDefaultContactId();
+      if (!contactId) {
+        return {
+          orderMessageId,
+          customerThreadId: null,
+          customerMessageId: null,
+          customerPanelDelivered: false,
+          customerPanelSkippedReason: 'Brak kontaktu PrestaShop do utworzenia wątku klienta',
+        };
+      }
+
+      const customerThreadId = await this.findOrCreateCustomerThread({
+        orderId,
+        customerId,
+        customerEmail: input.customerEmail ?? '',
+        languageId: normalizeId(input.languageId) || '1',
+        shopId: normalizeId(input.shopId),
+        contactId,
+      });
+      const customerMessageId = await this.createCustomerMessage({
+        customerThreadId,
+        message: input.message,
+        private: false,
+      });
+
+      return {
+        orderMessageId,
+        customerThreadId,
+        customerMessageId,
+        customerPanelDelivered: true,
+      };
+    } catch (error) {
+      return {
+        orderMessageId,
+        customerThreadId: null,
+        customerMessageId: null,
+        customerPanelDelivered: false,
+        customerPanelSkippedReason: error instanceof Error ? error.message : 'Nie udało się dodać wiadomości do panelu klienta',
+      };
+    }
+  }
+
   private async fetchAddressIfPresent(addressId: unknown): Promise<PrestaShopAddress | null> {
     const id = normalizeId(addressId);
     if (!id) return null;
@@ -740,6 +837,82 @@ export class PrestaShopClient {
     // This would require order_histories endpoint
     // Implementation depends on PrestaShop version
     console.log(`Would add note to order ${orderId}: ${message}`);
+  }
+
+  private async createOrderMessage(input: {
+    orderId: string;
+    customerId: string;
+    message: string;
+    private: boolean;
+  }) {
+    const { text, response } = await this.fetchWebServiceText('messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/xml',
+        Accept: 'application/xml',
+      },
+      body: buildOrderMessageXml(input),
+    });
+    return response.headers.get('location')?.match(/\/messages\/(\d+)\b/)?.[1] ?? extractXmlTagValue(text, 'id') ?? null;
+  }
+
+  private async fetchDefaultContactId() {
+    const data = await this.fetchWebService<any>('contacts?display=[id]&sort=[id_ASC]&limit=1');
+    const contacts = data.contacts
+      ? Array.isArray(data.contacts) ? data.contacts : [data.contacts]
+      : [];
+    return normalizeId(contacts[0]?.id) || null;
+  }
+
+  private async findOrCreateCustomerThread(input: {
+    orderId: string;
+    customerId: string;
+    customerEmail: string;
+    languageId: string;
+    shopId: string;
+    contactId: string;
+  }) {
+    const query = [
+      `filter[id_order]=[${encodeURIComponent(input.orderId)}]`,
+      `filter[id_customer]=[${encodeURIComponent(input.customerId)}]`,
+      'display=full',
+      'sort=[id_DESC]',
+      'limit=1',
+    ].join('&');
+    const data = await this.fetchWebService<any>(`customer_threads?${query}`);
+    const threads = data.customer_threads
+      ? Array.isArray(data.customer_threads) ? data.customer_threads : [data.customer_threads]
+      : [];
+    const existingId = normalizeId(threads[0]?.id);
+    if (existingId) return existingId;
+
+    const { text, response } = await this.fetchWebServiceText('customer_threads', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/xml',
+        Accept: 'application/xml',
+      },
+      body: buildCustomerThreadXml(input),
+    });
+    const createdId = response.headers.get('location')?.match(/\/customer_threads\/(\d+)\b/)?.[1] ?? extractXmlTagValue(text, 'id');
+    if (!createdId) throw new Error('PrestaShop customer thread was created but response did not contain id');
+    return createdId;
+  }
+
+  private async createCustomerMessage(input: {
+    customerThreadId: string;
+    message: string;
+    private: boolean;
+  }) {
+    const { text, response } = await this.fetchWebServiceText('customer_messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/xml',
+        Accept: 'application/xml',
+      },
+      body: buildCustomerMessageXml(input),
+    });
+    return response.headers.get('location')?.match(/\/customer_messages\/(\d+)\b/)?.[1] ?? extractXmlTagValue(text, 'id') ?? null;
   }
 }
 
@@ -864,6 +1037,57 @@ function buildOrderHistoryXml(input: { orderId: string; orderStateId: string }) 
     <id_order_state>${escapeXml(input.orderStateId)}</id_order_state>
   </order_history>
 </prestashop>`;
+}
+
+function buildOrderMessageXml(input: { orderId: string; customerId?: string; message: string; private: boolean }) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
+  <message>
+    <id_order>${escapeXml(input.orderId)}</id_order>
+    ${input.customerId ? `<id_customer>${escapeXml(input.customerId)}</id_customer>` : ''}
+    <message><![CDATA[${cdata(input.message)}]]></message>
+    <private>${input.private ? 1 : 0}</private>
+  </message>
+</prestashop>`;
+}
+
+function buildCustomerThreadXml(input: {
+  orderId: string;
+  customerId: string;
+  customerEmail: string;
+  languageId: string;
+  shopId?: string;
+  contactId: string;
+}) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
+  <customer_thread>
+    <id_lang>${escapeXml(input.languageId)}</id_lang>
+    ${input.shopId ? `<id_shop>${escapeXml(input.shopId)}</id_shop>` : ''}
+    <id_customer>${escapeXml(input.customerId)}</id_customer>
+    <id_order>${escapeXml(input.orderId)}</id_order>
+    <id_contact>${escapeXml(input.contactId)}</id_contact>
+    ${input.customerEmail ? `<email><![CDATA[${cdata(input.customerEmail)}]]></email>` : ''}
+    <token>${escapeXml(randomCustomerThreadToken())}</token>
+    <status>open</status>
+  </customer_thread>
+</prestashop>`;
+}
+
+function buildCustomerMessageXml(input: { customerThreadId: string; message: string; private: boolean }) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
+  <customer_message>
+    <id_customer_thread>${escapeXml(input.customerThreadId)}</id_customer_thread>
+    <message><![CDATA[${cdata(input.message)}]]></message>
+    <private>${input.private ? 1 : 0}</private>
+    <read>0</read>
+  </customer_message>
+</prestashop>`;
+}
+
+function randomCustomerThreadToken() {
+  return `kp${randomBytes(12).toString('hex')}`;
 }
 
 export function buildOrderSlipXml(input: CreatePrestaShopOrderSlipInput) {

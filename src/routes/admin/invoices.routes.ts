@@ -31,6 +31,26 @@ export async function invoicesRoutes(fastify: FastifyInstance) {
   );
 
   fastify.post<{ Params: { id: string } }>(
+    '/:id/publish-prestashop',
+    {
+      schema: {
+        tags: ['ifirma'],
+        summary: 'Przekaż link PDF faktury do zamówienia PrestaShop',
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string' } },
+        },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      const result = await invoicesService.publishInvoiceToPrestaShop(request.params.id);
+      return reply.send(result);
+    },
+  );
+
+  fastify.post<{ Params: { id: string } }>(
     '/:id/retry',
     {
       schema: {

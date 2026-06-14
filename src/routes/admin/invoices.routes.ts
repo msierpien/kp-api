@@ -1,3 +1,4 @@
+import { createReadStream } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import * as invoicesService from '../../services/admin/invoices.service';
 
@@ -7,6 +8,28 @@ const looseObjectResponse = {
 } as const;
 
 export async function invoicesRoutes(fastify: FastifyInstance) {
+  fastify.get<{ Params: { id: string } }>(
+    '/:id/pdf',
+    {
+      schema: {
+        tags: ['ifirma'],
+        summary: 'Pobierz zapisany lokalnie PDF faktury',
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string' } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const pdf = await invoicesService.getInvoicePdf(request.params.id);
+      reply
+        .type('application/pdf')
+        .header('Content-Disposition', `inline; filename="${pdf.filename}"`);
+      return reply.send(createReadStream(pdf.path));
+    },
+  );
+
   fastify.post<{ Params: { id: string } }>(
     '/:id/retry',
     {

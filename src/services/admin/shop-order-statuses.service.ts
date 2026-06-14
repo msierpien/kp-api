@@ -8,6 +8,7 @@ import {
   assertOrderOperationalStatus,
   inferOperationalStatusFromShopStatus,
 } from '../../lib/order-statuses';
+import type { OrderOperationalStatus } from '../../lib/order-statuses';
 
 function tenantScopedWhere(id: string) {
   const tenantId = getTenantId();
@@ -38,6 +39,16 @@ function createClient(shop: any) {
     authType,
     adminApiConfig: authType === 'ADMIN_API' ? config.adminApi : undefined,
   });
+}
+
+async function findMappedExternalStatusId(shopId: string, operationalStatus: OrderOperationalStatus) {
+  const statuses = await prisma.shopOrderStatus.findMany({
+    where: { shopId },
+    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+  });
+
+  const mappedStatus = statuses.find((status) => inferOperationalStatusFromShopStatus(status) === operationalStatus);
+  return mappedStatus?.externalStatusId ?? null;
 }
 
 export async function listShopOrderStatuses(shopId: string) {
@@ -191,14 +202,7 @@ export async function updateOrderStatus(orderId: string, input: UpdateOrderStatu
 
   let externalStatusId = input.externalStatusId ?? null;
   if (!externalStatusId && operationalStatus && order.shop.platform === 'PRESTASHOP') {
-    const mappedStatus = await prisma.shopOrderStatus.findFirst({
-      where: {
-        shopId: order.shopId,
-        operationalStatus,
-      },
-      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-    });
-    externalStatusId = mappedStatus?.externalStatusId ?? null;
+    externalStatusId = await findMappedExternalStatusId(order.shopId, operationalStatus);
   }
 
   if (!externalStatusId || order.shop.platform !== 'PRESTASHOP') {

@@ -402,6 +402,17 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
         });
       }
 
+      const consumedReservations = await tx.warehouseReservation.findMany({
+        where: {
+          tenantId: order.shop.tenantId,
+          orderItemId: item.id,
+          status: 'CONSUMED',
+        },
+      });
+      const consumedQuantity = consumedReservations
+        .filter((reservation) => reservation.warehouseProductId === warehouseProductId)
+        .reduce((sum, reservation) => sum.plus(reservation.quantity), new Prisma.Decimal(0));
+
       const existingReservation = await tx.warehouseReservation.findFirst({
         where: {
           tenantId: order.shop.tenantId,
@@ -410,11 +421,40 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
         },
       });
 
+      if (consumedQuantity.gte(requestedQuantity)) {
+        const issue: OrderReservationIssue = {
+          orderItemId: item.id,
+          sku: item.sku,
+          productName: item.productNameSnapshot,
+          requestedQuantity: item.quantity,
+          reservedQuantity: Number(consumedQuantity),
+          warehouseProductId,
+          status: existingReservation ? 'UPDATED' : 'UNCHANGED',
+          message: 'Pozycja została już wydana dokumentem WZ',
+        };
+
+        if (existingReservation) {
+          await closeActiveReservationInTx(
+            tx,
+            existingReservation,
+            'RELEASED',
+            'Pozycja została już wydana dokumentem WZ',
+          );
+          result.updated++;
+        } else {
+          result.unchanged++;
+        }
+        result.issues.push(issue);
+        continue;
+      }
+
+      const targetActiveQuantity = requestedQuantity.minus(consumedQuantity);
+
       if (existingReservation && existingReservation.warehouseProductId !== warehouseProductId) {
         await closeActiveReservationInTx(tx, existingReservation, 'RELEASED', 'Zmiana mapowania produktu zamówienia');
       } else if (existingReservation) {
         const currentQuantity = new Prisma.Decimal(existingReservation.quantity);
-        const delta = requestedQuantity.minus(currentQuantity);
+        const delta = targetActiveQuantity.minus(currentQuantity);
 
         if (delta.equals(0)) {
           result.unchanged++;
@@ -423,7 +463,7 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
             sku: item.sku,
             productName: item.productNameSnapshot,
             requestedQuantity: item.quantity,
-            reservedQuantity: Number(currentQuantity),
+            reservedQuantity: Number(consumedQuantity.plus(currentQuantity)),
             warehouseProductId,
             status: 'UNCHANGED',
           });
@@ -433,7 +473,7 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
         if (delta.lt(0)) {
           await tx.warehouseReservation.update({
             where: { id: existingReservation.id },
-            data: { quantity: requestedQuantity },
+            data: { quantity: targetActiveQuantity },
           });
           if (existingReservation.source === 'LOCAL_STOCK') {
             await adjustProductStock(tx, warehouseProductId, delta.mul(-1));
@@ -444,9 +484,10 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
             sku: item.sku,
             productName: item.productNameSnapshot,
             requestedQuantity: item.quantity,
-            reservedQuantity: item.quantity,
+            reservedQuantity: Number(requestedQuantity),
             warehouseProductId,
             status: 'UPDATED',
+            message: consumedQuantity.gt(0) ? 'Część pozycji została już wydana WZ' : undefined,
           });
           continue;
         }
@@ -459,7 +500,7 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
             sku: item.sku,
             productName: item.productNameSnapshot,
             requestedQuantity: item.quantity,
-            reservedQuantity: Number(currentQuantity),
+            reservedQuantity: Number(consumedQuantity.plus(currentQuantity)),
             warehouseProductId,
             status: 'MISSING_STOCK',
             message: additionalAvailability.source !== existingReservation.source
@@ -478,14 +519,14 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
           await adjustProductStock(tx, warehouseProductId, additionalAvailability.quantity.mul(-1));
         }
 
-        if (nextQuantity.lt(requestedQuantity)) {
+        if (nextQuantity.lt(targetActiveQuantity)) {
           result.partial++;
           result.issues.push({
             orderItemId: item.id,
             sku: item.sku,
             productName: item.productNameSnapshot,
             requestedQuantity: item.quantity,
-            reservedQuantity: Number(nextQuantity),
+            reservedQuantity: Number(consumedQuantity.plus(nextQuantity)),
             warehouseProductId,
             status: 'PARTIAL',
             message: 'Rezerwacja częściowa z powodu niewystarczającego stanu',
@@ -497,15 +538,16 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
             sku: item.sku,
             productName: item.productNameSnapshot,
             requestedQuantity: item.quantity,
-            reservedQuantity: item.quantity,
+            reservedQuantity: Number(requestedQuantity),
             warehouseProductId,
             status: 'UPDATED',
+            message: consumedQuantity.gt(0) ? 'Część pozycji została już wydana WZ' : undefined,
           });
         }
         continue;
       }
 
-      const availability = await reserveQuantityForProduct(tx, warehouseProductId, requestedQuantity, settings.allowNegativeStock);
+      const availability = await reserveQuantityForProduct(tx, warehouseProductId, targetActiveQuantity, settings.allowNegativeStock);
       if (availability.quantity.lte(0)) {
         result.missingStock++;
         result.issues.push({
@@ -513,7 +555,7 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
           sku: item.sku,
           productName: item.productNameSnapshot,
           requestedQuantity: item.quantity,
-          reservedQuantity: 0,
+          reservedQuantity: Number(consumedQuantity),
           warehouseProductId,
           status: 'MISSING_STOCK',
           message: 'Brak stanu do rezerwacji',
@@ -536,14 +578,14 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
         availability.quantity,
       );
 
-      if (availability.quantity.lt(requestedQuantity)) {
+      if (availability.quantity.lt(targetActiveQuantity)) {
         result.partial++;
         result.issues.push({
           orderItemId: item.id,
           sku: item.sku,
           productName: item.productNameSnapshot,
           requestedQuantity: item.quantity,
-          reservedQuantity: Number(availability.quantity),
+          reservedQuantity: Number(consumedQuantity.plus(availability.quantity)),
           warehouseProductId,
           status: 'PARTIAL',
           message: 'Rezerwacja częściowa z powodu niewystarczającego stanu',
@@ -555,9 +597,10 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
           sku: item.sku,
           productName: item.productNameSnapshot,
           requestedQuantity: item.quantity,
-          reservedQuantity: item.quantity,
+          reservedQuantity: Number(requestedQuantity),
           warehouseProductId,
           status: 'RESERVED',
+          message: consumedQuantity.gt(0) ? 'Zarezerwowano pozostałą ilość po WZ' : undefined,
         });
       }
     }

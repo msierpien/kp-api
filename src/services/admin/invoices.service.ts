@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
@@ -183,6 +183,38 @@ export async function cancelInvoice(invoiceId: string) {
     },
     include: { emailLogs: { orderBy: { createdAt: 'desc' }, take: 10 } },
   });
+}
+
+export async function getInvoicePdf(invoiceId: string) {
+  const document = await prisma.salesDocument.findFirst({
+    where: {
+      id: invoiceId,
+      ...(getTenantId() ? { tenantId: getTenantId() as string } : {}),
+    },
+    include: { order: true },
+  });
+
+  if (!document) throw new Error('Faktura nie znaleziona');
+  if (!document.pdfPath) throw new Error('PDF faktury nie jest zapisany lokalnie');
+
+  const storageRoot = path.resolve(process.cwd(), 'storage', 'invoices');
+  const pdfPath = path.resolve(document.pdfPath);
+  if (!pdfPath.startsWith(`${storageRoot}${path.sep}`)) {
+    throw new Error('Nieprawidłowa ścieżka PDF faktury');
+  }
+
+  try {
+    await stat(pdfPath);
+  } catch {
+    throw new Error('Plik PDF faktury nie istnieje w storage');
+  }
+
+  const label = document.externalNumber || document.externalId || document.order.orderReference || document.id;
+  const safeLabel = label.replace(/[^\w.-]+/g, '_');
+  return {
+    path: pdfPath,
+    filename: `faktura-${safeLabel}.pdf`,
+  };
 }
 
 async function issuePreparedInvoice(documentId: string, shopId: string, payload: Record<string, unknown>) {

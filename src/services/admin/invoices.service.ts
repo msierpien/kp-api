@@ -195,19 +195,8 @@ export async function getInvoicePdf(invoiceId: string) {
   });
 
   if (!document) throw new Error('Faktura nie znaleziona');
-  if (!document.pdfPath) throw new Error('PDF faktury nie jest zapisany lokalnie');
 
-  const storageRoot = path.resolve(process.cwd(), 'storage', 'invoices');
-  const pdfPath = path.resolve(document.pdfPath);
-  if (!pdfPath.startsWith(`${storageRoot}${path.sep}`)) {
-    throw new Error('Nieprawidłowa ścieżka PDF faktury');
-  }
-
-  try {
-    await stat(pdfPath);
-  } catch {
-    throw new Error('Plik PDF faktury nie istnieje w storage');
-  }
+  const pdfPath = await ensureInvoicePdf(document);
 
   const label = document.externalNumber || document.externalId || document.order.orderReference || document.id;
   const safeLabel = label.replace(/[^\w.-]+/g, '_');
@@ -215,6 +204,55 @@ export async function getInvoicePdf(invoiceId: string) {
     path: pdfPath,
     filename: `faktura-${safeLabel}.pdf`,
   };
+}
+
+async function ensureInvoicePdf(document: {
+  id: string;
+  shopId: string;
+  externalId: string | null;
+  pdfPath: string | null;
+}) {
+  const existingPdfPath = await resolveStoredInvoicePdfPath(document.pdfPath);
+  if (existingPdfPath) return existingPdfPath;
+
+  if (!document.externalId) {
+    throw new Error('PDF faktury nie jest zapisany lokalnie i brakuje identyfikatora iFirma do ponownego pobrania');
+  }
+
+  const settings = await getDecryptedIfirmaSettings(document.shopId);
+  const client = new IfirmaClient({
+    login: settings.login,
+    invoiceKey: settings.invoiceKey,
+  });
+
+  try {
+    const pdfPath = await downloadAndStoreInvoicePdf(client, document.id, document.externalId);
+    await prisma.salesDocument.update({
+      where: { id: document.id },
+      data: { pdfPath },
+    });
+    return pdfPath;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Nie udało się pobrać PDF z iFirma';
+    throw new Error(`PDF faktury nie jest zapisany lokalnie. Ponowne pobranie z iFirma nie powiodło się: ${message}`);
+  }
+}
+
+async function resolveStoredInvoicePdfPath(pdfPath: string | null) {
+  if (!pdfPath) return null;
+
+  const storageRoot = path.resolve(process.cwd(), 'storage', 'invoices');
+  const resolvedPdfPath = path.resolve(pdfPath);
+  if (!resolvedPdfPath.startsWith(`${storageRoot}${path.sep}`)) {
+    throw new Error('Nieprawidłowa ścieżka PDF faktury');
+  }
+
+  try {
+    await stat(resolvedPdfPath);
+    return resolvedPdfPath;
+  } catch {
+    return null;
+  }
 }
 
 async function issuePreparedInvoice(documentId: string, shopId: string, payload: Record<string, unknown>) {

@@ -41,6 +41,21 @@ describe('warehouse wholesale order document (ZH)', () => {
     assert.match(DOCS_SERVICE, /createPzFromWholesaleOrder/);
   });
 
+  it('eksport CSV ZH zatwierdza robocze zamówienie hurtowe', () => {
+    assert.match(DOCS_ROUTES, /\/documents\/:id\/export-csv/);
+    assert.match(DOCS_ROUTES, /\/documents\/zh\/providers\/:providerId\/export-csv/);
+    assert.match(DOCS_SERVICE, /exportWholesaleOrderCsv/);
+    assert.match(DOCS_SERVICE, /exportWholesaleOrdersForProviderCsv/);
+    assert.match(DOCS_SERVICE, /if \(document\.status === 'DRAFT'\)[\s\S]{0,80}await confirmDocument\(document\.id\)/);
+    assert.match(DOCS_SERVICE, /await confirmDocument\(documentId\)/);
+  });
+
+  it('CSV ZH ma formaty koszyka GoDan i PartyDeco', () => {
+    assert.match(DOCS_SERVICE, /Kod produktu\/Ean', 'Ilość', 'Jednostka miary/);
+    assert.match(DOCS_SERVICE, /'code', 'count'/);
+    assert.match(DOCS_SERVICE, /template === 'GODAN' \? ',' : ';'/);
+  });
+
   it('zatwierdzenie PZ przelicza aktywne rezerwacje hurtowe', () => {
     assert.match(DOCS_SERVICE, /if \(doc\.type === 'PZ'\)[\s\S]{0,120}reallocateWholesaleBackordersForProducts/);
     assert.match(DOCS_SERVICE, /source: 'WHOLESALE_BACKORDER'/);

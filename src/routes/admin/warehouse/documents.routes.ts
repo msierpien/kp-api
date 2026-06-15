@@ -139,6 +139,26 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
     }
   });
 
+  fastify.post('/documents/zh/providers/:providerId/export-csv', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Wygeneruj CSV roboczych zamówień hurtowych ZH dostawcy i zatwierdź je',
+      params: {
+        type: 'object',
+        required: ['providerId'],
+        properties: { providerId: { type: 'string' } },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { providerId: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await warehouseDocumentService.exportWholesaleOrdersForProviderCsv(request.params.providerId);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd eksportu CSV zamówienia hurtowego';
+      return reply.status(400).send({ error: 'Error', message });
+    }
+  });
+
   fastify.post('/documents/:id/items/merge', {
     schema: {
       tags: ['warehouse'],
@@ -237,6 +257,27 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd usuwania pozycji dokumentu';
       const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/documents/:id/export-csv', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Wygeneruj CSV zamówienia hurtowego ZH i zatwierdź dokument roboczy',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await warehouseDocumentService.exportWholesaleOrderCsv(request.params.id);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd eksportu CSV zamówienia hurtowego';
+      const status = message.includes('nie znaleziony') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }
   });

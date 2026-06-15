@@ -69,6 +69,18 @@ export interface CreatePzFromWholesaleOrderResult {
   skippedReason?: string;
 }
 
+export interface WholesaleOrderCsvExportResult {
+  providerId: string | null;
+  providerName: string | null;
+  filename: string;
+  content: string;
+  mimeType: string;
+  rows: number;
+  confirmedDocuments: number;
+  document?: Awaited<ReturnType<typeof getDocumentById>>;
+  documents?: Array<NonNullable<Awaited<ReturnType<typeof getDocumentById>>>>;
+}
+
 export interface DocumentsQuery {
   page?: number;
   limit?: number;
@@ -377,6 +389,224 @@ export async function createDocument(input: CreateDocumentInput) {
 function metadataRecord(value: Prisma.JsonValue | null | undefined) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
+}
+
+function metadataString(value: Prisma.JsonValue | null | undefined, key: string) {
+  const record = metadataRecord(value);
+  const item = record[key];
+  return typeof item === 'string' && item.trim() ? item.trim() : null;
+}
+
+function numberFromDecimal(value: Prisma.Decimal | number | string | null | undefined) {
+  if (value === null || value === undefined) return 0;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function slugify(value: string) {
+  return value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'dostawca';
+}
+
+function todayFileDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function formatCsvQuantity(value: number) {
+  const rounded = Math.round(value * 1000) / 1000;
+  if (Number.isInteger(rounded)) return String(rounded);
+  return String(rounded).replace('.', ',');
+}
+
+function csvEscape(value: string | number | null | undefined, separator: ',' | ';') {
+  const text = value === null || value === undefined ? '' : String(value);
+  if (!text.includes(separator) && !text.includes('"') && !text.includes('\n') && !text.includes('\r')) return text;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function normalizeCsvUnit(value: string | null | undefined, template: WholesaleOrderCsvTemplate) {
+  const unit = value?.trim() || 'szt';
+  if (template === 'GODAN' && /^szt\.?$/i.test(unit)) return 'szt.';
+  return unit;
+}
+
+type WholesaleOrderCsvTemplate = 'GODAN' | 'PARTYDECO' | 'GENERIC';
+
+type WholesaleOrderCsvRow = {
+  code: string;
+  quantity: number;
+  unit: string;
+  providerPreset: WholesaleOrderCsvTemplate | null;
+};
+
+function providerPresetFromConfig(configJson: Prisma.JsonValue | null | undefined): WholesaleOrderCsvTemplate | null {
+  const config = metadataRecord(configJson);
+  const preset = typeof config.preset === 'string' ? config.preset.toUpperCase() : '';
+  if (preset === 'GODAN' || preset === 'PARTYDECO') return preset;
+  return null;
+}
+
+function detectWholesaleOrderCsvTemplate(providerName: string | null, rows: WholesaleOrderCsvRow[]): WholesaleOrderCsvTemplate {
+  const presets = rows.map((row) => row.providerPreset).filter(Boolean);
+  if (presets.includes('PARTYDECO')) return 'PARTYDECO';
+  if (presets.includes('GODAN')) return 'GODAN';
+
+  const normalizedName = (providerName ?? '').toLowerCase();
+  if (normalizedName.includes('partydeco')) return 'PARTYDECO';
+  if (normalizedName.includes('godan')) return 'GODAN';
+
+  return 'GENERIC';
+}
+
+function pickWholesaleMappingForProvider(item: any, providerId: string | null) {
+  const mappings = Array.isArray(item.product?.wholesaleMappings)
+    ? item.product.wholesaleMappings
+    : [];
+  if (mappings.length === 0) return null;
+  if (!providerId) return mappings[0];
+  return mappings.find((mapping: any) => mapping.providerId === providerId) ?? mappings[0];
+}
+
+function buildWholesaleOrderCsv(documents: any[]): Omit<WholesaleOrderCsvExportResult, 'confirmedDocuments' | 'document' | 'documents'> {
+  const firstDocument = documents[0];
+  const firstMetadata = firstDocument ? firstDocument.metadataJson as Prisma.JsonValue | null : null;
+  const providerId = metadataString(firstMetadata, 'providerId');
+  let providerName = metadataString(firstMetadata, 'providerName');
+  const rows: WholesaleOrderCsvRow[] = [];
+
+  for (const document of documents) {
+    const documentProviderId = metadataString(document.metadataJson as Prisma.JsonValue | null, 'providerId') ?? providerId;
+    const documentProviderName = metadataString(document.metadataJson as Prisma.JsonValue | null, 'providerName');
+    if (!providerName && documentProviderName) providerName = documentProviderName;
+
+    for (const item of document.items ?? []) {
+      const mapping = pickWholesaleMappingForProvider(item, documentProviderId);
+      const mappingProviderName = typeof mapping?.provider?.name === 'string' ? mapping.provider.name : null;
+      if (!providerName && mappingProviderName) providerName = mappingProviderName;
+
+      const code = [
+        mapping?.externalSku,
+        mapping?.externalEan,
+        item.scannedEan,
+        item.product?.sku,
+      ].find((value) => typeof value === 'string' && value.trim())?.trim();
+      if (!code) continue;
+
+      rows.push({
+        code,
+        quantity: numberFromDecimal(item.quantity),
+        unit: item.product?.unit ?? 'szt',
+        providerPreset: providerPresetFromConfig(mapping?.provider?.configJson as Prisma.JsonValue | null | undefined),
+      });
+    }
+  }
+
+  if (rows.length === 0) throw new Error('Brak pozycji z kodem dostawcy do eksportu CSV');
+
+  const template = detectWholesaleOrderCsvTemplate(providerName, rows);
+  const separator: ',' | ';' = template === 'GODAN' ? ',' : ';';
+  const aggregated = new Map<string, WholesaleOrderCsvRow>();
+
+  for (const row of rows) {
+    const unit = normalizeCsvUnit(row.unit, template);
+    const key = template === 'GODAN' ? `${row.code}|${unit}` : row.code;
+    const existing = aggregated.get(key);
+    if (existing) {
+      existing.quantity += row.quantity;
+    } else {
+      aggregated.set(key, { ...row, unit });
+    }
+  }
+
+  const exportRows = Array.from(aggregated.values())
+    .filter((row) => row.quantity > 0)
+    .sort((a, b) => a.code.localeCompare(b.code, 'pl'));
+  if (exportRows.length === 0) throw new Error('Brak pozycji z dodatnią ilością do eksportu CSV');
+
+  const csvRows = template === 'GODAN'
+    ? [
+        ['Kod produktu/Ean', 'Ilość', 'Jednostka miary'],
+        ...exportRows.map((row) => [row.code, formatCsvQuantity(row.quantity), row.unit]),
+      ]
+    : [
+        ['code', 'count'],
+        ...exportRows.map((row) => [row.code, formatCsvQuantity(row.quantity)]),
+      ];
+  const content = `${csvRows.map((row) => row.map((cell) => csvEscape(cell, separator)).join(separator)).join('\n')}\n`;
+  const documentPart = documents.length === 1 ? `-${slugify(documents[0].number)}` : '';
+
+  return {
+    providerId,
+    providerName,
+    filename: `zamowienie-${slugify(providerName ?? 'dostawca')}${documentPart}-${todayFileDate()}.csv`,
+    content,
+    mimeType: 'text/csv;charset=utf-8',
+    rows: exportRows.length,
+  };
+}
+
+export async function exportWholesaleOrderCsv(id: string): Promise<WholesaleOrderCsvExportResult> {
+  const tenantId = getTenantId();
+  const where: any = { id };
+  if (tenantId) where.tenantId = tenantId;
+
+  const document = await prisma.warehouseDocument.findFirst({
+    where,
+    include: documentDetailInclude,
+  });
+  if (!document) throw new Error('Dokument nie znaleziony');
+  if (document.type !== 'ZH') throw new Error('CSV zamówienia można wygenerować tylko dla dokumentu ZH');
+  if (document.status === 'CANCELLED') throw new Error('Nie można wygenerować CSV z anulowanego zamówienia hurtowego');
+  if (document.items.length === 0) throw new Error('Dokument ZH nie ma żadnych pozycji');
+
+  const csv = buildWholesaleOrderCsv([document]);
+  let confirmedDocuments = 0;
+  if (document.status === 'DRAFT') {
+    await confirmDocument(document.id);
+    confirmedDocuments = 1;
+  }
+
+  return {
+    ...csv,
+    confirmedDocuments,
+    document: await getDocumentById(document.id),
+  };
+}
+
+export async function exportWholesaleOrdersForProviderCsv(providerId: string): Promise<WholesaleOrderCsvExportResult> {
+  const tenantId = getTenantId();
+  if (!tenantId) throw new Error('Brak kontekstu tenanta');
+
+  const documents = await prisma.warehouseDocument.findMany({
+    where: {
+      tenantId,
+      type: 'ZH',
+      status: 'DRAFT',
+    },
+    include: documentDetailInclude,
+    orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+  });
+  const providerDocuments = documents.filter((document) => metadataString(document.metadataJson, 'providerId') === providerId);
+  if (providerDocuments.length === 0) throw new Error('Brak roboczych dokumentów ZH do eksportu dla tego dostawcy');
+
+  const csv = buildWholesaleOrderCsv(providerDocuments);
+  const documentIds = providerDocuments.map((document) => document.id);
+  for (const documentId of documentIds) {
+    await confirmDocument(documentId);
+  }
+
+  const confirmedDocuments = (await Promise.all(documentIds.map((documentId) => getDocumentById(documentId))))
+    .filter((document): document is NonNullable<typeof document> => Boolean(document));
+
+  return {
+    ...csv,
+    confirmedDocuments: documentIds.length,
+    documents: confirmedDocuments,
+  };
 }
 
 export async function createPzFromWholesaleOrder(id: string): Promise<CreatePzFromWholesaleOrderResult> {

@@ -42,6 +42,7 @@ export interface PricingProductsInput {
   productIds?: string[];
   shopIds?: string[];
   catalogId?: string;
+  priceGroupId?: string;
   triggeredBy?: PriceSyncTriggeredBy;
 }
 
@@ -335,6 +336,7 @@ async function resolveProductsAndShops(tenantId: string, input: PricingProductsI
     isActive: true,
     ...(input.productIds?.length ? { id: { in: input.productIds.slice(0, take) } } : {}),
     ...(input.catalogId ? { catalogId: input.catalogId } : {}),
+    ...(input.priceGroupId ? { priceGroupMembers: { some: { priceGroupId: input.priceGroupId } } } : {}),
   };
 
   const shopWhere: Prisma.ShopWhereInput = {

@@ -272,6 +272,7 @@ export function pricingProductsBodySchema() {
       productIds: { type: 'array', maxItems: 500, items: { type: 'string' } },
       shopIds: { type: 'array', items: { type: 'string' } },
       catalogId: { type: 'string' },
+      priceGroupId: { type: 'string' },
     },
   };
 }

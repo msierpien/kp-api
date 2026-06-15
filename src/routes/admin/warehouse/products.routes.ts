@@ -192,6 +192,8 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
           marginPercent: { type: ['number', 'null'], minimum: 0 },
           minProfit: { type: ['number', 'null'], minimum: 0 },
           fixedNetPrice: { type: ['number', 'null'], minimum: 0 },
+          priceMode: { type: 'string', enum: ['MARGIN', 'FIXED'] },
+          costCeilingEnabled: { type: ['boolean', 'null'] },
           vatRate: { type: ['number', 'null'], minimum: 0 },
           roundingMode: { type: 'string', enum: ['END_99', 'TENTH', 'CENT'] },
           syncMode: { type: 'string', enum: ['AUTO', 'CONFIRM', 'MANUAL'] },

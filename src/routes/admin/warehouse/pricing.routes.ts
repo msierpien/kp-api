@@ -9,7 +9,8 @@ export async function registerWarehousePricingRoutes(fastify: FastifyInstance) {
       querystring: {
         type: 'object',
         properties: {
-          level: { type: 'string', enum: ['GLOBAL', 'SHOP', 'CATALOG', 'PRODUCT'] },
+          level: { type: 'string', enum: ['GLOBAL', 'SHOP', 'CATALOG', 'GROUP', 'PRODUCT'] },
+          priceGroupId: { type: 'string' },
           shopId: { type: 'string' },
           catalogId: { type: 'string' },
           warehouseProductId: { type: 'string' },
@@ -23,6 +24,164 @@ export async function registerWarehousePricingRoutes(fastify: FastifyInstance) {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd pobierania reguł cennika';
       return reply.status(message.includes('Brak kontekstu') ? 400 : 500).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.get('/pricing/settings', {
+    schema: { tags: ['warehouse-pricing'], summary: 'Ustawienia domyślne cennika' },
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      return reply.send(await pricingService.getPricingSettings());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania ustawień cennika';
+      return reply.status(message.includes('Brak kontekstu') ? 400 : 500).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.patch('/pricing/settings', {
+    schema: {
+      tags: ['warehouse-pricing'],
+      summary: 'Edytuj ustawienia domyślne cennika',
+      body: pricingSettingsBodySchema(),
+    },
+  }, async (request: FastifyRequest<{ Body: pricingService.PricingSettingsInput }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await pricingService.updatePricingSettings(request.body));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd edycji ustawień cennika';
+      return reply.status(400).send({ error: 'Bad Request', message });
+    }
+  });
+
+  fastify.get('/pricing/products', {
+    schema: {
+      tags: ['warehouse-pricing'],
+      summary: 'Product-first lista efektywnych cen',
+      querystring: {
+        type: 'object',
+        required: ['shopId'],
+        properties: {
+          shopId: { type: 'string' },
+          search: { type: 'string' },
+          priceGroupId: { type: 'string' },
+          source: { type: 'string', enum: ['ALL', 'PRODUCT', 'GROUP', 'CATALOG', 'SHOP', 'DEFAULT', 'CEILING_FALLBACK'] },
+          status: { type: 'string', enum: ['ALL', 'READY', 'MISSING_PRICE', 'WARNING', 'ALERT', 'NO_GROUP', 'OVERRIDES_GROUP', 'BELOW_COST'] },
+          page: { type: 'integer', minimum: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 200 },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: pricingService.PricingProductsQuery }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await pricingService.getPricingProducts(request.query));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania produktów cennika';
+      return reply.status(message.includes('nie istnieje') ? 404 : message.includes('Wybierz') ? 400 : 500).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.get('/pricing/groups', {
+    schema: { tags: ['warehouse-pricing'], summary: 'Lista grup cenowych' },
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      return reply.send(await pricingService.listPriceGroups());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania grup cenowych';
+      return reply.status(message.includes('Brak kontekstu') ? 400 : 500).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/pricing/groups', {
+    schema: { tags: ['warehouse-pricing'], summary: 'Utwórz grupę cenową', body: priceGroupBodySchema() },
+  }, async (request: FastifyRequest<{ Body: pricingService.PriceGroupInput }>, reply: FastifyReply) => {
+    try {
+      return reply.status(201).send(await pricingService.createPriceGroup(request.body));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd tworzenia grupy cenowej';
+      return reply.status(400).send({ error: 'Bad Request', message });
+    }
+  });
+
+  fastify.patch('/pricing/groups/:id', {
+    schema: {
+      tags: ['warehouse-pricing'],
+      summary: 'Edytuj grupę cenową',
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      body: priceGroupBodySchema(false),
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: Partial<pricingService.PriceGroupInput> }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await pricingService.updatePriceGroup(request.params.id, request.body));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd edycji grupy cenowej';
+      return reply.status(message.includes('nie znaleziona') ? 404 : 400).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/pricing/groups/:id/members', {
+    schema: {
+      tags: ['warehouse-pricing'],
+      summary: 'Dodaj produkty do grupy cenowej',
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      body: { type: 'object', required: ['productIds'], properties: { productIds: { type: 'array', maxItems: 500, items: { type: 'string' } } } },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: pricingService.PriceGroupMembersInput }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await pricingService.addPriceGroupMembers(request.params.id, request.body));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd dodawania produktów do grupy';
+      return reply.status(message.includes('nie znaleziona') ? 404 : 400).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.delete('/pricing/groups/:id/members/:productId', {
+    schema: {
+      tags: ['warehouse-pricing'],
+      summary: 'Usuń produkt z grupy cenowej',
+      params: {
+        type: 'object',
+        required: ['id', 'productId'],
+        properties: { id: { type: 'string' }, productId: { type: 'string' } },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string; productId: string } }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await pricingService.removePriceGroupMember(request.params.id, request.params.productId));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd usuwania produktu z grupy';
+      return reply.status(400).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.put('/pricing/groups/:id/price', {
+    schema: {
+      tags: ['warehouse-pricing'],
+      summary: 'Ustaw cenę grupy',
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      body: groupPriceBodySchema(),
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: pricingService.PriceGroupPriceInput }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await pricingService.setPriceGroupPrice(request.params.id, request.body));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd ustawiania ceny grupy';
+      return reply.status(message.includes('nie znaleziona') ? 404 : 400).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/pricing/products/:productId/revert-to-group', {
+    schema: {
+      tags: ['warehouse-pricing'],
+      summary: 'Cofnij nadpisanie produktu do ceny grupy',
+      params: { type: 'object', required: ['productId'], properties: { productId: { type: 'string' } } },
+      body: { type: 'object', required: ['shopId'], properties: { shopId: { type: 'string' } } },
+    },
+  }, async (request: FastifyRequest<{ Params: { productId: string }; Body: pricingService.RevertProductToGroupInput }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await pricingService.revertProductToGroup(request.params.productId, request.body));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd cofania nadpisania produktu';
+      return reply.status(message.includes('nie znalezion') ? 404 : 400).send({ error: 'Error', message });
     }
   });
 
@@ -122,17 +281,65 @@ function pricingRuleBodySchema(requireLevel = true) {
     type: 'object',
     ...(requireLevel ? { required: ['level'] } : {}),
     properties: {
-      level: { type: 'string', enum: ['GLOBAL', 'SHOP', 'CATALOG', 'PRODUCT'] },
+      level: { type: 'string', enum: ['GLOBAL', 'SHOP', 'CATALOG', 'GROUP', 'PRODUCT'] },
       shopId: { type: ['string', 'null'] },
       catalogId: { type: ['string', 'null'] },
+      priceGroupId: { type: ['string', 'null'] },
       warehouseProductId: { type: ['string', 'null'] },
       marginPercent: { type: ['number', 'null'], minimum: 0 },
       minProfit: { type: ['number', 'null'], minimum: 0 },
       fixedNetPrice: { type: ['number', 'null'], minimum: 0 },
+      priceMode: { type: 'string', enum: ['MARGIN', 'FIXED'] },
+      costCeilingEnabled: { type: ['boolean', 'null'] },
       vatRate: { type: ['number', 'null'], minimum: 0 },
       roundingMode: { type: 'string', enum: ['END_99', 'TENTH', 'CENT'] },
       syncMode: { type: 'string', enum: ['AUTO', 'CONFIRM', 'MANUAL'] },
       isActive: { type: 'boolean' },
+    },
+  };
+}
+
+function pricingSettingsBodySchema() {
+  return {
+    type: 'object',
+    properties: {
+      defaultMarginPercent: { type: 'number', minimum: 0 },
+      defaultMinProfit: { type: 'number', minimum: 0 },
+      defaultVatRate: { type: 'number', minimum: 0 },
+      defaultRoundingMode: { type: 'string', enum: ['END_99', 'TENTH', 'CENT'] },
+      defaultSyncMode: { type: 'string', enum: ['AUTO', 'CONFIRM', 'MANUAL'] },
+      costCeilingEnabledDefault: { type: 'boolean' },
+      abnormalProfitThreshold: { type: 'number', minimum: 0 },
+    },
+  };
+}
+
+function priceGroupBodySchema(requireName = true) {
+  return {
+    type: 'object',
+    ...(requireName ? { required: ['name'] } : {}),
+    properties: {
+      name: { type: 'string' },
+      description: { type: ['string', 'null'] },
+      priority: { type: 'integer' },
+      isActive: { type: 'boolean' },
+    },
+  };
+}
+
+function groupPriceBodySchema() {
+  return {
+    type: 'object',
+    properties: {
+      shopId: { type: ['string', 'null'] },
+      marginPercent: { type: ['number', 'null'], minimum: 0 },
+      minProfit: { type: ['number', 'null'], minimum: 0 },
+      fixedNetPrice: { type: ['number', 'null'], minimum: 0 },
+      priceMode: { type: 'string', enum: ['MARGIN', 'FIXED'] },
+      costCeilingEnabled: { type: ['boolean', 'null'] },
+      vatRate: { type: ['number', 'null'], minimum: 0 },
+      roundingMode: { type: ['string', 'null'], enum: ['END_99', 'TENTH', 'CENT'] },
+      syncMode: { type: ['string', 'null'], enum: ['AUTO', 'CONFIRM', 'MANUAL'] },
     },
   };
 }

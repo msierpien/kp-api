@@ -45,6 +45,9 @@ model Tenant {
   stockSyncLogs         StockSyncLog[]
   priceSyncLogs         PriceSyncLog[]
   pricingRules          WarehousePricingRule[]
+  priceGroups           WarehousePriceGroup[]
+  priceGroupMembers     WarehousePriceGroupMember[]
+  pricingSettings       WarehousePricingSettings?
   productShopPrices     WarehouseProductShopPrice[]
   shopProductImportLogs ShopProductImportLog[]
   wholesaleProviders    WholesaleProvider[]
@@ -966,6 +969,7 @@ model WarehouseProduct {
   stockSyncLogs         StockSyncLog[]
   priceSyncLogs         PriceSyncLog[]
   pricingRules          WarehousePricingRule[]
+  priceGroupMembers     WarehousePriceGroupMember[]
   shopPrices            WarehouseProductShopPrice[]
   wholesaleMappings     WholesaleProductMapping[]
   warehouseReservations WarehouseReservation[]
@@ -1059,13 +1063,16 @@ model WarehousePricingRule {
   level              String
   shopId             String?  @map("shop_id")
   catalogId          String?  @map("catalog_id")
+  priceGroupId       String?  @map("price_group_id")
   warehouseProductId String?  @map("warehouse_product_id")
   marginPercent      Decimal? @map("margin_percent") @db.Decimal(7, 3)
   minProfit          Decimal? @map("min_profit") @db.Decimal(10, 2)
   fixedNetPrice      Decimal? @map("fixed_net_price") @db.Decimal(10, 2)
-  vatRate            Decimal  @default(23) @map("vat_rate") @db.Decimal(5, 2)
-  roundingMode       String   @default("END_99") @map("rounding_mode")
-  syncMode           String   @default("CONFIRM") @map("sync_mode")
+  priceMode          String   @default("MARGIN") @map("price_mode")
+  costCeilingEnabled Boolean? @map("cost_ceiling_enabled")
+  vatRate            Decimal? @map("vat_rate") @db.Decimal(5, 2)
+  roundingMode       String?  @map("rounding_mode")
+  syncMode           String?  @map("sync_mode")
   isActive           Boolean  @default(true) @map("is_active")
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
@@ -1073,6 +1080,7 @@ model WarehousePricingRule {
   tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   shop             Shop?            @relation(fields: [shopId], references: [id], onDelete: Cascade)
   catalog          WarehouseCatalog? @relation(fields: [catalogId], references: [id], onDelete: Cascade)
+  priceGroup       WarehousePriceGroup? @relation(fields: [priceGroupId], references: [id], onDelete: Cascade)
   warehouseProduct WarehouseProduct? @relation(fields: [warehouseProductId], references: [id], onDelete: Cascade)
   shopPrices       WarehouseProductShopPrice[]
 
@@ -1080,9 +1088,67 @@ model WarehousePricingRule {
   @@index([tenantId, level])
   @@index([shopId])
   @@index([catalogId])
+  @@index([priceGroupId])
   @@index([warehouseProductId])
   @@index([tenantId, isActive])
   @@map("warehouse_pricing_rules")
+}
+
+model WarehousePriceGroup {
+  id          String   @id @default(cuid())
+  tenantId    String   @map("tenant_id")
+  name        String
+  description String?
+  priority    Int      @default(100)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  tenant  Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  members WarehousePriceGroupMember[]
+  rules   WarehousePricingRule[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@map("warehouse_price_groups")
+}
+
+model WarehousePriceGroupMember {
+  id                 String   @id @default(cuid())
+  tenantId           String   @map("tenant_id")
+  priceGroupId       String   @map("price_group_id")
+  warehouseProductId String   @map("warehouse_product_id")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  tenant           Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  priceGroup       WarehousePriceGroup @relation(fields: [priceGroupId], references: [id], onDelete: Cascade)
+  warehouseProduct WarehouseProduct    @relation(fields: [warehouseProductId], references: [id], onDelete: Cascade)
+
+  @@unique([priceGroupId, warehouseProductId])
+  @@index([tenantId])
+  @@index([tenantId, warehouseProductId])
+  @@index([priceGroupId])
+  @@index([warehouseProductId])
+  @@map("warehouse_price_group_members")
+}
+
+model WarehousePricingSettings {
+  id                        String   @id @default(cuid())
+  tenantId                  String   @unique @map("tenant_id")
+  defaultMarginPercent      Decimal  @default(30) @map("default_margin_percent") @db.Decimal(7, 3)
+  defaultMinProfit          Decimal  @default(1) @map("default_min_profit") @db.Decimal(10, 2)
+  defaultVatRate            Decimal  @default(23) @map("default_vat_rate") @db.Decimal(5, 2)
+  defaultRoundingMode       String   @default("END_99") @map("default_rounding_mode")
+  defaultSyncMode           String   @default("CONFIRM") @map("default_sync_mode")
+  costCeilingEnabledDefault Boolean  @default(true) @map("cost_ceiling_enabled_default")
+  abnormalProfitThreshold   Decimal  @default(200) @map("abnormal_profit_threshold") @db.Decimal(7, 3)
+  createdAt                 DateTime @default(now()) @map("created_at")
+  updatedAt                 DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("warehouse_pricing_settings")
 }
 
 model WarehouseProductShopPrice {
@@ -1091,13 +1157,23 @@ model WarehouseProductShopPrice {
   warehouseProductId String   @map("warehouse_product_id")
   shopId             String   @map("shop_id")
   pricingRuleId      String?  @map("pricing_rule_id")
+  pricingRuleLevel   String?  @map("pricing_rule_level")
+  priceSource        String?  @map("price_source")
+  priceMode          String?  @map("price_mode")
+  priceGroupId       String?  @map("price_group_id")
+  priceGroupName     String?  @map("price_group_name")
   costBasis          Decimal? @map("cost_basis") @db.Decimal(10, 2)
   netPrice           Decimal? @map("net_price") @db.Decimal(10, 2)
   grossPrice         Decimal? @map("gross_price") @db.Decimal(10, 2)
   marginPercent      Decimal? @map("margin_percent") @db.Decimal(7, 3)
+  configuredMarginPercent Decimal? @map("configured_margin_percent") @db.Decimal(7, 3)
+  realizedMarginPercent   Decimal? @map("realized_margin_percent") @db.Decimal(7, 3)
   profitAmount       Decimal? @map("profit_amount") @db.Decimal(10, 2)
   warningCode        String?  @map("warning_code")
   warningMessage     String?  @map("warning_message") @db.Text
+  infoCode           String?  @map("info_code")
+  overridesGroup     Boolean  @default(false) @map("overrides_group")
+  syncMode           String?  @map("sync_mode")
   calculatedAt       DateTime @default(now()) @map("calculated_at")
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")

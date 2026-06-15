@@ -3,6 +3,7 @@ import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
 import { createDocument } from './warehouse-documents.service';
 import { STOCK_RESERVATION_ORDER_OPERATIONAL_STATUSES } from '../../lib/order-statuses';
+import { reserveOrder } from './warehouse-reservations.service';
 
 export type ReplenishmentSource = 'order' | 'low' | 'all';
 export type ReplenishmentCsvFormat = 'ean' | 'symbol' | 'full';
@@ -129,6 +130,35 @@ export interface ReplenishmentResponse {
     latestWholesaleSyncAt: Date | null;
     lowStockThreshold: number;
   };
+}
+
+export interface ReplenishmentRecalculateResult {
+  totalReservations: number;
+  totalOrders: number;
+  processedOrders: number;
+  changedOrders: number;
+  failedOrders: number;
+  reserved: number;
+  unchanged: number;
+  updated: number;
+  partial: number;
+  missingMapping: number;
+  missingStock: number;
+  orderResults: Array<{
+    orderId: string;
+    orderRef: string | null;
+    reserved: number;
+    unchanged: number;
+    updated: number;
+    partial: number;
+    missingMapping: number;
+    missingStock: number;
+  }>;
+  failures: Array<{
+    orderId: string;
+    orderRef: string | null;
+    message: string;
+  }>;
 }
 
 export interface ReplenishmentCsvResult {
@@ -783,6 +813,90 @@ export async function getReplenishment(query: ReplenishmentQuery = {}): Promise<
       lowStockThreshold,
     },
   };
+}
+
+export async function recalculateWholesaleBackorderReservations(): Promise<ReplenishmentRecalculateResult> {
+  const tenantId = requireTenantId();
+  const reservations = await prisma.warehouseReservation.findMany({
+    where: {
+      tenantId,
+      status: 'ACTIVE',
+      source: 'WHOLESALE_BACKORDER',
+      order: {
+        operationalStatus: { in: STOCK_RESERVATION_ORDER_OPERATIONAL_STATUSES },
+      },
+    },
+    select: {
+      orderId: true,
+      order: {
+        select: {
+          orderReference: true,
+          externalOrderId: true,
+        },
+      },
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  const orders = new Map<string, { orderId: string; orderRef: string | null }>();
+  for (const reservation of reservations) {
+    if (orders.has(reservation.orderId)) continue;
+    orders.set(reservation.orderId, {
+      orderId: reservation.orderId,
+      orderRef: reservation.order.orderReference || reservation.order.externalOrderId || null,
+    });
+  }
+
+  const summary: ReplenishmentRecalculateResult = {
+    totalReservations: reservations.length,
+    totalOrders: orders.size,
+    processedOrders: 0,
+    changedOrders: 0,
+    failedOrders: 0,
+    reserved: 0,
+    unchanged: 0,
+    updated: 0,
+    partial: 0,
+    missingMapping: 0,
+    missingStock: 0,
+    orderResults: [],
+    failures: [],
+  };
+
+  for (const order of orders.values()) {
+    try {
+      const result = await reserveOrder(order.orderId);
+      summary.processedOrders++;
+      summary.reserved += result.reserved;
+      summary.unchanged += result.unchanged;
+      summary.updated += result.updated;
+      summary.partial += result.partial;
+      summary.missingMapping += result.missingMapping;
+      summary.missingStock += result.missingStock;
+      if (result.reserved > 0 || result.updated > 0 || result.partial > 0) {
+        summary.changedOrders++;
+      }
+      summary.orderResults.push({
+        orderId: order.orderId,
+        orderRef: order.orderRef,
+        reserved: result.reserved,
+        unchanged: result.unchanged,
+        updated: result.updated,
+        partial: result.partial,
+        missingMapping: result.missingMapping,
+        missingStock: result.missingStock,
+      });
+    } catch (error) {
+      summary.failedOrders++;
+      summary.failures.push({
+        orderId: order.orderId,
+        orderRef: order.orderRef,
+        message: error instanceof Error ? error.message : 'Nieznany błąd przeliczania rezerwacji',
+      });
+    }
+  }
+
+  return summary;
 }
 
 function applyQuantityOverrides(items: ReplenishmentItem[], overrides?: ReplenishmentQuantityOverride[]) {

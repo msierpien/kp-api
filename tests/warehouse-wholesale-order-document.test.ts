@@ -47,6 +47,13 @@ describe('warehouse wholesale order document (ZH)', () => {
     assert.match(DOCS_SERVICE, /await reserveOrder\(orderId\)/);
   });
 
+  it('replenishment pozwala ręcznie przeliczyć aktywne rezerwacje hurtowe', () => {
+    assert.match(REPLENISHMENT_ROUTES, /\/replenishment\/recalculate/);
+    assert.match(REPLENISHMENT_SERVICE, /recalculateWholesaleBackorderReservations/);
+    assert.match(REPLENISHMENT_SERVICE, /source: 'WHOLESALE_BACKORDER'/);
+    assert.match(REPLENISHMENT_SERVICE, /await reserveOrder\(order\.orderId\)/);
+  });
+
   it('reserveOrder potrafi przenieść rezerwację hurtową na stan lokalny', () => {
     assert.match(RESERVATIONS_SERVICE, /existingReservation\.source === 'WHOLESALE_BACKORDER'/);
     assert.match(RESERVATIONS_SERVICE, /source: 'LOCAL_STOCK'/);

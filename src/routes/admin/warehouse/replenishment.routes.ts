@@ -49,6 +49,20 @@ export async function registerWarehouseReplenishmentRoutes(fastify: FastifyInsta
     }
   });
 
+  fastify.post('/replenishment/recalculate', {
+    schema: {
+      tags: ['warehouse-replenishment'],
+      summary: 'Przeliczenie aktywnych rezerwacji hurtowych dla listy do zamówienia',
+    },
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const result = await replenishmentService.recalculateWholesaleBackorderReservations();
+      return reply.send(result);
+    } catch (error) {
+      return sendError(reply, error, 'Błąd przeliczania rezerwacji do zamówienia');
+    }
+  });
+
   fastify.post('/replenishment/providers/:providerId/export', {
     schema: {
       tags: ['warehouse-replenishment'],

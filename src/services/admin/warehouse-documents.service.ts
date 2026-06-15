@@ -95,7 +95,33 @@ interface PreparedDocumentItem {
 }
 
 const documentDetailInclude = {
-  items: { include: { product: true, barcode: true, reservation: true } },
+  items: {
+    include: {
+      product: {
+        include: {
+          wholesaleMappings: {
+            where: {
+              isActive: true,
+              provider: { isActive: true },
+            },
+            include: {
+              provider: {
+                select: {
+                  id: true,
+                  name: true,
+                  configJson: true,
+                },
+              },
+            },
+            orderBy: [{ lastSyncAt: 'desc' }, { updatedAt: 'desc' }],
+            take: 10,
+          },
+        },
+      },
+      barcode: true,
+      reservation: true,
+    },
+  },
   order: true,
 } satisfies Prisma.WarehouseDocumentInclude;
 

@@ -101,6 +101,67 @@ export interface ProductsQuery {
 
 const MAX_BULK_PRODUCT_IDS = 500;
 
+function productListInclude(shopId?: string) {
+  return {
+    catalog: true,
+    leadTimeGroup: true,
+    _count: {
+      select: {
+        barcodes: { where: { isActive: true } },
+        shopProductMappings: { where: { isActive: true } },
+        wholesaleMappings: { where: { isActive: true } },
+      },
+    },
+    shopProductMappings: {
+      where: {
+        isActive: true,
+        ...(shopId ? { shopId } : {}),
+      },
+      include: {
+        shop: {
+          select: {
+            id: true,
+            name: true,
+            platform: true,
+            status: true,
+          },
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: shopId ? 10 : 5,
+    },
+    shopPrices: {
+      where: shopId ? { shopId } : undefined,
+      include: { shop: { select: { id: true, name: true } } },
+      orderBy: { calculatedAt: 'desc' },
+      take: shopId ? 10 : 5,
+    },
+    wholesaleMappings: {
+      where: {
+        isActive: true,
+        provider: { isActive: true },
+      },
+      include: {
+        provider: {
+          select: {
+            id: true,
+            name: true,
+            configJson: true,
+          },
+        },
+      },
+      orderBy: [{ lastSyncAt: 'desc' }, { updatedAt: 'desc' }],
+      take: 10,
+    },
+  } satisfies Prisma.WarehouseProductInclude;
+}
+
+type ProductWithWholesaleMappings = Prisma.WarehouseProductGetPayload<{
+  include: ReturnType<typeof productListInclude>;
+}>;
+
+type WholesaleMappingForProduct = ProductWithWholesaleMappings['wholesaleMappings'][number];
+
 function requireTenantId() {
   const tenantId = getTenantId();
   const context = getTenantContext();
@@ -184,6 +245,77 @@ function buildProductsWhere(query: ProductsWhereQuery, tenantId: string | null |
   return where;
 }
 
+function providerConfig(configJson: Prisma.JsonValue | null | undefined) {
+  if (!configJson || typeof configJson !== 'object' || Array.isArray(configJson)) return {};
+  return configJson as { fieldMapping?: { image?: string } };
+}
+
+function payloadValue(payloadJson: Prisma.JsonValue | null | undefined, keys: Array<string | undefined>) {
+  if (!payloadJson || typeof payloadJson !== 'object' || Array.isArray(payloadJson)) return null;
+  const payload = payloadJson as Record<string, unknown>;
+  for (const key of keys.filter(Boolean)) {
+    const value = payload[key as string];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number') return String(value);
+  }
+  return null;
+}
+
+function firstImageUrl(value: string | null) {
+  if (!value) return null;
+  const candidates = value
+    .split(/[,\n;]/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((url) => (url.startsWith('//') ? `https:${url}` : url));
+  return candidates.find((candidate) => /^https?:\/\//i.test(candidate)) ?? null;
+}
+
+function mappingImageUrl(mapping: WholesaleMappingForProduct) {
+  const config = providerConfig(mapping.provider.configJson);
+  return firstImageUrl(payloadValue(mapping.payloadJson, [
+    config.fieldMapping?.image,
+    'photos',
+    'photo',
+    'image',
+    'images',
+    'Zdjęcie',
+    'Zdjecie',
+  ]));
+}
+
+function chooseBestWholesaleOffer(mappings: WholesaleMappingForProduct[]) {
+  const sorted = [...mappings].sort((a, b) => {
+    const priceA = a.lastKnownPrice === null ? Number.POSITIVE_INFINITY : Number(a.lastKnownPrice);
+    const priceB = b.lastKnownPrice === null ? Number.POSITIVE_INFINITY : Number(b.lastKnownPrice);
+    if (priceA !== priceB) return priceA - priceB;
+    return (b.lastSyncAt?.getTime() ?? 0) - (a.lastSyncAt?.getTime() ?? 0);
+  });
+  const mapping = sorted.find((item) => item.lastKnownPrice !== null || mappingImageUrl(item)) ?? sorted[0] ?? null;
+  if (!mapping) return null;
+
+  return {
+    mappingId: mapping.id,
+    providerId: mapping.providerId,
+    providerName: mapping.provider.name,
+    externalSku: mapping.externalSku,
+    externalEan: mapping.externalEan,
+    externalName: mapping.externalName,
+    lastKnownPrice: mapping.lastKnownPrice === null ? null : Number(mapping.lastKnownPrice),
+    lastKnownStock: mapping.lastKnownStock === null ? null : Number(mapping.lastKnownStock),
+    imageUrl: mappingImageUrl(mapping),
+  };
+}
+
+function withBestWholesaleOffer<T extends ProductWithWholesaleMappings>(product: T) {
+  const { wholesaleMappings, ...rest } = product;
+  return {
+    ...rest,
+    wholesaleMappings,
+    bestWholesaleOffer: chooseBestWholesaleOffer(wholesaleMappings),
+  };
+}
+
 export async function getProducts(query: ProductsQuery = {}) {
   const tenantId = requireTenantId();
   const { page = 1, limit = 50, shopId } = query;
@@ -197,46 +329,12 @@ export async function getProducts(query: ProductsQuery = {}) {
       skip,
       take: limit,
       orderBy: { name: 'asc' },
-      include: {
-        catalog: true,
-        leadTimeGroup: true,
-        _count: {
-          select: {
-            barcodes: { where: { isActive: true } },
-            shopProductMappings: { where: { isActive: true } },
-            wholesaleMappings: { where: { isActive: true } },
-          },
-        },
-        shopProductMappings: {
-          where: {
-            isActive: true,
-            ...(shopId ? { shopId } : {}),
-          },
-          include: {
-            shop: {
-              select: {
-                id: true,
-                name: true,
-                platform: true,
-                status: true,
-              },
-            },
-          },
-          orderBy: { updatedAt: 'desc' },
-          take: shopId ? 10 : 5,
-        },
-        shopPrices: {
-          where: shopId ? { shopId } : undefined,
-          include: { shop: { select: { id: true, name: true } } },
-          orderBy: { calculatedAt: 'desc' },
-          take: shopId ? 10 : 5,
-        },
-      },
+      include: productListInclude(shopId),
     }),
     prisma.warehouseProduct.count({ where }),
   ]);
 
-  return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+  return { data: data.map(withBestWholesaleOffer), total, page, limit, totalPages: Math.ceil(total / limit) };
 }
 
 export interface ProductViewCountsQuery {
@@ -277,28 +375,13 @@ export async function getProductById(id: string) {
 
   const product = await prisma.warehouseProduct.findFirst({
     where,
-    include: {
-      catalog: true,
-      leadTimeGroup: true,
-      _count: {
-        select: {
-          barcodes: { where: { isActive: true } },
-          shopProductMappings: { where: { isActive: true } },
-          wholesaleMappings: { where: { isActive: true } },
-        },
-      },
-      shopPrices: {
-        include: { shop: { select: { id: true, name: true } } },
-        orderBy: { calculatedAt: 'desc' },
-        take: 20,
-      },
-    },
+    include: productListInclude(),
   });
   if (!product) return null;
 
   const shippingPreview = await getProductShippingPreview(product.id, tenantId);
   return {
-    ...product,
+    ...withBestWholesaleOffer(product),
     shippingPreview,
   };
 }

@@ -21,6 +21,12 @@ export const ACTIVE_ORDER_OPERATIONAL_STATUSES: OrderOperationalStatus[] = [
   'DELIVERED',
 ];
 
+export const STOCK_RESERVATION_ORDER_OPERATIONAL_STATUSES: OrderOperationalStatus[] = [
+  'PAID',
+  'PROCESSING',
+  'PACKED',
+];
+
 export const RETURN_ORDER_OPERATIONAL_STATUSES: OrderOperationalStatus[] = [
   'PARTIALLY_RETURNED',
   'RETURNED',
@@ -125,6 +131,11 @@ export function assertOrderOperationalStatus(value: unknown): OrderOperationalSt
 export function isActiveOrderOperationalStatus(value: unknown): boolean {
   const status = normalizeOrderOperationalStatus(value);
   return Boolean(status && ACTIVE_ORDER_OPERATIONAL_STATUSES.includes(status));
+}
+
+export function isStockReservationOrderOperationalStatus(value: unknown): boolean {
+  const status = normalizeOrderOperationalStatus(value);
+  return Boolean(status && STOCK_RESERVATION_ORDER_OPERATIONAL_STATUSES.includes(status));
 }
 
 export function isReturnedOrderOperationalStatus(value: unknown): boolean {

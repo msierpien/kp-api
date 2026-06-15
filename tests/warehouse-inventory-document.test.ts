@@ -58,7 +58,7 @@ describe('warehouse inventory document (INW): schema i migracja', () => {
 
 describe('warehouse inventory document (INW): logika serwisu', () => {
   it('DocumentType zawiera INW i ZW', () => {
-    assert.match(DOCS_SERVICE, /export type DocumentType = 'PZ' \| 'PW' \| 'WZ' \| 'ZW' \| 'RW' \| 'INW'/);
+    assert.match(DOCS_SERVICE, /export type DocumentType = 'PZ' \| 'ZH' \| 'PW' \| 'WZ' \| 'ZW' \| 'RW' \| 'INW'/);
     assert.match(DOCS_SERVICE, /STOCK_INCOMING_TYPES: DocumentType\[\] = \['PZ', 'PW', 'ZW'\]/);
   });
 
@@ -91,7 +91,7 @@ describe('warehouse inventory document (INW): logika serwisu', () => {
   });
 
   it('diagnostyka rozbieżności liczy ZW i INW tak samo jak cache stanów', () => {
-    assert.match(DIAGNOSTICS_SERVICE, /type DocumentType = 'PZ' \| 'PW' \| 'WZ' \| 'ZW' \| 'RW' \| 'INW'/);
+    assert.match(DIAGNOSTICS_SERVICE, /type DocumentType = 'PZ' \| 'ZH' \| 'PW' \| 'WZ' \| 'ZW' \| 'RW' \| 'INW'/);
     assert.match(DIAGNOSTICS_SERVICE, /\['PZ', 'PW', 'ZW'\]\.includes\(type\)/);
     assert.match(DIAGNOSTICS_SERVICE, /item\.document\.type === 'INW'[\s\S]{0,120}Number\(item\.quantity\) - Number\(item\.systemQuantity \?\? 0\)/);
   });
@@ -106,7 +106,7 @@ describe('warehouse inventory document (INW): logika serwisu', () => {
 
 describe('warehouse inventory document (INW): routes i snapshot', () => {
   it('enum body dla POST /documents akceptuje INW', () => {
-    assert.match(DOCS_ROUTES, /enum: \['PZ', 'PW', 'WZ', 'ZW', 'RW', 'INW'\]/);
+    assert.match(DOCS_ROUTES, /enum: \['PZ', 'ZH', 'PW', 'WZ', 'ZW', 'RW', 'INW'\]/);
   });
 
   it('POST /documents items akceptują systemQuantity', () => {

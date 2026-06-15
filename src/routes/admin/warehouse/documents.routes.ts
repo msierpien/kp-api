@@ -13,7 +13,7 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
           page: { type: 'integer', minimum: 1, default: 1 },
           limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
           search: { type: 'string' },
-          type: { type: 'string', enum: ['PZ', 'PW', 'WZ', 'ZW', 'RW', 'INW'] },
+          type: { type: 'string', enum: ['PZ', 'ZH', 'PW', 'WZ', 'ZW', 'RW', 'INW'] },
           status: { type: 'string', enum: ['DRAFT', 'CONFIRMED', 'CANCELLED'] },
           dateFrom: { type: 'string' },
           dateTo: { type: 'string' },
@@ -41,7 +41,7 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
         type: 'object',
         required: ['type', 'items'],
         properties: {
-          type: { type: 'string', enum: ['PZ', 'PW', 'WZ', 'ZW', 'RW', 'INW'] },
+          type: { type: 'string', enum: ['PZ', 'ZH', 'PW', 'WZ', 'ZW', 'RW', 'INW'] },
           date: { type: 'string' },
           description: { type: 'string' },
           orderId: { type: 'string' },
@@ -250,6 +250,27 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
       return reply.send(doc);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd zatwierdzania dokumentu';
+      const status = message.includes('nie znaleziony') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/documents/:id/create-pz', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Utwórz roboczy PZ z zamówienia hurtowego ZH',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await warehouseDocumentService.createPzFromWholesaleOrder(request.params.id);
+      return reply.status(result.created ? 201 : 200).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd tworzenia PZ z zamówienia hurtowego';
       const status = message.includes('nie znaleziony') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }

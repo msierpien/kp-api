@@ -1110,7 +1110,7 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
           page: { type: 'integer', minimum: 1, default: 1 },
           limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
           status: { type: 'string', enum: ['DRAFT', 'CONFIRMED', 'CANCELLED'] },
-          type: { type: 'string', enum: ['PZ', 'PW', 'WZ', 'ZW', 'RW', 'INW'] },
+          type: { type: 'string', enum: ['PZ', 'ZH', 'PW', 'WZ', 'ZW', 'RW', 'INW'] },
           dateFrom: { type: 'string' },
           dateTo: { type: 'string' },
         },

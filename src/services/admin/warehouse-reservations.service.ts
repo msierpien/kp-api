@@ -457,6 +457,32 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
         const delta = targetActiveQuantity.minus(currentQuantity);
 
         if (delta.equals(0)) {
+          if (existingReservation.source === 'WHOLESALE_BACKORDER') {
+            const localAvailability = await reserveQuantityForProduct(tx, warehouseProductId, currentQuantity, settings.allowNegativeStock);
+            if (localAvailability.source === 'LOCAL_STOCK' && localAvailability.quantity.gte(currentQuantity)) {
+              await tx.warehouseReservation.update({
+                where: { id: existingReservation.id },
+                data: {
+                  source: 'LOCAL_STOCK',
+                  reason: existingReservation.reason ?? `Towar przyjęty na magazyn dla zamówienia ${order.orderReference}`,
+                },
+              });
+              await adjustProductStock(tx, warehouseProductId, currentQuantity.mul(-1));
+              result.updated++;
+              result.issues.push({
+                orderItemId: item.id,
+                sku: item.sku,
+                productName: item.productNameSnapshot,
+                requestedQuantity: item.quantity,
+                reservedQuantity: Number(consumedQuantity.plus(currentQuantity)),
+                warehouseProductId,
+                status: 'UPDATED',
+                message: 'Rezerwacja hurtowa została przeniesiona na stan lokalny',
+              });
+              continue;
+            }
+          }
+
           result.unchanged++;
           result.issues.push({
             orderItemId: item.id,
@@ -494,6 +520,33 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
 
         const additionalAvailability = await reserveQuantityForProduct(tx, warehouseProductId, delta, settings.allowNegativeStock);
         if (additionalAvailability.quantity.lte(0) || additionalAvailability.source !== existingReservation.source) {
+          if (existingReservation.source === 'WHOLESALE_BACKORDER') {
+            const localAvailability = await reserveQuantityForProduct(tx, warehouseProductId, targetActiveQuantity, settings.allowNegativeStock);
+            if (localAvailability.source === 'LOCAL_STOCK' && localAvailability.quantity.gte(targetActiveQuantity)) {
+              await tx.warehouseReservation.update({
+                where: { id: existingReservation.id },
+                data: {
+                  quantity: targetActiveQuantity,
+                  source: 'LOCAL_STOCK',
+                  reason: existingReservation.reason ?? `Towar przyjęty na magazyn dla zamówienia ${order.orderReference}`,
+                },
+              });
+              await adjustProductStock(tx, warehouseProductId, targetActiveQuantity.mul(-1));
+              result.updated++;
+              result.issues.push({
+                orderItemId: item.id,
+                sku: item.sku,
+                productName: item.productNameSnapshot,
+                requestedQuantity: item.quantity,
+                reservedQuantity: Number(requestedQuantity),
+                warehouseProductId,
+                status: 'UPDATED',
+                message: 'Rezerwacja hurtowa została przeniesiona na stan lokalny',
+              });
+              continue;
+            }
+          }
+
           result.missingStock++;
           result.issues.push({
             orderItemId: item.id,

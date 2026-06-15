@@ -4,10 +4,11 @@ import { getTenantContext, getTenantId } from '../../lib/tenant-context';
 import { syncStockForProducts } from '../stock/stock-sync.service';
 import { consumeDocumentReservations, releaseDocumentReservations, reserveOrder } from './warehouse-reservations.service';
 import { buildShippingInfoDescription, extractOrderShippingInfo } from '../orders/order-shipping-info.service';
+import { STOCK_RESERVATION_ORDER_OPERATIONAL_STATUSES } from '../../lib/order-statuses';
 
 // ─── Documents ───────────────────────────────────────────────────────────────
 
-export type DocumentType = 'PZ' | 'PW' | 'WZ' | 'ZW' | 'RW' | 'INW';
+export type DocumentType = 'PZ' | 'ZH' | 'PW' | 'WZ' | 'ZW' | 'RW' | 'INW';
 const STOCK_INCOMING_TYPES: DocumentType[] = ['PZ', 'PW', 'ZW'];
 const STOCK_OUTGOING_TYPES: DocumentType[] = ['WZ', 'RW'];
 
@@ -57,6 +58,12 @@ export interface CancelDocumentInput {
 }
 
 export interface CreateWzForOrderResult {
+  document: Awaited<ReturnType<typeof getDocumentById>>;
+  created: boolean;
+  skippedReason?: string;
+}
+
+export interface CreatePzFromWholesaleOrderResult {
   document: Awaited<ReturnType<typeof getDocumentById>>;
   created: boolean;
   skippedReason?: string;
@@ -339,6 +346,95 @@ export async function createDocument(input: CreateDocumentInput) {
       include: documentDetailInclude,
     });
   });
+}
+
+function metadataRecord(value: Prisma.JsonValue | null | undefined) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+export async function createPzFromWholesaleOrder(id: string): Promise<CreatePzFromWholesaleOrderResult> {
+  const tenantId = getTenantId();
+  const context = getTenantContext();
+  const where: any = { id };
+  if (tenantId) where.tenantId = tenantId;
+
+  const sourceDocument = await prisma.warehouseDocument.findFirst({
+    where,
+    include: documentDetailInclude,
+  });
+  if (!sourceDocument) throw new Error('Dokument nie znaleziony');
+  if (sourceDocument.type !== 'ZH') throw new Error('PZ można utworzyć tylko z dokumentu ZH');
+  if (sourceDocument.status === 'CANCELLED') throw new Error('Nie można utworzyć PZ z anulowanego zamówienia hurtowego');
+  if (sourceDocument.items.length === 0) throw new Error('Dokument ZH nie ma żadnych pozycji');
+
+  const sourceMetadata = metadataRecord(sourceDocument.metadataJson);
+  const existingPzId = typeof sourceMetadata.convertedToPzDocumentId === 'string'
+    ? sourceMetadata.convertedToPzDocumentId
+    : null;
+  if (existingPzId) {
+    const existing = await getDocumentById(existingPzId);
+    if (existing && existing.status !== 'CANCELLED') {
+      return {
+        document: existing,
+        created: false,
+        skippedReason: `PZ dla ${sourceDocument.number} już istnieje`,
+      };
+    }
+  }
+
+  const documentDate = new Date();
+  const createdDocument = await prisma.$transaction(async (tx) => {
+    const number = await generateDocumentNumber(tx, sourceDocument.tenantId, 'PZ', documentDate);
+    const metadataJson = {
+      source: 'WHOLESALE_ORDER',
+      wholesaleOrderDocumentId: sourceDocument.id,
+      wholesaleOrderNumber: sourceDocument.number,
+      providerId: sourceMetadata.providerId,
+      providerName: sourceMetadata.providerName,
+    };
+
+    const pz = await tx.warehouseDocument.create({
+      data: {
+        tenantId: sourceDocument.tenantId,
+        number,
+        type: 'PZ',
+        status: 'DRAFT',
+        date: documentDate,
+        description: `PZ do zamówienia hurtowego ${sourceDocument.number}`,
+        createdByUserId: context?.userId,
+        metadataJson: JSON.parse(JSON.stringify(metadataJson)),
+        items: {
+          create: sourceDocument.items.map((item) => ({
+            productId: item.productId,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            notes: item.notes ?? `Przyjęcie z ${sourceDocument.number}`,
+          })),
+        },
+      },
+      include: documentDetailInclude,
+    });
+
+    await tx.warehouseDocument.update({
+      where: { id: sourceDocument.id },
+      data: {
+        metadataJson: JSON.parse(JSON.stringify({
+          ...sourceMetadata,
+          convertedToPzDocumentId: pz.id,
+          convertedToPzDocumentNumber: pz.number,
+          convertedAt: new Date().toISOString(),
+        })),
+      },
+    });
+
+    return pz;
+  });
+
+  return {
+    document: await withAuditUsers(createdDocument),
+    created: true,
+  };
 }
 
 export async function createWzForOrder(orderId: string): Promise<CreateWzForOrderResult> {
@@ -710,13 +806,41 @@ export async function confirmDocument(id: string) {
     });
   });
 
+  const affectedProductIds = Array.from(new Set(doc.items.map((item) => item.productId)));
+  if (doc.type === 'PZ') {
+    await reallocateWholesaleBackordersForProducts(doc.tenantId, affectedProductIds);
+  }
+
   await syncStockForProducts(
-    doc.items.map((item) => item.productId),
+    affectedProductIds,
     'DOCUMENT_CONFIRM',
     id,
   );
 
   return confirmedDocument;
+}
+
+async function reallocateWholesaleBackordersForProducts(tenantId: string, productIds: string[]) {
+  const uniqueProductIds = Array.from(new Set(productIds.filter(Boolean)));
+  if (uniqueProductIds.length === 0) return;
+
+  const reservations = await prisma.warehouseReservation.findMany({
+    where: {
+      tenantId,
+      status: 'ACTIVE',
+      source: 'WHOLESALE_BACKORDER',
+      warehouseProductId: { in: uniqueProductIds },
+      order: {
+        operationalStatus: { in: STOCK_RESERVATION_ORDER_OPERATIONAL_STATUSES },
+      },
+    },
+    select: { orderId: true },
+  });
+
+  const orderIds = Array.from(new Set(reservations.map((reservation) => reservation.orderId)));
+  for (const orderId of orderIds) {
+    await reserveOrder(orderId);
+  }
 }
 
 async function assertCanConfirmWithoutNegativeStock(

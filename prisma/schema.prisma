@@ -902,6 +902,7 @@ model AuditLog {
 
 enum WarehouseDocumentType {
   PZ  // Przyjęcie Zewnętrzne (od dostawcy)
+  ZH  // Zamówienie Hurtowe (zamówione u dostawcy, bez wpływu na stan)
   PW  // Przyjęcie Wewnętrzne (np. z produkcji)
   WZ  // Wydanie Zewnętrzne (do klienta)
   ZW  // Zwrot od klienta

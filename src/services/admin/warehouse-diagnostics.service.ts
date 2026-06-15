@@ -5,7 +5,7 @@ import { addStockSyncBatchJobs, addStockSyncJob, getStockSyncQueue, type StockSy
 import { getInventoryPublicationDecision } from '../stock/stock-sync.service';
 
 type StockSyncStatus = 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'FAILED';
-type DocumentType = 'PZ' | 'PW' | 'WZ' | 'ZW' | 'RW' | 'INW';
+type DocumentType = 'PZ' | 'ZH' | 'PW' | 'WZ' | 'ZW' | 'RW' | 'INW';
 
 export interface StockSyncLogsQuery {
   page?: number;

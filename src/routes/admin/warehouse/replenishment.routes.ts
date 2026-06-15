@@ -93,10 +93,10 @@ export async function registerWarehouseReplenishmentRoutes(fastify: FastifyInsta
     }
   });
 
-  fastify.post('/replenishment/providers/:providerId/draft-pz', {
+  fastify.post('/replenishment/providers/:providerId/order', {
     schema: {
       tags: ['warehouse-replenishment'],
-      summary: 'Utworzenie roboczego PZ z listy do zamówienia',
+      summary: 'Utworzenie zamówienia hurtowego ZH z listy do zamówienia',
       params: {
         type: 'object',
         required: ['providerId'],
@@ -125,12 +125,53 @@ export async function registerWarehouseReplenishmentRoutes(fastify: FastifyInsta
         },
       },
     },
-  }, async (request: ProviderRequest<replenishmentService.CreateReplenishmentPzInput>, reply: FastifyReply) => {
+  }, async (request: ProviderRequest<replenishmentService.CreateReplenishmentOrderInput>, reply: FastifyReply) => {
     try {
-      const document = await replenishmentService.createDraftPzFromReplenishment(request.params.providerId, request.body ?? {});
+      const document = await replenishmentService.createWholesaleOrderFromReplenishment(request.params.providerId, request.body ?? {});
       return reply.status(201).send(document);
     } catch (error) {
-      return sendError(reply, error, 'Błąd tworzenia roboczego PZ');
+      return sendError(reply, error, 'Błąd tworzenia zamówienia hurtowego');
+    }
+  });
+
+  fastify.post('/replenishment/providers/:providerId/draft-pz', {
+    schema: {
+      tags: ['warehouse-replenishment'],
+      summary: 'Alias: utworzenie zamówienia hurtowego ZH z listy do zamówienia',
+      params: {
+        type: 'object',
+        required: ['providerId'],
+        properties: {
+          providerId: { type: 'string' },
+        },
+      },
+      body: {
+        type: 'object',
+        properties: {
+          source: sourceSchema,
+          lowStockThreshold: { type: 'number', default: 1 },
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+          items: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['productId', 'quantity'],
+              properties: {
+                productId: { type: 'string' },
+                quantity: { type: 'number', exclusiveMinimum: 0 },
+              },
+            },
+          },
+        },
+      },
+    },
+  }, async (request: ProviderRequest<replenishmentService.CreateReplenishmentOrderInput>, reply: FastifyReply) => {
+    try {
+      const document = await replenishmentService.createWholesaleOrderFromReplenishment(request.params.providerId, request.body ?? {});
+      return reply.status(201).send(document);
+    } catch (error) {
+      return sendError(reply, error, 'Błąd tworzenia zamówienia hurtowego');
     }
   });
 }

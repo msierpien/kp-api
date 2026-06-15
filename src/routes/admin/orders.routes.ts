@@ -7,6 +7,7 @@ import {
   getOrdersList,
 } from '../../services/admin/orders.service';
 import * as reservationService from '../../services/admin/warehouse-reservations.service';
+import { createWzForOrder } from '../../services/admin/warehouse-documents.service';
 import * as invoicesService from '../../services/admin/invoices.service';
 import * as orderReturnsService from '../../services/admin/order-returns.service';
 import * as shopOrderStatusesService from '../../services/admin/shop-order-statuses.service';
@@ -576,6 +577,28 @@ export async function ordersRoutes(fastify: FastifyInstance) {
         return reply.send(result);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Błąd zwalniania rezerwacji zamówienia';
+        const status = message.includes('nie znalezion') ? 404 : 400;
+        return reply.status(status).send({ error: 'Error', message });
+      }
+    }
+  );
+
+  fastify.post<{ Params: OrderParams }>(
+    '/:id/wz',
+    {
+      schema: {
+        tags: ['warehouse'],
+        summary: 'Utwórz dokument WZ z aktywnych rezerwacji zamówienia',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request: FastifyRequest<{ Params: OrderParams }>, reply: FastifyReply) => {
+      try {
+        const result = await createWzForOrder(request.params.id);
+        return reply.send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Błąd tworzenia WZ dla zamówienia';
         const status = message.includes('nie znalezion') ? 404 : 400;
         return reply.status(status).send({ error: 'Error', message });
       }

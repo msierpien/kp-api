@@ -138,6 +138,7 @@ export interface RemoveShopProductsResult {
 type ProductForPublication = Prisma.WarehouseProductGetPayload<{
   include: {
     barcodes: true;
+    shopPrices: true;
     shopProductMappings: true;
     wholesaleMappings: {
       include: { provider: true };
@@ -560,6 +561,10 @@ async function getProductsForPublication(tenantId: string, shopId: string, produ
       shopProductMappings: {
         where: { shopId, isActive: true },
       },
+      shopPrices: {
+        where: { shopId },
+        take: 1,
+      },
       wholesaleMappings: {
         where: {
           isActive: true,
@@ -580,7 +585,8 @@ async function buildPreviewRow(
   imageLimit: number,
 ): Promise<ShopProductPublicationPreviewItem> {
   const messages: string[] = [];
-  const price = normalizePrice(item.price) ?? decimalToNumber(product.retailPrice);
+  const calculatedShopPrice = product.shopPrices[0]?.netPrice;
+  const price = normalizePrice(item.price) ?? decimalToNumber(calculatedShopPrice) ?? decimalToNumber(product.retailPrice);
   const activeSources = product.wholesaleMappings as WholesaleMappingWithProvider[];
   const selectedSource = resolveSelectedSource(activeSources, item.sourceWholesaleMappingId);
   const duplicateRemoteProduct = await client.findProductByReference(product.sku);

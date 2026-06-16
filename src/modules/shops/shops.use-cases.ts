@@ -5,7 +5,9 @@ import { NotFoundError, ValidationError } from '../../lib/errors';
 import type { CreateShopInput, UpdateShopInput } from '../../schemas/admin.schema';
 import {
   assertShopAdminAccess,
+  createPrestaShopCategory,
   createShop,
+  deletePrestaShopCategory,
   deleteShop,
   getPrestaShopCategories,
   getShopAdminWhere,
@@ -13,6 +15,7 @@ import {
   getShopDeletePreview,
   listShops,
   testShopConnection,
+  updatePrestaShopCategory,
   updateShop,
   updateShopOrderSyncConfig,
 } from '../../services/admin/shops.service';
@@ -272,7 +275,21 @@ export const shopsUseCases = {
 
   deletePreview: (id: string) => getShopDeletePreview(id),
 
-  getPrestaShopCategories: (id: string) => getPrestaShopCategories(id),
+  getPrestaShopCategories: (id: string, query?: Parameters<typeof getPrestaShopCategories>[1]) => getPrestaShopCategories(id, query),
+
+  createPrestaShopCategory: (id: string, input: Parameters<typeof createPrestaShopCategory>[1]) => createPrestaShopCategory(id, input),
+
+  updatePrestaShopCategory: (
+    id: string,
+    categoryId: string,
+    input: Parameters<typeof updatePrestaShopCategory>[2],
+  ) => updatePrestaShopCategory(id, categoryId, input),
+
+  deletePrestaShopCategory: (
+    id: string,
+    categoryId: string,
+    options?: Parameters<typeof deletePrestaShopCategory>[2],
+  ) => deletePrestaShopCategory(id, categoryId, options),
 
   getImportReadiness: (id: string) => getShopImportReadiness(id),
 

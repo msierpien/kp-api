@@ -138,6 +138,7 @@ export async function patchProductCard(productId: string, input: ProductCardPatc
   const tenantId = requireTenantId();
   const { product, mapping } = await requireProductMapping(tenantId, productId, input.shopId);
   const payload = stripShopFields(input);
+  validateCategoryPatchPayload(payload);
   const snapshot = await runLoggedOperation({
     tenantId,
     product,
@@ -391,6 +392,28 @@ function stripShopFields<T extends Record<string, unknown>>(input: T) {
   const payload = { ...input };
   delete payload.shopId;
   return payload;
+}
+
+function validateCategoryPatchPayload(payload: Record<string, unknown>) {
+  if (!Array.isArray(payload.categories)) return;
+
+  const categoryIds = payload.categories
+    .map((category) => {
+      if (typeof category === 'number' || typeof category === 'string') return Number(category);
+      if (isRecord(category)) return Number(category.id);
+      return NaN;
+    })
+    .filter((categoryId) => Number.isFinite(categoryId) && categoryId > 0);
+
+  if (categoryIds.length !== payload.categories.length) {
+    throw new Error('Kategorie produktu muszą zawierać poprawne ID PrestaShop');
+  }
+
+  const identity = isRecord(payload.identity) ? payload.identity : {};
+  const defaultCategoryId = Number(identity.idCategoryDefault ?? 0);
+  if (Number.isFinite(defaultCategoryId) && defaultCategoryId > 0 && !categoryIds.includes(defaultCategoryId)) {
+    throw new Error('Kategoria domyślna musi znajdować się na liście przypisanych kategorii');
+  }
 }
 
 function normalizeSyncFields(fields: Record<string, unknown>) {

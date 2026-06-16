@@ -1,12 +1,22 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import {
   createShopSchema,
+  createPrestaShopCategorySchema,
+  deletePrestaShopCategoryQuerySchema,
   ifirmaSettingsSchema,
+  prestaShopCategoriesQuerySchema,
+  prestaShopCategoryParamsSchema,
   shopOrderStatusMappingSchema,
   updateShopSchema,
+  updatePrestaShopCategorySchema,
   shopIdParamsSchema,
+  type CreatePrestaShopCategoryInput,
   type CreateShopInput,
+  type DeletePrestaShopCategoryQueryInput,
+  type PrestaShopCategoriesQueryInput,
+  type PrestaShopCategoryParamsInput,
   type UpdateShopInput,
+  type UpdatePrestaShopCategoryInput,
   type ShopIdParamsInput,
 } from '../../schemas/admin.schema';
 import { ValidationError } from '../../lib/errors';
@@ -141,6 +151,23 @@ const webhookEventSchema = {
   additionalProperties: true,
 };
 
+const prestaShopCategoryResponseSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    name: { type: 'string' },
+    active: { type: 'boolean' },
+    parentId: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    levelDepth: { anyOf: [{ type: 'number' }, { type: 'null' }] },
+    position: { anyOf: [{ type: 'number' }, { type: 'null' }] },
+    isRoot: { type: 'boolean' },
+    nleft: { anyOf: [{ type: 'number' }, { type: 'null' }] },
+    nright: { anyOf: [{ type: 'number' }, { type: 'null' }] },
+    path: { type: 'string' },
+  },
+  additionalProperties: true,
+};
+
 function parseShopParams(params: unknown) {
   const parsed = shopIdParamsSchema.safeParse(params);
   if (!parsed.success) {
@@ -165,6 +192,46 @@ function parseUpdateShopBody(body: unknown) {
   return parsed.data;
 }
 
+function parsePrestaShopCategoriesQuery(query: unknown) {
+  const parsed = prestaShopCategoriesQuerySchema.safeParse(query);
+  if (!parsed.success) {
+    throw new ValidationError(parsed.error.errors[0].message, parsed.error.flatten());
+  }
+  return parsed.data;
+}
+
+function parsePrestaShopCategoryParams(params: unknown) {
+  const parsed = prestaShopCategoryParamsSchema.safeParse(params);
+  if (!parsed.success) {
+    throw new ValidationError(parsed.error.errors[0].message, parsed.error.flatten());
+  }
+  return parsed.data;
+}
+
+function parseCreatePrestaShopCategoryBody(body: unknown) {
+  const parsed = createPrestaShopCategorySchema.safeParse(body);
+  if (!parsed.success) {
+    throw new ValidationError(parsed.error.errors[0].message, parsed.error.flatten());
+  }
+  return parsed.data;
+}
+
+function parseUpdatePrestaShopCategoryBody(body: unknown) {
+  const parsed = updatePrestaShopCategorySchema.safeParse(body);
+  if (!parsed.success) {
+    throw new ValidationError(parsed.error.errors[0].message, parsed.error.flatten());
+  }
+  return parsed.data;
+}
+
+function parseDeletePrestaShopCategoryQuery(query: unknown) {
+  const parsed = deletePrestaShopCategoryQuerySchema.safeParse(query);
+  if (!parsed.success) {
+    throw new ValidationError(parsed.error.errors[0].message, parsed.error.flatten());
+  }
+  return parsed.data;
+}
+
 export async function shopsRoutes(fastify: FastifyInstance) {
   // GET /admin/shops
   fastify.get('/', {
@@ -180,28 +247,134 @@ export async function shopsRoutes(fastify: FastifyInstance) {
     return reply.send(shops);
   });
 
-  fastify.get('/:id/prestashop-categories', {
+  fastify.get<{
+    Params: ShopIdParamsInput;
+    Querystring: PrestaShopCategoriesQueryInput;
+  }>('/:id/prestashop-categories', {
     schema: {
       tags: ['shops'],
-      summary: 'Lista aktywnych kategorii PrestaShop dla integracji',
+      summary: 'Lista kategorii PrestaShop dla integracji',
       params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      querystring: {
+        type: 'object',
+        properties: {
+          activeOnly: { anyOf: [{ type: 'boolean' }, { type: 'string' }] },
+          tree: { anyOf: [{ type: 'boolean' }, { type: 'string' }] },
+          limit: { type: 'number' },
+        },
+      },
       response: {
         200: {
           type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              name: { type: 'string' },
-              active: { type: 'boolean' },
-            },
-          },
+          items: prestaShopCategoryResponseSchema,
         },
       },
     },
-  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-    const categories = await shopsUseCases.getPrestaShopCategories(request.params.id);
+  }, async (request, reply: FastifyReply) => {
+    const params = parseShopParams(request.params);
+    const query = parsePrestaShopCategoriesQuery(request.query);
+    const categories = await shopsUseCases.getPrestaShopCategories(params.id, query);
     return reply.send(categories);
+  });
+
+  fastify.post<{
+    Params: ShopIdParamsInput;
+    Body: CreatePrestaShopCategoryInput;
+  }>('/:id/prestashop-categories', {
+    schema: {
+      tags: ['shops'],
+      summary: 'Utwórz kategorię PrestaShop',
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      body: {
+        type: 'object',
+        required: ['name', 'parentId'],
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 128 },
+          parentId: { anyOf: [{ type: 'string' }, { type: 'number' }] },
+          active: { type: 'boolean' },
+          linkRewrite: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+          description: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+          metaTitle: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+          metaDescription: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+          languageId: { anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'null' }] },
+          idShopDefault: { anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'null' }] },
+        },
+      },
+      response: {
+        201: prestaShopCategoryResponseSchema,
+      },
+    },
+  }, async (request, reply: FastifyReply) => {
+    const params = parseShopParams(request.params);
+    const body = parseCreatePrestaShopCategoryBody(request.body);
+    const category = await shopsUseCases.createPrestaShopCategory(params.id, body);
+    return reply.status(201).send(category);
+  });
+
+  fastify.put<{
+    Params: PrestaShopCategoryParamsInput;
+    Body: UpdatePrestaShopCategoryInput;
+  }>('/:id/prestashop-categories/:categoryId', {
+    schema: {
+      tags: ['shops'],
+      summary: 'Zaktualizuj kategorię PrestaShop',
+      params: {
+        type: 'object',
+        required: ['id', 'categoryId'],
+        properties: { id: { type: 'string' }, categoryId: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 128 },
+          parentId: { anyOf: [{ type: 'string' }, { type: 'number' }] },
+          active: { type: 'boolean' },
+          linkRewrite: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+          description: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+          metaTitle: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+          metaDescription: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+          languageId: { anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'null' }] },
+          idShopDefault: { anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'null' }] },
+        },
+      },
+      response: {
+        200: prestaShopCategoryResponseSchema,
+      },
+    },
+  }, async (request, reply: FastifyReply) => {
+    const params = parsePrestaShopCategoryParams(request.params);
+    const body = parseUpdatePrestaShopCategoryBody(request.body);
+    const category = await shopsUseCases.updatePrestaShopCategory(params.id, params.categoryId, body);
+    return reply.send(category);
+  });
+
+  fastify.delete<{
+    Params: PrestaShopCategoryParamsInput;
+    Querystring: DeletePrestaShopCategoryQueryInput;
+  }>('/:id/prestashop-categories/:categoryId', {
+    schema: {
+      tags: ['shops'],
+      summary: 'Dezaktywuj albo trwale usuń kategorię PrestaShop',
+      params: {
+        type: 'object',
+        required: ['id', 'categoryId'],
+        properties: { id: { type: 'string' }, categoryId: { type: 'string' } },
+      },
+      querystring: {
+        type: 'object',
+        properties: {
+          hard: { anyOf: [{ type: 'boolean' }, { type: 'string' }] },
+        },
+      },
+      response: {
+        200: { anyOf: [prestaShopCategoryResponseSchema, { type: 'object', additionalProperties: true }] },
+      },
+    },
+  }, async (request, reply: FastifyReply) => {
+    const params = parsePrestaShopCategoryParams(request.params);
+    const query = parseDeletePrestaShopCategoryQuery(request.query);
+    const result = await shopsUseCases.deletePrestaShopCategory(params.id, params.categoryId, { hard: query.hard });
+    return reply.send(result);
   });
 
   fastify.get<{ Params: ShopIdParamsInput }>(

@@ -89,6 +89,15 @@ interface PrestaShopCategory {
   id: number | string;
   name?: unknown;
   active?: string | number | boolean;
+  id_parent?: number | string;
+  level_depth?: number | string;
+  nleft?: number | string;
+  nright?: number | string;
+  position?: number | string;
+  is_root_category?: string | number | boolean;
+  associations?: {
+    products?: unknown;
+  };
 }
 
 const DEBUG_SHOP_SYNC = process.env.DEBUG_SHOP_SYNC === 'true';
@@ -106,6 +115,37 @@ export interface PrestaShopCategoryDetails {
   id: string;
   name: string;
   active: boolean;
+  parentId: string | null;
+  levelDepth: number | null;
+  position: number | null;
+  isRoot: boolean;
+  nleft: number | null;
+  nright: number | null;
+  path: string;
+}
+
+export interface CreatePrestaShopCategoryInput {
+  name: string;
+  parentId: string | number;
+  active?: boolean;
+  linkRewrite?: string | null;
+  description?: string | null;
+  metaTitle?: string | null;
+  metaDescription?: string | null;
+  languageId?: string | number | null;
+  idShopDefault?: string | number | null;
+}
+
+export interface UpdatePrestaShopCategoryInput {
+  name?: string;
+  parentId?: string | number;
+  active?: boolean;
+  linkRewrite?: string | null;
+  description?: string | null;
+  metaTitle?: string | null;
+  metaDescription?: string | null;
+  languageId?: string | number | null;
+  idShopDefault?: string | number | null;
 }
 
 export interface PrestaShopOrderStatusDetails {
@@ -386,12 +426,12 @@ export class PrestaShopClient {
     });
   }
 
-  async fetchCategories(params: { activeOnly?: boolean; limit?: number } = {}): Promise<PrestaShopCategoryDetails[]> {
+  async fetchCategories(params: { activeOnly?: boolean; limit?: number; tree?: boolean } = {}): Promise<PrestaShopCategoryDetails[]> {
     const queryParams = [
-      'display=[id,name,active]',
+      'display=[id,name,active,id_parent,level_depth,position,is_root_category]',
       `limit=${params.limit ?? 1000}`,
-      'sort=[name_ASC]',
     ];
+    if (!params.tree) queryParams.push('sort=[name_ASC]');
 
     if (params.activeOnly ?? true) {
       queryParams.push('filter[active]=[1]');
@@ -401,11 +441,156 @@ export class PrestaShopClient {
     if (!data.categories) return [];
 
     const categories = Array.isArray(data.categories) ? data.categories : [data.categories];
-    return categories.map((category: PrestaShopCategory) => ({
-      id: String(category.id),
-      name: normalizePrestaShopLocalizedValue(category.name) || `Kategoria ${category.id}`,
-      active: category.active === undefined ? true : String(category.active) !== '0',
-    }));
+    const normalized = categories.map((category: PrestaShopCategory) => normalizePrestaShopCategory(category));
+    return params.tree ? sortCategoriesByPath(withCategoryPaths(normalized)) : normalized;
+  }
+
+  async createCategory(input: CreatePrestaShopCategoryInput): Promise<PrestaShopCategoryDetails> {
+    if (!input.name.trim()) throw new Error('PrestaShop category name is required');
+    if (!String(input.parentId ?? '').trim()) throw new Error('PrestaShop category parentId is required');
+
+    const payload = buildCategoryXml(input);
+    const { text, response } = await this.fetchWebServiceText('categories', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/xml',
+        Accept: 'application/xml',
+      },
+      body: payload,
+    });
+
+    const idFromLocation = response.headers.get('location')?.match(/\/categories\/(\d+)\b/)?.[1];
+    const id = idFromLocation ?? extractXmlTagValue(text, 'id');
+    if (!id) {
+      throw new Error('PrestaShop category was created but response did not contain category id');
+    }
+
+    return this.fetchCategory(id);
+  }
+
+  async updateCategory(categoryId: string, input: UpdatePrestaShopCategoryInput): Promise<PrestaShopCategoryDetails> {
+    const id = categoryId.trim();
+    if (!id) throw new Error('PrestaShop category id is required');
+
+    const languageId = String(input.languageId ?? 1);
+    const { text: categoryXml } = await this.fetchWebServiceText(`categories/${encodeURIComponent(id)}`, {
+      headers: { Accept: 'application/xml' },
+    });
+
+    let payload = categoryXml;
+    if (input.name !== undefined) {
+      const name = input.name.trim();
+      if (!name) throw new Error('PrestaShop category name is required');
+      payload = replaceLocalizedXmlTag(payload, 'name', name, languageId);
+      if (input.linkRewrite === undefined) {
+        payload = replaceLocalizedXmlTag(payload, 'link_rewrite', slugify(name), languageId);
+      }
+    }
+    if (input.parentId !== undefined) {
+      const parentId = String(input.parentId).trim();
+      if (!parentId) throw new Error('PrestaShop category parentId is required');
+      payload = replaceSimpleXmlTag(payload, 'id_parent', parentId);
+    }
+    if (input.active !== undefined) {
+      payload = replaceSimpleXmlTag(payload, 'active', input.active ? '1' : '0');
+    }
+    if (input.idShopDefault !== undefined && input.idShopDefault !== null && String(input.idShopDefault).trim()) {
+      payload = replaceSimpleXmlTag(payload, 'id_shop_default', String(input.idShopDefault).trim());
+    }
+    if (input.linkRewrite !== undefined) {
+      payload = replaceLocalizedXmlTag(payload, 'link_rewrite', input.linkRewrite?.trim() || slugify(input.name ?? id), languageId);
+    }
+    if (input.description !== undefined) {
+      payload = replaceLocalizedXmlTag(payload, 'description', input.description?.trim() || '', languageId);
+    }
+    if (input.metaTitle !== undefined) {
+      payload = replaceLocalizedXmlTag(payload, 'meta_title', input.metaTitle?.trim() || '', languageId);
+    }
+    if (input.metaDescription !== undefined) {
+      payload = replaceLocalizedXmlTag(payload, 'meta_description', input.metaDescription?.trim() || '', languageId);
+    }
+
+    await this.fetchWebServiceText(`categories/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/xml',
+        Accept: 'application/xml',
+      },
+      body: payload,
+    });
+
+    return this.fetchCategory(id);
+  }
+
+  async deactivateCategory(categoryId: string): Promise<PrestaShopCategoryDetails> {
+    return this.updateCategory(categoryId, { active: false });
+  }
+
+  async deleteCategory(categoryId: string): Promise<void> {
+    const id = categoryId.trim();
+    if (!id) throw new Error('PrestaShop category id is required');
+
+    await this.fetchWebServiceText(`categories/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { Accept: 'application/xml' },
+    });
+  }
+
+  async fetchCategory(categoryId: string): Promise<PrestaShopCategoryDetails> {
+    const id = categoryId.trim();
+    if (!id) throw new Error('PrestaShop category id is required');
+
+    const data = await this.fetchWebService<any>(`categories/${encodeURIComponent(id)}?display=full`);
+    const category = data.category ?? data.categories?.[0] ?? data;
+    return withCategoryPaths([normalizePrestaShopCategory(category as PrestaShopCategory)])[0];
+  }
+
+  async categoryHasChildren(categoryId: string): Promise<boolean> {
+    const id = categoryId.trim();
+    if (!id) return false;
+
+    const childrenQuery = [
+      `filter[id_parent]=[${encodeURIComponent(id)}]`,
+      'display=[id]',
+      'limit=1',
+    ].join('&');
+    const data = await this.fetchWebService<any>(`categories?${childrenQuery}`);
+    const categories = data.categories
+      ? Array.isArray(data.categories) ? data.categories : [data.categories]
+      : [];
+    return categories.length > 0;
+  }
+
+  async categoryHasProducts(categoryId: string): Promise<boolean> {
+    const id = categoryId.trim();
+    if (!id) return false;
+
+    const defaultCategoryProductsQuery = [
+      `filter[id_category_default]=[${encodeURIComponent(id)}]`,
+      'display=[id]',
+      'limit=1',
+    ].join('&');
+    const defaultCategoryData = await this.fetchWebService<any>(`products?${defaultCategoryProductsQuery}`);
+    const defaultCategoryProducts = defaultCategoryData.products
+      ? Array.isArray(defaultCategoryData.products) ? defaultCategoryData.products : [defaultCategoryData.products]
+      : [];
+    if (defaultCategoryProducts.length > 0) return true;
+
+    try {
+      const categoryData = await this.fetchWebService<any>(`categories/${encodeURIComponent(id)}?display=full`);
+      const category = categoryData.category ?? categoryData.categories?.[0] ?? categoryData;
+      const associatedProducts = (category as PrestaShopCategory | undefined)?.associations?.products;
+      if (!associatedProducts) return false;
+      if (Array.isArray(associatedProducts)) return associatedProducts.length > 0;
+      if (typeof associatedProducts === 'object') {
+        const product = (associatedProducts as any).product;
+        return Array.isArray(product) ? product.length > 0 : Boolean(product);
+      }
+    } catch {
+      return false;
+    }
+
+    return false;
   }
 
   async fetchOrderStates(): Promise<PrestaShopOrderStatusDetails[]> {
@@ -978,6 +1163,81 @@ function normalizePrestaShopLocalizedValue(value: unknown): string {
   return '';
 }
 
+function normalizePrestaShopCategory(category: PrestaShopCategory): PrestaShopCategoryDetails {
+  const id = String(category.id);
+  const parentId = normalizeNullableId(category.id_parent);
+
+  return {
+    id,
+    name: normalizePrestaShopLocalizedValue(category.name) || `Kategoria ${id}`,
+    active: category.active === undefined ? true : String(category.active) !== '0',
+    parentId,
+    levelDepth: normalizeNullableNumber(category.level_depth),
+    position: normalizeNullableNumber(category.position),
+    isRoot: normalizeBooleanish(category.is_root_category),
+    nleft: normalizeNullableNumber(category.nleft),
+    nright: normalizeNullableNumber(category.nright),
+    path: '',
+  };
+}
+
+function withCategoryPaths(categories: PrestaShopCategoryDetails[]): PrestaShopCategoryDetails[] {
+  const byId = new Map(categories.map((category) => [category.id, category]));
+
+  function buildPath(category: PrestaShopCategoryDetails, seen = new Set<string>()): string {
+    if (seen.has(category.id)) return category.name;
+    seen.add(category.id);
+
+    const parent = category.parentId ? byId.get(category.parentId) : null;
+    if (!parent || parent.id === category.id) return category.name;
+    return `${buildPath(parent, seen)} / ${category.name}`;
+  }
+
+  return categories.map((category) => ({
+    ...category,
+    path: buildPath(category),
+  }));
+}
+
+function sortCategoriesByPath(categories: PrestaShopCategoryDetails[]) {
+  return [...categories].sort((left, right) => {
+    const pathComparison = left.path.localeCompare(right.path, 'pl', { numeric: true, sensitivity: 'base' });
+    if (pathComparison !== 0) return pathComparison;
+    return Number(left.position ?? 0) - Number(right.position ?? 0);
+  });
+}
+
+export function buildCategoryXml(input: CreatePrestaShopCategoryInput) {
+  const languageId = String(input.languageId ?? 1);
+  const name = input.name.trim();
+  const parentId = String(input.parentId).trim();
+  const linkRewrite = input.linkRewrite?.trim() || slugify(name);
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
+  <category>
+    <id_parent>${escapeXml(parentId)}</id_parent>
+    <active>${input.active === false ? 0 : 1}</active>
+    ${input.idShopDefault ? `<id_shop_default>${escapeXml(String(input.idShopDefault))}</id_shop_default>` : ''}
+    <name>
+      <language id="${escapeXml(languageId)}"><![CDATA[${cdata(name)}]]></language>
+    </name>
+    <link_rewrite>
+      <language id="${escapeXml(languageId)}"><![CDATA[${cdata(linkRewrite)}]]></language>
+    </link_rewrite>
+    <description>
+      <language id="${escapeXml(languageId)}"><![CDATA[${cdata(input.description?.trim() || '')}]]></language>
+    </description>
+    <meta_title>
+      <language id="${escapeXml(languageId)}"><![CDATA[${cdata(input.metaTitle?.trim() || '')}]]></language>
+    </meta_title>
+    <meta_description>
+      <language id="${escapeXml(languageId)}"><![CDATA[${cdata(input.metaDescription?.trim() || '')}]]></language>
+    </meta_description>
+  </category>
+</prestashop>`;
+}
+
 function buildProductXml(input: CreatePrestaShopProductInput) {
   const languageId = String(input.languageId ?? 1);
   const categoryId = input.categoryId.trim();
@@ -1028,8 +1288,27 @@ function extractXmlTagValue(xml: string, tagName: string) {
 
 function replaceSimpleXmlTag(xml: string, tagName: string, value: string) {
   const pattern = new RegExp(`(<${tagName}\\b[^>]*>)([\\s\\S]*?)(</${tagName}>)`, 'i');
-  if (!pattern.test(xml)) throw new Error(`PrestaShop product XML missing <${tagName}>`);
+  if (!pattern.test(xml)) throw new Error(`PrestaShop XML missing <${tagName}>`);
   return xml.replace(pattern, (_match, openTag, _currentValue, closeTag) => `${openTag}${escapeXml(value)}${closeTag}`);
+}
+
+function replaceLocalizedXmlTag(xml: string, tagName: string, value: string, languageId: string) {
+  const tagPattern = new RegExp(`(<${tagName}\\b[^>]*>)([\\s\\S]*?)(</${tagName}>)`, 'i');
+  const tagMatch = xml.match(tagPattern);
+  if (!tagMatch) throw new Error(`PrestaShop category XML missing <${tagName}>`);
+
+  const [, openTag, innerXml, closeTag] = tagMatch;
+  const languagePattern = new RegExp(`(<language\\b[^>]*\\bid=["']?${escapeRegExp(languageId)}["']?[^>]*>)([\\s\\S]*?)(</language>)`, 'i');
+  const nextLanguageXml = `${escapeXml(value)}`;
+  const replacementInnerXml = languagePattern.test(innerXml)
+    ? innerXml.replace(languagePattern, (_match, openLanguage, _currentValue, closeLanguage) => `${openLanguage}${nextLanguageXml}${closeLanguage}`)
+    : `${innerXml}\n      <language id="${escapeXml(languageId)}">${nextLanguageXml}</language>`;
+
+  return xml.replace(tagPattern, `${openTag}${replacementInnerXml}${closeTag}`);
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function buildOrderHistoryXml(input: { orderId: string; orderStateId: string }) {
@@ -1146,6 +1425,17 @@ function normalizeId(value: unknown) {
   if (value === undefined || value === null) return '';
   const text = String(value).trim();
   return text && text !== '0' ? text : '';
+}
+
+function normalizeNullableId(value: unknown) {
+  const id = normalizeId(value);
+  return id || null;
+}
+
+function normalizeNullableNumber(value: unknown) {
+  if (value === undefined || value === null || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function normalizeBooleanish(value: unknown) {

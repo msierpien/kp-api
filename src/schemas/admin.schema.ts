@@ -41,12 +41,61 @@ export const shopIdParamsSchema = z.object({
   id: z.string().min(1),
 });
 
+export const prestaShopCategoriesQuerySchema = z.object({
+  activeOnly: z.union([z.boolean(), z.string()]).optional().transform((value) => {
+    if (value === undefined) return false;
+    if (typeof value === 'boolean') return value;
+    return !['false', '0', 'no'].includes(value.trim().toLowerCase());
+  }),
+  tree: z.union([z.boolean(), z.string()]).optional().transform((value) => {
+    if (value === undefined) return false;
+    if (typeof value === 'boolean') return value;
+    return ['true', '1', 'yes'].includes(value.trim().toLowerCase());
+  }),
+  limit: z.coerce.number().int().min(1).max(5000).optional(),
+});
+
+export const prestaShopCategoryParamsSchema = shopIdParamsSchema.extend({
+  categoryId: z.string().min(1),
+});
+
+const optionalCategoryText = z.string().trim().max(65535).optional().nullable();
+
+export const createPrestaShopCategorySchema = z.object({
+  name: z.string().trim().min(1, 'Nazwa kategorii jest wymagana').max(128),
+  parentId: z.union([z.string(), z.number()]).transform((value) => String(value).trim()).pipe(z.string().min(1, 'Kategoria nadrzędna jest wymagana')),
+  active: z.boolean().optional().default(true),
+  linkRewrite: z.string().trim().max(128).optional().nullable(),
+  description: optionalCategoryText,
+  metaTitle: z.string().trim().max(255).optional().nullable(),
+  metaDescription: z.string().trim().max(512).optional().nullable(),
+  languageId: z.union([z.string(), z.number()]).optional().nullable(),
+  idShopDefault: z.union([z.string(), z.number()]).optional().nullable(),
+});
+
+export const updatePrestaShopCategorySchema = createPrestaShopCategorySchema.partial().extend({
+  active: z.boolean().optional(),
+});
+
+export const deletePrestaShopCategoryQuerySchema = z.object({
+  hard: z.union([z.boolean(), z.string()]).optional().transform((value) => {
+    if (value === undefined) return false;
+    if (typeof value === 'boolean') return value;
+    return ['true', '1', 'yes'].includes(value.trim().toLowerCase());
+  }),
+});
+
 export type PaginationInput = z.infer<typeof paginationSchema>;
 export type CasesQueryInput = z.infer<typeof casesQuerySchema>;
 export type SyncLogsQueryInput = z.infer<typeof syncLogsQuerySchema>;
 export type CreateShopInput = z.infer<typeof createShopSchema>;
 export type UpdateShopInput = z.infer<typeof updateShopSchema>;
 export type ShopIdParamsInput = z.infer<typeof shopIdParamsSchema>;
+export type PrestaShopCategoriesQueryInput = z.infer<typeof prestaShopCategoriesQuerySchema>;
+export type PrestaShopCategoryParamsInput = z.infer<typeof prestaShopCategoryParamsSchema>;
+export type CreatePrestaShopCategoryInput = z.infer<typeof createPrestaShopCategorySchema>;
+export type UpdatePrestaShopCategoryInput = z.infer<typeof updatePrestaShopCategorySchema>;
+export type DeletePrestaShopCategoryQueryInput = z.infer<typeof deletePrestaShopCategoryQuerySchema>;
 
 // Personalized products (mapping identifier -> template)
 export const personalizedProductSchema = z.object({

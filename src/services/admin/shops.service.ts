@@ -4,7 +4,13 @@ import prisma from '../../lib/prisma';
 import { encrypt, decrypt } from '../../lib/encryption';
 import { config as appConfig } from '../../config';
 import { ForbiddenError, NotFoundError, ValidationError } from '../../lib/errors';
-import type { CreateShopInput, UpdateShopInput } from '../../schemas/admin.schema';
+import type {
+  CreatePrestaShopCategoryInput,
+  CreateShopInput,
+  PrestaShopCategoriesQueryInput,
+  UpdatePrestaShopCategoryInput,
+  UpdateShopInput,
+} from '../../schemas/admin.schema';
 import type { ShopItem, UserRole } from '../../types';
 import { removeShopFromScheduler } from '../scheduler/scheduler.service';
 import { getTenantContext } from '../../lib/tenant-context';
@@ -686,7 +692,48 @@ export async function getShopImportReadiness(id: string) {
   };
 }
 
-export async function getPrestaShopCategories(id: string) {
+export async function getPrestaShopCategories(id: string, query: PrestaShopCategoriesQueryInput = { activeOnly: true, tree: false }) {
+  const client = await getPrestaShopCategoryClient(id);
+  return client.fetchCategories({
+    activeOnly: query.activeOnly,
+    tree: query.tree,
+    limit: query.limit,
+  });
+}
+
+export async function createPrestaShopCategory(id: string, input: CreatePrestaShopCategoryInput) {
+  const client = await getPrestaShopCategoryClient(id);
+  return client.createCategory(input);
+}
+
+export async function updatePrestaShopCategory(id: string, categoryId: string, input: UpdatePrestaShopCategoryInput) {
+  const client = await getPrestaShopCategoryClient(id);
+  return client.updateCategory(categoryId, input);
+}
+
+export async function deletePrestaShopCategory(id: string, categoryId: string, options: { hard?: boolean } = {}) {
+  const client = await getPrestaShopCategoryClient(id);
+
+  if (!options.hard) {
+    return client.deactivateCategory(categoryId);
+  }
+
+  const [hasChildren, hasProducts] = await Promise.all([
+    client.categoryHasChildren(categoryId),
+    client.categoryHasProducts(categoryId),
+  ]);
+  if (hasChildren) {
+    throw new ValidationError('Nie można trwale usunąć kategorii, która ma podkategorie. Najpierw przenieś lub usuń podkategorie.');
+  }
+  if (hasProducts) {
+    throw new ValidationError('Nie można trwale usunąć kategorii, która ma produkty. Użyj dezaktywacji albo przenieś produkty.');
+  }
+
+  await client.deleteCategory(categoryId);
+  return { success: true, id: categoryId };
+}
+
+async function getPrestaShopCategoryClient(id: string) {
   const shop = await prisma.shop.findFirst({
     where: getShopAdminWhere(id),
   });
@@ -704,6 +751,5 @@ export async function getPrestaShopCategories(id: string) {
     authType: shopConfig.authType === 'ADMIN_API' ? 'ADMIN_API' : 'WEB_SERVICE',
     adminApiConfig: shopConfig.authType === 'ADMIN_API' ? shopConfig.adminApi : undefined,
   });
-
-  return client.fetchCategories({ activeOnly: true });
+  return client;
 }

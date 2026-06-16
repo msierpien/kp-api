@@ -19,7 +19,7 @@ export const aiSettingsRoutes: FastifyPluginAsync = async (server: any) => {
     schema: {
       tags: ['ai'],
       summary: 'Pobierz ustawienia AI',
-      response: { 200: { type: 'object' } },
+      response: { 200: { type: 'object', additionalProperties: true } },
     },
   }, async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
@@ -39,7 +39,7 @@ export const aiSettingsRoutes: FastifyPluginAsync = async (server: any) => {
       tags: ['ai'],
       summary: 'Zapisz ustawienia AI',
       body: { type: 'object' },
-      response: { 200: { type: 'object' } },
+      response: { 200: { type: 'object', additionalProperties: true } },
     },
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
@@ -74,7 +74,7 @@ export const aiSettingsRoutes: FastifyPluginAsync = async (server: any) => {
           provider: { type: 'string', enum: ['OPENAI', 'ANTHROPIC', 'DEEPSEEK'] },
         },
       },
-      response: { 200: { type: 'object' } },
+      response: { 200: { type: 'object', additionalProperties: true } },
     },
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
@@ -102,7 +102,7 @@ export const aiSettingsRoutes: FastifyPluginAsync = async (server: any) => {
     schema: {
       tags: ['ai'],
       summary: 'Lista szablonów promptów AI',
-      response: { 200: { type: 'array', items: { type: 'object' } } },
+      response: { 200: { type: 'array', items: { type: 'object', additionalProperties: true } } },
     },
   }, async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
@@ -122,7 +122,7 @@ export const aiSettingsRoutes: FastifyPluginAsync = async (server: any) => {
       tags: ['ai'],
       summary: 'Utwórz szablon promptu AI',
       body: { type: 'object' },
-      response: { 201: { type: 'object' } },
+      response: { 201: { type: 'object', additionalProperties: true } },
     },
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
@@ -152,7 +152,7 @@ export const aiSettingsRoutes: FastifyPluginAsync = async (server: any) => {
       summary: 'Zaktualizuj szablon promptu AI',
       params: { type: 'object', properties: { id: { type: 'string' } } },
       body: { type: 'object' },
-      response: { 200: { type: 'object' } },
+      response: { 200: { type: 'object', additionalProperties: true } },
     },
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {

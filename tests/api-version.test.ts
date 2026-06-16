@@ -12,14 +12,14 @@ describe('API version contract', () => {
       getApplicationVersionInfo,
     } = await import('../src/services/ops/version.service');
 
-    assert.equal(API_VERSION, '1.3.4');
+    assert.equal(API_VERSION, '1.3.6');
     assert.equal(API_CONTRACT_VERSION, 3);
     assert.equal(MIN_ADMIN_CONTRACT_VERSION, 2);
     assert.equal(MIN_ADMIN_VERSION, '0.3.0');
     assert.equal(COMPATIBILITY_PROFILE, 'kp-admin-api');
 
     const info = getApplicationVersionInfo('test');
-    assert.equal(info.version, '1.3.4');
+    assert.equal(info.version, '1.3.6');
     assert.equal(info.compatibilityProfile, 'kp-admin-api');
     assert.equal(info.apiContractVersion, 3);
     assert.equal(info.minAdminContractVersion, 2);

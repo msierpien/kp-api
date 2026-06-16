@@ -477,13 +477,15 @@ async function issuePreparedInvoice(
 
     // Faktura jest wystawiana jako nieopłacona, więc wpłatę rejestrujemy osobno z datą złożenia
     // zamówienia. Robimy to przed pobraniem PDF, żeby dokument od razu pokazywał opłacenie.
+    // iFirma przy tworzeniu faktury zwraca tylko Identyfikator (bez Numer), a endpoint wpłat
+    // przyjmuje identyfikator jako numer_faktury.
     let paymentWarning: string | null = null;
     if (payment && payment.amount > 0) {
-      if (!response.number) {
-        paymentWarning = 'Faktura wystawiona, ale iFirma nie zwróciła numeru — nie zarejestrowano wpłaty.';
+      if (!externalId) {
+        paymentWarning = 'Faktura wystawiona, ale iFirma nie zwróciła identyfikatora — nie zarejestrowano wpłaty.';
       } else {
         try {
-          await client.registerDomesticInvoicePayment(response.number, payment);
+          await client.registerDomesticInvoicePayment(externalId, payment);
         } catch (error) {
           const message = error instanceof Error ? error.message : 'nieznany błąd';
           paymentWarning = `Faktura wystawiona, ale nie udało się zarejestrować wpłaty w iFirma: ${message}`;

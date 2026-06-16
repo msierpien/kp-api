@@ -12,6 +12,7 @@ import { personalizedProductsRoutes } from './personalized-products.routes';
 import { shopMappingsRoutes } from './shop-mappings.routes';
 import { templatesRoutes } from './templates.routes';
 import { emailSettingsRoutes } from './email-settings.routes';
+import { aiSettingsRoutes } from './ai-settings.routes';
 import { automationsRoutes } from './automations.routes';
 import { renderJobsRoutes } from './render-jobs.routes';
 import { tenantsRoutes } from './tenants.routes';
@@ -44,6 +45,7 @@ export async function adminRoutes(fastify: FastifyInstance) {
   fastify.register(shopMappingsRoutes, { prefix: '/shop-mappings' });
   fastify.register(templatesRoutes, { prefix: '/templates' });
   fastify.register(emailSettingsRoutes, { prefix: '/email-settings' });
+  fastify.register(aiSettingsRoutes, { prefix: '/ai-settings' });
   fastify.register(automationsRoutes, { prefix: '/automations' });
   fastify.register(renderJobsRoutes, { prefix: '/render-jobs' });
   fastify.register(tenantsRoutes, { prefix: '/tenants' });

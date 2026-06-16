@@ -235,6 +235,60 @@ export const emailSettingsIdParamsSchema = z.object({
 export type EmailSettingsInput = z.infer<typeof emailSettingsSchema>;
 export type EmailSettingsIdParams = z.infer<typeof emailSettingsIdParamsSchema>;
 
+// AI Settings
+export const aiProviderSchema = z.enum(['OPENAI', 'ANTHROPIC', 'DEEPSEEK']);
+
+export const aiSettingsSchema = z.object({
+  activeProvider: aiProviderSchema.default('OPENAI'),
+  openaiApiKey: z.string().optional().nullable(),
+  anthropicApiKey: z.string().optional().nullable(),
+  deepseekApiKey: z.string().optional().nullable(),
+  openaiTextModel: z.string().min(1).default('gpt-4.1-mini'),
+  openaiVisionModel: z.string().min(1).default('gpt-4.1-mini'),
+  anthropicTextModel: z.string().min(1).default('claude-3-5-sonnet-latest'),
+  anthropicVisionModel: z.string().min(1).default('claude-3-5-sonnet-latest'),
+  deepseekTextModel: z.string().min(1).default('deepseek-chat'),
+  deepseekVisionModel: z.string().optional().nullable(),
+  dailyLimit: z.coerce.number().int().min(1).max(100000).default(200),
+  monthlyLimit: z.coerce.number().int().min(1).max(1000000).default(5000),
+  timeoutMs: z.coerce.number().int().min(5000).max(180000).default(45000),
+  maxBatchSize: z.coerce.number().int().min(1).max(200).default(20),
+  defaultPromptTemplateId: z.string().optional().nullable(),
+  toneJson: z.any().optional().nullable(),
+  rulesJson: z.any().optional().nullable(),
+});
+
+export const aiProviderTestSchema = z.object({
+  provider: aiProviderSchema,
+});
+
+export const aiPromptTemplateSchema = z.object({
+  name: z.string().min(1).max(120),
+  category: z.string().min(1).max(80).default('UNIVERSAL'),
+  productType: z.string().max(120).optional().nullable(),
+  occasionContext: z.string().max(200).optional().nullable(),
+  tone: z.string().min(1).max(120).default('naturalny sprzedazowy'),
+  brief: z.string().min(1).max(8000),
+  systemPrompt: z.string().max(8000).optional().nullable(),
+  htmlMode: z.enum(['basic', 'plain']).default('basic'),
+  rulesJson: z.any().optional().nullable(),
+  isDefault: z.boolean().default(false),
+  isActive: z.boolean().default(true),
+});
+
+export const aiPromptTemplateUpdateSchema = aiPromptTemplateSchema.partial();
+
+export const aiPromptTemplateIdParamsSchema = z.object({
+  id: z.string().min(1),
+});
+
+export type AiProvider = z.infer<typeof aiProviderSchema>;
+export type AiSettingsInput = z.infer<typeof aiSettingsSchema>;
+export type AiProviderTestInput = z.infer<typeof aiProviderTestSchema>;
+export type AiPromptTemplateInput = z.infer<typeof aiPromptTemplateSchema>;
+export type AiPromptTemplateUpdateInput = z.infer<typeof aiPromptTemplateUpdateSchema>;
+export type AiPromptTemplateIdParams = z.infer<typeof aiPromptTemplateIdParamsSchema>;
+
 export const ifirmaSettingsSchema = z.object({
   login: z.string().min(1, 'Login iFirma jest wymagany'),
   invoiceKey: z.string().min(1, 'Klucz faktura iFirma jest wymagany'),

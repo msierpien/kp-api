@@ -36,6 +36,8 @@ model Tenant {
   shops                 Shop[]
   templates             PersonalizationTemplate[]
   emailSettings         EmailSettings[]
+  aiSettings            AiSettings?
+  aiPromptTemplates     AiPromptTemplate[]
   warehouseProducts     WarehouseProduct[]
   warehouseCatalogs     WarehouseCatalog[]
   warehouseLeadTimeGroups WarehouseLeadTimeGroup[]
@@ -786,6 +788,68 @@ model EmailSettings {
 
   @@index([tenantId])
   @@map("email_settings")
+}
+
+// ============================================
+// Ustawienia AI
+// ============================================
+
+model AiSettings {
+  id                      String    @id @default(cuid())
+  tenantId                String    @unique @map("tenant_id")
+  activeProvider          String    @default("OPENAI") @map("active_provider")
+  openaiApiKey            String?   @map("openai_api_key")
+  anthropicApiKey         String?   @map("anthropic_api_key")
+  deepseekApiKey          String?   @map("deepseek_api_key")
+  openaiTextModel         String    @default("gpt-4.1-mini") @map("openai_text_model")
+  openaiVisionModel       String    @default("gpt-4.1-mini") @map("openai_vision_model")
+  anthropicTextModel      String    @default("claude-3-5-sonnet-latest") @map("anthropic_text_model")
+  anthropicVisionModel    String    @default("claude-3-5-sonnet-latest") @map("anthropic_vision_model")
+  deepseekTextModel       String    @default("deepseek-chat") @map("deepseek_text_model")
+  deepseekVisionModel     String?   @map("deepseek_vision_model")
+  dailyLimit              Int       @default(200) @map("daily_limit")
+  monthlyLimit            Int       @default(5000) @map("monthly_limit")
+  timeoutMs               Int       @default(45000) @map("timeout_ms")
+  maxBatchSize            Int       @default(20) @map("max_batch_size")
+  defaultPromptTemplateId String?   @map("default_prompt_template_id")
+  toneJson                Json?     @map("tone_json")
+  rulesJson               Json?     @map("rules_json")
+  lastTestProvider        String?   @map("last_test_provider")
+  lastTestStatus          String?   @map("last_test_status")
+  lastTestAt              DateTime? @map("last_test_at")
+  lastTestMessage         String?   @map("last_test_message")
+  createdAt               DateTime  @default(now()) @map("created_at")
+  updatedAt               DateTime  @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("ai_settings")
+}
+
+model AiPromptTemplate {
+  id              String   @id @default(cuid())
+  tenantId        String   @map("tenant_id")
+  name            String
+  category        String   @default("UNIVERSAL")
+  productType     String?  @map("product_type")
+  occasionContext String?  @map("occasion_context")
+  tone            String   @default("naturalny sprzedazowy")
+  brief           String   @db.Text
+  systemPrompt    String?  @map("system_prompt") @db.Text
+  htmlMode        String   @default("basic") @map("html_mode")
+  rulesJson       Json?    @map("rules_json")
+  isDefault       Boolean  @default(false) @map("is_default")
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+  @@index([tenantId, isDefault])
+  @@map("ai_prompt_templates")
 }
 
 // ============================================

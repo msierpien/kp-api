@@ -9,6 +9,7 @@ import * as stockSyncService from '../../../services/stock/stock-sync.service';
 import * as shopProductPublicationService from '../../../services/admin/shop-product-publication.service';
 import * as pricingService from '../../../services/admin/warehouse-pricing.service';
 import * as productCardService from '../../../services/admin/product-card.service';
+import * as aiContentProposalService from '../../../services/admin/ai-content-proposals.service';
 import { pricingProductsBodySchema } from './pricing.routes';
 import { getProductStock } from '../../../services/admin/warehouse-stock.service';
 
@@ -568,6 +569,43 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
       return reply
         .status(productCardService.productCardErrorStatus(error))
         .send(productCardService.productCardErrorBody(error));
+    }
+  });
+
+  fastify.post('/products/:id/ai/content-proposal', {
+    schema: {
+      tags: ['warehouse-ai'],
+      summary: 'Wygeneruj propozycję opisu i SEO produktu',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        required: ['action'],
+        properties: {
+          shopId: { type: 'string' },
+          templateId: { type: ['string', 'null'] },
+          action: { type: 'string', enum: ['GENERATE', 'IMPROVE', 'SHORTEN', 'SEO'] },
+          imageUrl: { type: ['string', 'null'] },
+          current: { type: 'object', additionalProperties: true },
+          categories: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          features: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: aiContentProposalService.AiContentProposalInput;
+  }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await aiContentProposalService.generateWarehouseProductContentProposal(request.params.id, request.body));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się wygenerować propozycji AI';
+      const status = message.includes('Brak') ? 400 : message.includes('nie znalezion') ? 404 : 500;
+      fastify.log.error(error);
+      return reply.status(status).send({ error: 'Error', message });
     }
   });
 

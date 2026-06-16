@@ -3,6 +3,12 @@ import crypto from 'node:crypto';
 export const IFIRMA_KEY_NAME_INVOICE = 'faktura';
 export const IFIRMA_DOMESTIC_INVOICE_URL = 'https://www.ifirma.pl/iapi/fakturakraj.json';
 export const IFIRMA_DOMESTIC_INVOICE_CORRECTION_BASE_URL = 'https://www.ifirma.pl/iapi/fakturakraj/korekta';
+export const IFIRMA_INVOICE_PAYMENT_BASE_URL = 'https://www.ifirma.pl/iapi/faktury/wplaty/prz_faktura_kraj';
+
+export interface IfirmaInvoicePaymentInput {
+  amount: number;
+  date: string;
+}
 
 export interface IfirmaClientConfig {
   login: string;
@@ -76,6 +82,41 @@ export class IfirmaClient {
     }
 
     return normalized;
+  }
+
+  async registerDomesticInvoicePayment(invoiceNumber: string, payment: IfirmaInvoicePaymentInput): Promise<void> {
+    const numberSegment = invoiceNumber.trim().replace(/\//g, '_');
+    if (!numberSegment) throw new Error('iFirma invoice number is required to register a payment');
+
+    const url = `${IFIRMA_INVOICE_PAYMENT_BASE_URL}/${encodeURIComponent(numberSegment)}.json`;
+    const requestContent = JSON.stringify({ Kwota: payment.amount, Data: payment.date });
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json; charset=UTF-8',
+        Authentication: createIfirmaAuthenticationHeader({
+          url,
+          user: this.config.login,
+          keyName: IFIRMA_KEY_NAME_INVOICE,
+          requestContent,
+          key: this.config.invoiceKey,
+        }),
+      },
+      body: requestContent,
+    });
+
+    const text = await response.text();
+    const raw = text ? JSON.parse(text) : {};
+
+    if (!response.ok) {
+      throw new Error(`iFirma payment API error ${response.status}: ${text.slice(0, 300)}`);
+    }
+
+    const normalized = normalizeIssueResponse(raw);
+    if (normalized.code !== null && normalized.code !== 0) {
+      throw new Error(normalized.information || `iFirma returned code ${normalized.code}`);
+    }
   }
 
   async downloadDomesticInvoicePdf(identifier: string): Promise<Buffer> {

@@ -12,10 +12,16 @@ export interface IfirmaInvoiceSettingsSnapshot {
   splitBundleItems?: boolean;
 }
 
+export interface IfirmaInvoicePayment {
+  amount: number;
+  date: string;
+}
+
 export interface IfirmaInvoicePreview {
   payload: Record<string, unknown>;
   errors: string[];
   warnings: string[];
+  payment: IfirmaInvoicePayment | null;
 }
 
 type OrderSnapshot = {
@@ -71,8 +77,11 @@ export function buildIfirmaDomesticInvoicePayload(
     errors.push(`iFirma MVP obsługuje tylko faktury krajowe PL, a adres faktury ma kraj ${countryCode || 'brak'}.`);
   }
 
+  // Data sprzedaży i wystawienia są ustawiane na ten sam dzień (dzień wystawienia faktury).
+  // Faktyczna data wpłaty (dzień złożenia zamówienia) jest rejestrowana osobnym wywołaniem
+  // API iFirma, bo endpoint faktury nie ma pola daty zapłaty.
   const issueDate = formatDate(now);
-  const saleDate = formatDate(order.createdAtShop);
+  const saleDate = issueDate;
   const paymentTerm = settings.paymentTermDays > 0
     ? formatDate(addDays(now, settings.paymentTermDays))
     : null;
@@ -83,16 +92,17 @@ export function buildIfirmaDomesticInvoicePayload(
   }
 
   const contractor = buildContractor(order, invoiceAddress, invoiceCountry, errors);
-  const totalPaid = roundMoney(numberOrZero(order.totalPaid));
+  const payment = buildIfirmaInvoicePayment(order);
   const discount = numberOrZero(order.totalDiscountsTaxIncl ?? snapshot.order?.total_discounts_tax_incl);
   const notes = [
     `Zamówienie ${order.orderReference}`,
     discount > 0 ? `Rabat z zamówienia: ${roundMoney(discount).toFixed(2)} PLN.` : null,
   ].filter(Boolean).join('\n');
 
+  // Faktura wystawiana jako nieopłacona; wpłata rejestrowana osobno z datą złożenia zamówienia.
   const payload: Record<string, unknown> = {
-    Zaplacono: totalPaid,
-    ZaplaconoNaDokumencie: totalPaid,
+    Zaplacono: 0,
+    ZaplaconoNaDokumencie: 0,
     LiczOd: 'BRT',
     NumerKontaBankowego: settings.bankAccountNumber?.trim() || null,
     DataWystawienia: issueDate,
@@ -114,7 +124,18 @@ export function buildIfirmaDomesticInvoicePayload(
   };
 
   removeUndefined(payload);
-  return { payload, errors, warnings };
+  return { payload, errors, warnings, payment };
+}
+
+// Wpłatę do faktury rejestruje się osobnym wywołaniem API iFirma. Data wpłaty to dzień
+// złożenia zamówienia (createdAtShop), kwota to faktycznie zapłacona kwota zamówienia.
+export function buildIfirmaInvoicePayment(input: {
+  totalPaid: unknown;
+  createdAtShop: Date | string;
+}): IfirmaInvoicePayment | null {
+  const amount = roundMoney(numberOrZero(input.totalPaid));
+  if (amount <= 0) return null;
+  return { amount, date: formatDate(input.createdAtShop) };
 }
 
 function normalizeSnapshot(value: any) {

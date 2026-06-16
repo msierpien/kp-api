@@ -76,9 +76,8 @@ describe('iFirma integration', () => {
     assert.equal(result.payload.DataWystawienia, '2026-06-07');
     assert.equal(result.payload.DataSprzedazy, '2026-06-07');
     assert.equal(result.payload.TerminPlatnosci, '2026-06-14');
-    assert.equal(result.payload.Zaplacono, 0);
-    assert.equal(result.payload.ZaplaconoNaDokumencie, 0);
-    assert.deepEqual(result.payment, { amount: 147.6, date: '2026-06-01' });
+    assert.equal(result.payload.Zaplacono, 147.6);
+    assert.equal(result.payload.ZaplaconoNaDokumencie, 147.6);
     assert.equal((result.payload.Kontrahent as any).Nazwa, 'Kupujący Sp. z o.o.');
     assert.equal((result.payload.Kontrahent as any).NIP, 'PL1234567890');
     assert.equal((result.payload.Pozycje as any[]).length, 2);

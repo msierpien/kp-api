@@ -8,7 +8,7 @@ import { config } from '../../config';
 import { decrypt } from '../../lib/encryption';
 import { getTenantId } from '../../lib/tenant-context';
 import { IfirmaClient } from '../ifirma/ifirma-client';
-import { buildIfirmaDomesticInvoicePayload, buildIfirmaInvoicePayment, type IfirmaInvoicePayment, type IfirmaInvoiceSettingsSnapshot } from '../ifirma/ifirma-invoice.mapper';
+import { buildIfirmaDomesticInvoicePayload, type IfirmaInvoiceSettingsSnapshot } from '../ifirma/ifirma-invoice.mapper';
 import { PrestaShopClient, type PrestaShopOrderDetails } from '../prestashop/prestashop-client';
 import { getDecryptedIfirmaSettings } from './ifirma-settings.service';
 import { createTenantEmailService } from './email-settings.service';
@@ -112,7 +112,7 @@ export async function issueOrderInvoice(orderId: string) {
         },
       });
 
-  const issued = await issuePreparedInvoice(document.id, order.shopId, preview.payload, preview.payment);
+  const issued = await issuePreparedInvoice(document.id, order.shopId, preview.payload);
 
   if (settings.sendEmailAfterIssue && issued.status === 'ISSUED') {
     await sendInvoiceEmail(issued.id).catch(() => undefined);
@@ -152,8 +152,7 @@ export async function retryInvoice(invoiceId: string) {
     },
   });
 
-  const payment = buildIfirmaInvoicePayment(document.order);
-  return issuePreparedInvoice(document.id, document.shopId, payload, payment);
+  return issuePreparedInvoice(document.id, document.shopId, payload);
 }
 
 export async function cancelOrderInvoice(orderId: string) {
@@ -459,12 +458,7 @@ function mergePrestaShopDeliveryMetadata(value: unknown, deliveryMetadata: Recor
   });
 }
 
-async function issuePreparedInvoice(
-  documentId: string,
-  shopId: string,
-  payload: Record<string, unknown>,
-  payment?: IfirmaInvoicePayment | null,
-) {
+async function issuePreparedInvoice(documentId: string, shopId: string, payload: Record<string, unknown>) {
   const settings = await getDecryptedIfirmaSettings(shopId);
   const client = new IfirmaClient({
     login: settings.login,
@@ -474,25 +468,6 @@ async function issuePreparedInvoice(
   try {
     const response = await client.issueDomesticInvoice(payload);
     const externalId = response.identifier;
-
-    // Faktura jest wystawiana jako nieopłacona, więc wpłatę rejestrujemy osobno z datą złożenia
-    // zamówienia. Robimy to przed pobraniem PDF, żeby dokument od razu pokazywał opłacenie.
-    // iFirma przy tworzeniu faktury zwraca tylko Identyfikator (bez Numer), a endpoint wpłat
-    // przyjmuje identyfikator jako numer_faktury.
-    let paymentWarning: string | null = null;
-    if (payment && payment.amount > 0) {
-      if (!externalId) {
-        paymentWarning = 'Faktura wystawiona, ale iFirma nie zwróciła identyfikatora — nie zarejestrowano wpłaty.';
-      } else {
-        try {
-          await client.registerDomesticInvoicePayment(externalId, payment);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'nieznany błąd';
-          paymentWarning = `Faktura wystawiona, ale nie udało się zarejestrować wpłaty w iFirma: ${message}`;
-        }
-      }
-    }
-
     let pdfPath: string | null = null;
     if (externalId) {
       pdfPath = await downloadAndStoreInvoicePdf(client, documentId, externalId).catch(() => null);
@@ -508,7 +483,7 @@ async function issuePreparedInvoice(
         pdfPath,
         issuedAt: new Date(),
         failedAt: null,
-        errorMessage: paymentWarning,
+        errorMessage: null,
       },
     });
   } catch (error) {

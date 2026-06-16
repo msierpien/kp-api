@@ -86,6 +86,63 @@ describe('iFirma integration', () => {
     assert.match(String(result.payload.Uwagi), /Rabat z zamówienia: 5.00 PLN/);
   });
 
+  it('maps common PrestaShop payment methods to iFirma codes', async () => {
+    const { mapPaymentMethodToIfirma } = await import('../src/services/ifirma/ifirma-invoice.mapper');
+    assert.equal(mapPaymentMethodToIfirma('PayU'), 'ALG');
+    assert.equal(mapPaymentMethodToIfirma('Przelewy24'), 'P24');
+    assert.equal(mapPaymentMethodToIfirma('p24official'), 'P24');
+    assert.equal(mapPaymentMethodToIfirma('tpay.com'), 'TPA');
+    assert.equal(mapPaymentMethodToIfirma('PayPal'), 'PAL');
+    assert.equal(mapPaymentMethodToIfirma('Płatność za pobraniem'), 'POB');
+    assert.equal(mapPaymentMethodToIfirma('ps_cashondelivery'), 'POB');
+    assert.equal(mapPaymentMethodToIfirma('Gotówka'), 'GTK');
+    assert.equal(mapPaymentMethodToIfirma('Przelew bankowy'), 'PRZ');
+    assert.equal(mapPaymentMethodToIfirma('ps_wirepayment'), 'PRZ');
+    assert.equal(mapPaymentMethodToIfirma('BLIK'), null);
+    assert.equal(mapPaymentMethodToIfirma(''), null);
+    assert.equal(mapPaymentMethodToIfirma(null), null);
+  });
+
+  it('uses the order payment method for SposobZaplaty and falls back to the default', async () => {
+    const { buildIfirmaDomesticInvoicePayload } = await import('../src/services/ifirma/ifirma-invoice.mapper');
+    const baseOrder = {
+      id: 'order-pay',
+      orderReference: 'KP-PAY',
+      customerEmail: 'jan@example.com',
+      customerName: 'Jan Kowalski',
+      currency: 'PLN',
+      totalPaid: 30,
+      createdAtShop: new Date('2026-06-01T10:00:00Z'),
+      billingAddressJson: {
+        firstname: 'Jan',
+        lastname: 'Kowalski',
+        address1: 'Prosta 1',
+        postcode: '00-001',
+        city: 'Warszawa',
+        country: { iso_code: 'PL', name: 'Polska' },
+      },
+      payloadJson: { items: [{ product_name: 'Produkt', product_quantity: 1, unit_price_tax_incl: 30, tax_rate: 23 }] },
+    };
+    const settings = {
+      defaultPaymentMethod: 'PRZ',
+      paymentTermDays: 0,
+      receiverSignatureType: 'BPO',
+      visibleBdo: false,
+    };
+
+    const payu = buildIfirmaDomesticInvoicePayload({ ...baseOrder, paymentMethod: 'PayU' }, settings);
+    assert.equal(payu.payload.SposobZaplaty, 'ALG');
+
+    const fromSnapshotModule = buildIfirmaDomesticInvoicePayload(
+      { ...baseOrder, paymentMethod: null, payloadJson: { ...baseOrder.payloadJson, order: { module: 'p24official' } } },
+      settings,
+    );
+    assert.equal(fromSnapshotModule.payload.SposobZaplaty, 'P24');
+
+    const unknown = buildIfirmaDomesticInvoicePayload({ ...baseOrder, paymentMethod: 'Bon podarunkowy' }, settings);
+    assert.equal(unknown.payload.SposobZaplaty, 'PRZ');
+  });
+
   it('blocks non-PLN or non-Polish invoices in MVP validation', async () => {
     const { buildIfirmaDomesticInvoicePayload } = await import('../src/services/ifirma/ifirma-invoice.mapper');
     const result = buildIfirmaDomesticInvoicePayload({

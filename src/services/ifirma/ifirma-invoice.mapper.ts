@@ -24,6 +24,7 @@ type OrderSnapshot = {
   customerEmail: string;
   customerName?: string | null;
   currency: string;
+  paymentMethod?: string | null;
   totalPaid: unknown;
   totalShippingTaxIncl?: unknown;
   totalShippingTaxExcl?: unknown;
@@ -102,7 +103,7 @@ export function buildIfirmaDomesticInvoicePayload(
     DataSprzedazy: saleDate,
     FormatDatySprzedazy: 'DZN',
     TerminPlatnosci: paymentTerm,
-    SposobZaplaty: settings.defaultPaymentMethod || 'PRZ',
+    SposobZaplaty: resolveSposobZaplaty(order, snapshot, settings),
     NazwaSeriiNumeracji: settings.numberingSeriesName?.trim() || undefined,
     NazwaSzablonu: settings.templateName?.trim() || undefined,
     RodzajPodpisuOdbiorcy: settings.receiverSignatureType || 'BPO',
@@ -117,6 +118,42 @@ export function buildIfirmaDomesticInvoicePayload(
 
   removeUndefined(payload);
   return { payload, errors, warnings };
+}
+
+// Mapuje faktyczną metodę płatności zamówienia na kod SposobZaplaty iFirma. Bierze pod uwagę
+// nazwę płatności i nazwę modułu z PrestaShop, a gdy nic nie pasuje — wraca do ustawienia
+// domyślnego sklepu (lub PRZ).
+function resolveSposobZaplaty(order: OrderSnapshot, snapshot: any, settings: IfirmaInvoiceSettingsSnapshot): string {
+  const candidates = [order.paymentMethod, snapshot?.order?.payment, snapshot?.order?.module];
+  for (const candidate of candidates) {
+    const code = mapPaymentMethodToIfirma(candidate);
+    if (code) return code;
+  }
+  return settings.defaultPaymentMethod || 'PRZ';
+}
+
+// Reguły dopasowania słów kluczowych do kodów iFirma. Kolejność ma znaczenie — bardziej
+// szczegółowe wzorce (np. „przelewy24") muszą być przed ogólnymi (np. „przelew").
+const IFIRMA_PAYMENT_METHOD_RULES: Array<[RegExp, string]> = [
+  [/przelewy\s*24|p24/, 'P24'],
+  [/payu|pay\s*u/, 'ALG'],
+  [/tpay|t-?pay|transferuj/, 'TPA'],
+  [/paypal|pay\s*pal/, 'PAL'],
+  [/dotpay/, 'DOT'],
+  [/pobran|za\s*pobraniem|cash\s*on\s*delivery|\bcod\b/, 'POB'],
+  [/got[oó]wk|\bcash\b/, 'GTK'],
+  [/kart|card/, 'KAR'],
+  [/przelew|wire|bank|transfer/, 'PRZ'],
+];
+
+export function mapPaymentMethodToIfirma(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+  for (const [pattern, code] of IFIRMA_PAYMENT_METHOD_RULES) {
+    if (pattern.test(normalized)) return code;
+  }
+  return null;
 }
 
 function normalizeSnapshot(value: any) {

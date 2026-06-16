@@ -8,6 +8,7 @@ import {
   createPrestaShopCategory,
   createShop,
   deletePrestaShopCategory,
+  deleteEmptyPrestaShopCategories,
   deleteShop,
   getPrestaShopCategories,
   getShopAdminWhere,
@@ -16,6 +17,7 @@ import {
   listShops,
   testShopConnection,
   updatePrestaShopCategory,
+  mergePrestaShopCategories,
   updateShop,
   updateShopOrderSyncConfig,
 } from '../../services/admin/shops.service';
@@ -290,6 +292,13 @@ export const shopsUseCases = {
     categoryId: string,
     options?: Parameters<typeof deletePrestaShopCategory>[2],
   ) => deletePrestaShopCategory(id, categoryId, options),
+
+  deleteEmptyPrestaShopCategories: (id: string, categoryIds: string[]) => deleteEmptyPrestaShopCategories(id, categoryIds),
+
+  mergePrestaShopCategories: (
+    id: string,
+    input: { sourceCategoryId: string; targetCategoryId: string; deleteSource?: boolean },
+  ) => mergePrestaShopCategories(id, input.sourceCategoryId, input.targetCategoryId, { deleteSource: input.deleteSource }),
 
   getImportReadiness: (id: string) => getShopImportReadiness(id),
 

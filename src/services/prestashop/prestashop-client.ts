@@ -593,6 +593,71 @@ export class PrestaShopClient {
     return false;
   }
 
+  async fetchCategoryProductIds(categoryId: string): Promise<string[]> {
+    const id = categoryId.trim();
+    if (!id) return [];
+    const ids = new Set<string>();
+
+    const defaultCategoryProductsQuery = [
+      `filter[id_category_default]=[${encodeURIComponent(id)}]`,
+      'display=[id]',
+      'limit=1000',
+    ].join('&');
+    const defaultCategoryData = await this.fetchWebService<any>(`products?${defaultCategoryProductsQuery}`);
+    const defaultCategoryProducts = defaultCategoryData.products
+      ? Array.isArray(defaultCategoryData.products) ? defaultCategoryData.products : [defaultCategoryData.products]
+      : [];
+    defaultCategoryProducts.forEach((product: any) => {
+      const productId = normalizeNullableId(product?.id);
+      if (productId) ids.add(productId);
+    });
+
+    try {
+      const categoryData = await this.fetchWebService<any>(`categories/${encodeURIComponent(id)}?display=full`);
+      const category = categoryData.category ?? categoryData.categories?.[0] ?? categoryData;
+      const associatedProducts = (category as PrestaShopCategory | undefined)?.associations?.products;
+      const product = (associatedProducts as any)?.product;
+      const products = Array.isArray(product) ? product : product ? [product] : [];
+      products.forEach((entry: any) => {
+        const productId = normalizeNullableId(entry?.id);
+        if (productId) ids.add(productId);
+      });
+    } catch {
+      // Some PrestaShop versions do not expose category associations reliably.
+    }
+
+    return Array.from(ids);
+  }
+
+  async moveProductsBetweenCategories(sourceCategoryId: string, targetCategoryId: string): Promise<{ moved: number; productIds: string[] }> {
+    const sourceId = sourceCategoryId.trim();
+    const targetId = targetCategoryId.trim();
+    if (!sourceId) throw new Error('Source PrestaShop category id is required');
+    if (!targetId) throw new Error('Target PrestaShop category id is required');
+    if (sourceId === targetId) throw new Error('Source and target categories must be different');
+
+    const productIds = await this.fetchCategoryProductIds(sourceId);
+    let moved = 0;
+
+    for (const productId of productIds) {
+      const { text: productXml } = await this.fetchWebServiceText(`products/${encodeURIComponent(productId)}`, {
+        headers: { Accept: 'application/xml' },
+      });
+      const payload = patchProductCategoryXml(productXml, sourceId, targetId);
+      await this.fetchWebServiceText(`products/${encodeURIComponent(productId)}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/xml',
+          Accept: 'application/xml',
+        },
+        body: payload,
+      });
+      moved++;
+    }
+
+    return { moved, productIds };
+  }
+
   async fetchOrderStates(): Promise<PrestaShopOrderStatusDetails[]> {
     const data = await this.fetchWebService<any>('order_states?display=full&sort=[id_ASC]&limit=1000');
     if (!data.order_states) return [];
@@ -1290,6 +1355,38 @@ function replaceSimpleXmlTag(xml: string, tagName: string, value: string) {
   const pattern = new RegExp(`(<${tagName}\\b[^>]*>)([\\s\\S]*?)(</${tagName}>)`, 'i');
   if (!pattern.test(xml)) throw new Error(`PrestaShop XML missing <${tagName}>`);
   return xml.replace(pattern, (_match, openTag, _currentValue, closeTag) => `${openTag}${escapeXml(value)}${closeTag}`);
+}
+
+function patchProductCategoryXml(productXml: string, sourceCategoryId: string, targetCategoryId: string) {
+  let payload = productXml;
+  const currentDefault = extractXmlTagValue(productXml, 'id_category_default');
+  if (currentDefault === sourceCategoryId) {
+    payload = replaceSimpleXmlTag(payload, 'id_category_default', targetCategoryId);
+  }
+
+  const categoriesMatch = payload.match(/<categories\b[^>]*>([\s\S]*?)<\/categories>/i);
+  const categoryIds = new Set<string>();
+  if (categoriesMatch) {
+    const categoryBlock = categoriesMatch[1] ?? '';
+    for (const match of categoryBlock.matchAll(/<category\b[^>]*>[\s\S]*?<id>([\s\S]*?)<\/id>[\s\S]*?<\/category>/gi)) {
+      const id = String(match[1] ?? '').trim();
+      if (id && id !== sourceCategoryId) categoryIds.add(id);
+    }
+  }
+  categoryIds.add(targetCategoryId);
+
+  const nextCategories = Array.from(categoryIds).map((id) => `
+        <category>
+          <id>${escapeXml(id)}</id>
+        </category>`).join('');
+  const nextBlock = `<categories>${nextCategories}
+      </categories>`;
+
+  if (categoriesMatch) {
+    return payload.replace(/<categories\b[^>]*>[\s\S]*?<\/categories>/i, nextBlock);
+  }
+
+  return payload.replace(/<\/associations>/i, `  ${nextBlock}\n    </associations>`);
 }
 
 function replaceLocalizedXmlTag(xml: string, tagName: string, value: string, languageId: string) {

@@ -279,6 +279,52 @@ export async function shopsRoutes(fastify: FastifyInstance) {
 
   fastify.post<{
     Params: ShopIdParamsInput;
+    Body: { categoryIds: string[] };
+  }>('/:id/prestashop-categories/delete-empty', {
+    schema: {
+      tags: ['shops'],
+      summary: 'Usuń puste kategorie PrestaShop z podanej listy',
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      body: {
+        type: 'object',
+        required: ['categoryIds'],
+        properties: {
+          categoryIds: { type: 'array', items: { type: 'string' } },
+        },
+      },
+      response: { 200: { type: 'object', additionalProperties: true } },
+    },
+  }, async (request, reply: FastifyReply) => {
+    const params = parseShopParams(request.params);
+    return reply.send(await shopsUseCases.deleteEmptyPrestaShopCategories(params.id, request.body.categoryIds ?? []));
+  });
+
+  fastify.post<{
+    Params: ShopIdParamsInput;
+    Body: { sourceCategoryId: string; targetCategoryId: string; deleteSource?: boolean };
+  }>('/:id/prestashop-categories/merge', {
+    schema: {
+      tags: ['shops'],
+      summary: 'Scal kategorie PrestaShop przez przepięcie produktów i podkategorii',
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      body: {
+        type: 'object',
+        required: ['sourceCategoryId', 'targetCategoryId'],
+        properties: {
+          sourceCategoryId: { type: 'string' },
+          targetCategoryId: { type: 'string' },
+          deleteSource: { type: 'boolean' },
+        },
+      },
+      response: { 200: { type: 'object', additionalProperties: true } },
+    },
+  }, async (request, reply: FastifyReply) => {
+    const params = parseShopParams(request.params);
+    return reply.send(await shopsUseCases.mergePrestaShopCategories(params.id, request.body));
+  });
+
+  fastify.post<{
+    Params: ShopIdParamsInput;
     Body: CreatePrestaShopCategoryInput;
   }>('/:id/prestashop-categories', {
     schema: {

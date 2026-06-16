@@ -10,6 +10,7 @@ import * as shopProductPublicationService from '../../../services/admin/shop-pro
 import * as pricingService from '../../../services/admin/warehouse-pricing.service';
 import * as productCardService from '../../../services/admin/product-card.service';
 import * as aiContentProposalService from '../../../services/admin/ai-content-proposals.service';
+import * as aiBulkContentJobsService from '../../../services/admin/ai-bulk-content-jobs.service';
 import { pricingProductsBodySchema } from './pricing.routes';
 import { getProductStock } from '../../../services/admin/warehouse-stock.service';
 
@@ -391,6 +392,65 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.get('/products/ai/bulk-content-jobs', {
+    schema: { tags: ['warehouse-ai'], summary: 'Lista masowych zadań AI opisów' },
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      return reply.send(await aiBulkContentJobsService.listAiBulkContentJobs());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się pobrać zadań AI';
+      return reply.status(500).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/products/ai/bulk-content-jobs', {
+    schema: {
+      tags: ['warehouse-ai'],
+      summary: 'Utwórz masowe zadanie AI opisów',
+      body: {
+        type: 'object',
+        required: ['productIds', 'action'],
+        properties: {
+          productIds: { type: 'array', items: { type: 'string' } },
+          shopId: { type: ['string', 'null'] },
+          action: { type: 'string', enum: ['GENERATE', 'IMPROVE', 'SHORTEN', 'SEO'] },
+          templateId: { type: ['string', 'null'] },
+          includeImages: { type: 'boolean' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: aiBulkContentJobsService.AiBulkContentJobInput }>, reply: FastifyReply) => {
+    try {
+      return reply.status(201).send(await aiBulkContentJobsService.createAiBulkContentJob(request.body));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się utworzyć zadania AI';
+      const status = message.includes('Brak') || message.includes('Wybierz') || message.includes('Maksymalna') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.get('/products/ai/bulk-content-jobs/:jobId', {
+    schema: { tags: ['warehouse-ai'], summary: 'Szczegóły masowego zadania AI' },
+  }, async (request: FastifyRequest<{ Params: { jobId: string } }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await aiBulkContentJobsService.getAiBulkContentJob(request.params.jobId));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się pobrać zadania AI';
+      return reply.status(message.includes('not found') ? 404 : 500).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/products/ai/bulk-content-job-items/:itemId/applied', {
+    schema: { tags: ['warehouse-ai'], summary: 'Oznacz propozycję AI jako zapisaną' },
+  }, async (request: FastifyRequest<{ Params: { itemId: string } }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await aiBulkContentJobsService.markAiBulkContentJobItemApplied(request.params.itemId));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się oznaczyć propozycji AI';
+      return reply.status(message.includes('not found') ? 404 : 500).send({ error: 'Error', message });
+    }
+  });
+
   fastify.post('/products/shop-products/bulk-preview', {
     schema: {
       tags: ['warehouse-shop-products'],
@@ -603,7 +663,8 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
       return reply.send(await aiContentProposalService.generateWarehouseProductContentProposal(request.params.id, request.body));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Nie udało się wygenerować propozycji AI';
-      const status = message.includes('Brak') ? 400 : message.includes('nie znalezion') ? 404 : 500;
+      const explicitStatus = typeof (error as any)?.statusCode === 'number' ? (error as any).statusCode : null;
+      const status = explicitStatus ?? (message.includes('Brak') ? 400 : message.includes('nie znalezion') ? 404 : 500);
       fastify.log.error(error);
       return reply.status(status).send({ error: 'Error', message });
     }

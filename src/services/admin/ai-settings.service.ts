@@ -113,6 +113,64 @@ export async function getAiSettings() {
   return toResponse(settings ?? { tenantId, ...defaults });
 }
 
+function dayStart() {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function monthStart() {
+  const date = new Date();
+  date.setDate(1);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+export async function getAiUsageSummary() {
+  const tenantId = requireTenantId();
+  const settings = await prisma.aiSettings.findUnique({ where: { tenantId } });
+  const countedStatuses = ['PENDING', 'PROCESSING', 'SUCCESS'];
+  const [dailyUsed, monthlyUsed, recent] = await Promise.all([
+    prisma.aiUsageLog.count({ where: { tenantId, status: { in: countedStatuses }, createdAt: { gte: dayStart() } } }),
+    prisma.aiUsageLog.count({ where: { tenantId, status: { in: countedStatuses }, createdAt: { gte: monthStart() } } }),
+    prisma.aiUsageLog.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      include: { product: { select: { name: true, sku: true } } },
+    }),
+  ]);
+
+  return {
+    limits: {
+      dailyLimit: settings?.dailyLimit ?? defaults.dailyLimit,
+      monthlyLimit: settings?.monthlyLimit ?? defaults.monthlyLimit,
+      dailyUsed,
+      monthlyUsed,
+      dailyRemaining: Math.max(0, (settings?.dailyLimit ?? defaults.dailyLimit) - dailyUsed),
+      monthlyRemaining: Math.max(0, (settings?.monthlyLimit ?? defaults.monthlyLimit) - monthlyUsed),
+    },
+    recent: recent.map((log) => ({
+      id: log.id,
+      productId: log.warehouseProductId,
+      productName: log.product?.name ?? null,
+      sku: log.product?.sku ?? null,
+      provider: log.provider,
+      model: log.model,
+      action: log.action,
+      status: log.status,
+      source: log.source,
+      usedImage: log.usedImage,
+      inputTokens: log.inputTokens,
+      outputTokens: log.outputTokens,
+      totalTokens: log.totalTokens,
+      errorMessage: log.errorMessage,
+      createdAt: log.createdAt,
+      completedAt: log.completedAt,
+    })),
+  };
+}
+
 export async function updateAiSettings(input: AiSettingsInput) {
   const tenantId = requireTenantId();
   const keyUpdates = {

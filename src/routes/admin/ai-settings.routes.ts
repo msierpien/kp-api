@@ -6,10 +6,12 @@ import {
   aiProviderTestSchema,
   aiSettingsSchema,
 } from '../../schemas/admin.schema';
-import { getAiSettings, testAiProvider, updateAiSettings } from '../../services/admin/ai-settings.service';
+import { getAiSettings, getAiUsageSummary, testAiProvider, updateAiSettings } from '../../services/admin/ai-settings.service';
 import {
   createAiPromptTemplate,
   deleteAiPromptTemplate,
+  duplicateAiPromptTemplate,
+  installAiPromptTemplatePresets,
   listAiPromptTemplates,
   updateAiPromptTemplate,
 } from '../../services/admin/ai-prompt-templates.service';
@@ -98,6 +100,24 @@ export const aiSettingsRoutes: FastifyPluginAsync = async (server: any) => {
     }
   });
 
+  server.get('/usage', {
+    schema: {
+      tags: ['ai'],
+      summary: 'Podsumowanie użycia AI i ostatnie logi',
+      response: { 200: { type: 'object', additionalProperties: true } },
+    },
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      return reply.send(await getAiUsageSummary());
+    } catch (error) {
+      server.log.error(error);
+      return reply.status(500).send({
+        error: 'Failed to fetch AI usage',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
   server.get('/prompt-templates', {
     schema: {
       tags: ['ai'],
@@ -177,6 +197,57 @@ export const aiSettingsRoutes: FastifyPluginAsync = async (server: any) => {
 
       return reply.status(500).send({
         error: 'Failed to update AI prompt template',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  server.post('/prompt-templates/:id/duplicate', {
+    schema: {
+      tags: ['ai'],
+      summary: 'Zduplikuj szablon promptu AI',
+      params: { type: 'object', properties: { id: { type: 'string' } } },
+      response: { 201: { type: 'object', additionalProperties: true } },
+    },
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const params = aiPromptTemplateIdParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: params.error.errors[0].message,
+        });
+      }
+
+      const template = await duplicateAiPromptTemplate(params.data.id);
+      return reply.status(201).send(template);
+    } catch (error) {
+      server.log.error(error);
+
+      if (error instanceof Error && error.message.includes('not found')) {
+        return reply.status(404).send({ error: 'AI prompt template not found' });
+      }
+
+      return reply.status(500).send({
+        error: 'Failed to duplicate AI prompt template',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  server.post('/prompt-templates/presets/install', {
+    schema: {
+      tags: ['ai'],
+      summary: 'Zainstaluj domyślne presety szablonów promptów AI',
+      response: { 201: { type: 'object', additionalProperties: true } },
+    },
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      return reply.status(201).send(await installAiPromptTemplatePresets());
+    } catch (error) {
+      server.log.error(error);
+      return reply.status(500).send({
+        error: 'Failed to install AI prompt template presets',
         message: error instanceof Error ? error.message : 'Unknown error',
       });
     }

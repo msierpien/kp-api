@@ -733,6 +733,85 @@ export async function deletePrestaShopCategory(id: string, categoryId: string, o
   return { success: true, id: categoryId };
 }
 
+export async function deleteEmptyPrestaShopCategories(id: string, categoryIds: string[]) {
+  const client = await getPrestaShopCategoryClient(id);
+  const result = {
+    requested: categoryIds.length,
+    deleted: 0,
+    skipped: 0,
+    errors: [] as Array<{ categoryId: string; message: string }>,
+  };
+
+  for (const categoryId of Array.from(new Set(categoryIds.map((value) => String(value).trim()).filter(Boolean)))) {
+    try {
+      const [hasChildren, hasProducts] = await Promise.all([
+        client.categoryHasChildren(categoryId),
+        client.categoryHasProducts(categoryId),
+      ]);
+
+      if (hasChildren || hasProducts) {
+        result.skipped++;
+        result.errors.push({
+          categoryId,
+          message: hasChildren ? 'Kategoria ma podkategorie' : 'Kategoria ma produkty',
+        });
+        continue;
+      }
+
+      await client.deleteCategory(categoryId);
+      result.deleted++;
+    } catch (error) {
+      result.skipped++;
+      result.errors.push({
+        categoryId,
+        message: error instanceof Error ? error.message : 'Nie udało się usunąć kategorii',
+      });
+    }
+  }
+
+  return result;
+}
+
+export async function mergePrestaShopCategories(id: string, sourceCategoryId: string, targetCategoryId: string, options: { deleteSource?: boolean } = {}) {
+  const client = await getPrestaShopCategoryClient(id);
+  const source = String(sourceCategoryId).trim();
+  const target = String(targetCategoryId).trim();
+  if (!source || !target) throw new ValidationError('Kategorie zrodlowa i docelowa sa wymagane');
+  if (source === target) throw new ValidationError('Kategorie zrodlowa i docelowa musza byc rozne');
+
+  const moved = await client.moveProductsBetweenCategories(source, target);
+  const children = await client.fetchCategories({ tree: false, limit: 5000 });
+  const childCategories = children.filter((category) => category.parentId === source);
+
+  for (const child of childCategories) {
+    await client.updateCategory(child.id, { parentId: target });
+  }
+
+  let sourceDeleted = false;
+  if (options.deleteSource ?? true) {
+    const [hasChildren, hasProducts] = await Promise.all([
+      client.categoryHasChildren(source),
+      client.categoryHasProducts(source),
+    ]);
+    if (!hasChildren && !hasProducts) {
+      await client.deleteCategory(source);
+      sourceDeleted = true;
+    } else {
+      await client.deactivateCategory(source);
+    }
+  }
+
+  return {
+    success: true,
+    sourceCategoryId: source,
+    targetCategoryId: target,
+    movedProducts: moved.moved,
+    movedProductIds: moved.productIds,
+    movedChildren: childCategories.length,
+    sourceDeleted,
+  };
+}
+
 async function getPrestaShopCategoryClient(id: string) {
   const shop = await prisma.shop.findFirst({
     where: getShopAdminWhere(id),

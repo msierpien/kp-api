@@ -38,6 +38,9 @@ model Tenant {
   emailSettings         EmailSettings[]
   aiSettings            AiSettings?
   aiPromptTemplates     AiPromptTemplate[]
+  aiUsageLogs           AiUsageLog[]
+  aiBulkContentJobs     AiBulkContentJob[]
+  aiBulkContentJobItems AiBulkContentJobItem[]
   warehouseProducts     WarehouseProduct[]
   warehouseCatalogs     WarehouseCatalog[]
   warehouseLeadTimeGroups WarehouseLeadTimeGroup[]
@@ -854,6 +857,102 @@ model AiPromptTemplate {
   @@map("ai_prompt_templates")
 }
 
+model AiUsageLog {
+  id                     String    @id @default(cuid())
+  tenantId               String    @map("tenant_id")
+  userId                 String?   @map("user_id")
+  warehouseProductId     String?   @map("warehouse_product_id")
+  aiBulkContentJobId     String?   @map("ai_bulk_content_job_id")
+  aiBulkContentJobItemId String?   @map("ai_bulk_content_job_item_id")
+  provider               String
+  model                  String
+  action                 String
+  status                 String    @default("PENDING")
+  source                 String    @default("INLINE")
+  usedImage              Boolean   @default(false) @map("used_image")
+  promptTemplateId       String?   @map("prompt_template_id")
+  inputTokens            Int?      @map("input_tokens")
+  outputTokens           Int?      @map("output_tokens")
+  totalTokens            Int?      @map("total_tokens")
+  estimatedCost          Decimal?  @map("estimated_cost") @db.Decimal(12, 6)
+  errorMessage           String?   @map("error_message") @db.Text
+  metadataJson           Json?     @map("metadata_json")
+  startedAt              DateTime? @map("started_at")
+  completedAt            DateTime? @map("completed_at")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product WarehouseProduct? @relation(fields: [warehouseProductId], references: [id], onDelete: SetNull)
+  bulkJob AiBulkContentJob? @relation(fields: [aiBulkContentJobId], references: [id], onDelete: SetNull)
+  bulkJobItem AiBulkContentJobItem? @relation(fields: [aiBulkContentJobItemId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
+  @@index([warehouseProductId])
+  @@index([aiBulkContentJobId])
+  @@map("ai_usage_logs")
+}
+
+model AiBulkContentJob {
+  id                 String    @id @default(cuid())
+  tenantId           String    @map("tenant_id")
+  userId             String?   @map("user_id")
+  shopId             String?   @map("shop_id")
+  status             String    @default("PENDING")
+  action             String
+  templateId         String?   @map("template_id")
+  includeImages      Boolean   @default(true) @map("include_images")
+  requestedCount     Int       @default(0) @map("requested_count")
+  pendingCount       Int       @default(0) @map("pending_count")
+  processingCount    Int       @default(0) @map("processing_count")
+  approvalCount      Int       @default(0) @map("approval_count")
+  appliedCount       Int       @default(0) @map("applied_count")
+  failedCount        Int       @default(0) @map("failed_count")
+  bullmqJobId        String?   @map("bullmq_job_id")
+  errorMessage       String?   @map("error_message") @db.Text
+  startedAt          DateTime? @map("started_at")
+  completedAt        DateTime? @map("completed_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  items AiBulkContentJobItem[]
+  usageLogs AiUsageLog[]
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
+  @@map("ai_bulk_content_jobs")
+}
+
+model AiBulkContentJobItem {
+  id                 String    @id @default(cuid())
+  tenantId           String    @map("tenant_id")
+  jobId              String    @map("job_id")
+  warehouseProductId String    @map("warehouse_product_id")
+  status             String    @default("PENDING")
+  attemptCount       Int       @default(0) @map("attempt_count")
+  provider           String?
+  model              String?
+  usedImage          Boolean   @default(false) @map("used_image")
+  proposalJson       Json?     @map("proposal_json")
+  errorMessage       String?   @map("error_message") @db.Text
+  startedAt          DateTime? @map("started_at")
+  completedAt        DateTime? @map("completed_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  job AiBulkContentJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  product WarehouseProduct @relation(fields: [warehouseProductId], references: [id], onDelete: Cascade)
+  usageLogs AiUsageLog[]
+
+  @@unique([jobId, warehouseProductId])
+  @@index([tenantId, status])
+  @@index([warehouseProductId])
+  @@map("ai_bulk_content_job_items")
+}
+
 // ============================================
 // Automatyzacje (Automation Rules)
 // ============================================
@@ -1043,6 +1142,8 @@ model WarehouseProduct {
   productChannelSnapshots ProductChannelSnapshot[]
   productChannelSyncConfigs ProductChannelSyncConfig[]
   productCardOperationLogs ProductCardOperationLog[]
+  aiUsageLogs         AiUsageLog[]
+  aiBulkContentJobItems AiBulkContentJobItem[]
 
   @@unique([tenantId, sku])
   @@index([tenantId])

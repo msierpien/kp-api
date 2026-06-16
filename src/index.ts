@@ -24,11 +24,13 @@ import { startEmailWorker, stopEmailWorker } from './services/queue/email.worker
 import { startStockSyncWorker, stopStockSyncWorker } from './services/queue/stock-sync.worker';
 import { startPriceSyncWorker, stopPriceSyncWorker } from './services/queue/price-sync.worker';
 import { startWholesaleSyncWorker, stopWholesaleSyncWorker } from './services/queue/wholesale-sync.worker';
+import { startAiContentWorker, stopAiContentWorker } from './services/queue/ai-content.worker';
 import { closeQueue } from './services/queue/render.queue';
 import { closeEmailQueue } from './services/queue/email.queue';
 import { closeStockSyncQueue } from './services/queue/stock-sync.queue';
 import { closePriceSyncQueue } from './services/queue/price-sync.queue';
 import { closeWholesaleSyncQueue } from './services/queue/wholesale-sync.queue';
+import { closeAiContentQueue } from './services/queue/ai-content.queue';
 // Puppeteer removed - no browser to close anymore
 import bullBoardPlugin from './plugins/bull-board';
 import swaggerDocsPlugin from './plugins/swagger-docs.plugin';
@@ -277,9 +279,11 @@ const gracefulShutdown = async () => {
     await stopStockSyncWorker();
     await stopPriceSyncWorker();
     await stopWholesaleSyncWorker();
+    await stopAiContentWorker();
     await closeStockSyncQueue();
     await closePriceSyncQueue();
     await closeWholesaleSyncQueue();
+    await closeAiContentQueue();
     await closeQueue();
     await closeEmailQueue();
     server.log.info('🛑 Workers and queues stopped');
@@ -373,6 +377,13 @@ const start = async () => {
         server.log.info('Wholesale sync worker started (BullMQ)');
       } catch (error) {
         server.log.error({ err: error }, 'Failed to start wholesale sync worker');
+      }
+
+      try {
+        startAiContentWorker();
+        server.log.info('AI content worker started (BullMQ)');
+      } catch (error) {
+        server.log.error({ err: error }, 'Failed to start AI content worker');
       }
     } else {
       server.log.info('Workers disabled for this runtime role');

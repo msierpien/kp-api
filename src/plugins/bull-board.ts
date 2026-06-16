@@ -7,6 +7,7 @@ import { getEmailQueue } from '../services/queue/email.queue';
 import { getStockSyncQueue } from '../services/queue/stock-sync.queue';
 import { getPriceSyncQueue } from '../services/queue/price-sync.queue';
 import { getWholesaleSyncQueue } from '../services/queue/wholesale-sync.queue';
+import { getAiContentQueue } from '../services/queue/ai-content.queue';
 
 /**
  * Plugin Fastify dla Bull Board - dashboard do monitorowania kolejek
@@ -20,6 +21,7 @@ export async function bullBoardPlugin(fastify: FastifyInstance): Promise<void> {
   const stockSyncQueue = getStockSyncQueue();
   const priceSyncQueue = getPriceSyncQueue();
   const wholesaleSyncQueue = getWholesaleSyncQueue();
+  const aiContentQueue = getAiContentQueue();
 
   createBullBoard({
     queues: [
@@ -28,6 +30,7 @@ export async function bullBoardPlugin(fastify: FastifyInstance): Promise<void> {
       new BullMQAdapter(stockSyncQueue),
       new BullMQAdapter(priceSyncQueue),
       new BullMQAdapter(wholesaleSyncQueue),
+      new BullMQAdapter(aiContentQueue),
     ],
     serverAdapter,
   });

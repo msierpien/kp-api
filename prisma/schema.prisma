@@ -798,6 +798,8 @@ model AiSettings {
   id                      String    @id @default(cuid())
   tenantId                String    @unique @map("tenant_id")
   activeProvider          String    @default("OPENAI") @map("active_provider")
+  textProvider            String    @default("OPENAI") @map("text_provider")
+  visionProvider          String    @default("OPENAI") @map("vision_provider")
   openaiApiKey            String?   @map("openai_api_key")
   anthropicApiKey         String?   @map("anthropic_api_key")
   deepseekApiKey          String?   @map("deepseek_api_key")

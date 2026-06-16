@@ -14,6 +14,8 @@ const providerKeyField: Record<AiProvider, ProviderKeyField> = {
 
 const defaults = {
   activeProvider: 'OPENAI' as AiProvider,
+  textProvider: 'OPENAI' as AiProvider,
+  visionProvider: 'OPENAI' as AiProvider,
   openaiTextModel: 'gpt-4.1-mini',
   openaiVisionModel: 'gpt-4.1-mini',
   anthropicTextModel: 'claude-3-5-sonnet-latest',
@@ -58,6 +60,8 @@ function toResponse(settings: any) {
     id: settings.id ?? null,
     tenantId: settings.tenantId ?? null,
     activeProvider: settings.activeProvider ?? defaults.activeProvider,
+    textProvider: settings.textProvider ?? settings.activeProvider ?? defaults.textProvider,
+    visionProvider: settings.visionProvider ?? (settings.activeProvider === 'DEEPSEEK' ? defaults.visionProvider : settings.activeProvider) ?? defaults.visionProvider,
     providers: {
       OPENAI: {
         key: maskEncryptedKey(settings.openaiApiKey),
@@ -117,7 +121,9 @@ export async function updateAiSettings(input: AiSettingsInput) {
   };
 
   const data = {
-    activeProvider: input.activeProvider,
+    activeProvider: input.textProvider ?? input.activeProvider,
+    textProvider: input.textProvider,
+    visionProvider: input.visionProvider,
     openaiTextModel: input.openaiTextModel,
     openaiVisionModel: input.openaiVisionModel,
     anthropicTextModel: input.anthropicTextModel,

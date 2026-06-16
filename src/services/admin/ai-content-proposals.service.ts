@@ -263,11 +263,13 @@ export async function generateWarehouseProductContentProposal(productId: string,
   const settings = await prisma.aiSettings.findUnique({ where: { tenantId } });
   if (!settings) throw new Error('Brak konfiguracji AI');
 
-  const provider = settings.activeProvider as AiProvider;
+  const textProvider = (settings.textProvider ?? settings.activeProvider) as AiProvider;
+  const visionProvider = (settings.visionProvider ?? (settings.activeProvider === 'DEEPSEEK' ? 'OPENAI' : settings.activeProvider)) as AiProvider;
+  const provider = (input.imageUrl ? visionProvider : textProvider) as AiProvider;
   const encryptedKey = settings[providerKeyField[provider]];
   if (!encryptedKey) throw new Error(`Brak klucza API dla dostawcy ${provider}`);
 
-  const selectedModel = input.imageUrl && settings[visionModelField[provider]]
+  const selectedModel = input.imageUrl && provider !== 'DEEPSEEK' && settings[visionModelField[provider]]
     ? settings[visionModelField[provider]]
     : settings[textModelField[provider]];
 

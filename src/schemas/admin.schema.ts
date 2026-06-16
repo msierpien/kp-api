@@ -240,6 +240,8 @@ export const aiProviderSchema = z.enum(['OPENAI', 'ANTHROPIC', 'DEEPSEEK']);
 
 export const aiSettingsSchema = z.object({
   activeProvider: aiProviderSchema.default('OPENAI'),
+  textProvider: aiProviderSchema.default('OPENAI'),
+  visionProvider: aiProviderSchema.default('OPENAI'),
   openaiApiKey: z.string().optional().nullable(),
   anthropicApiKey: z.string().optional().nullable(),
   deepseekApiKey: z.string().optional().nullable(),

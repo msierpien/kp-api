@@ -17,7 +17,6 @@ export interface AiContentProposalInput {
     longDescriptionHtml?: string;
     metaTitle?: string;
     metaDescription?: string;
-    metaKeywords?: string;
     linkRewrite?: string;
   };
   categories?: Array<{ id?: number | string; name?: string; isDefault?: boolean }>;
@@ -30,6 +29,7 @@ type NormalizedProposal = {
   longDescriptionHtml: string;
   metaTitle: string;
   metaDescription: string;
+  /** Legacy field kept for older admin clients. PrestaShop 9 product SEO no longer uses it. */
   metaKeywords: string;
   linkRewrite: string;
   notes: string[];
@@ -182,7 +182,6 @@ function normalizeProposal(raw: any, fallbackName: string): NormalizedProposal {
   const longDescriptionHtml = sanitizeBasicHtml(raw?.longDescriptionHtml);
   const metaTitle = clamp(String(raw?.metaTitle ?? name).trim(), 70);
   const metaDescription = clamp(String(raw?.metaDescription ?? stripHtml(shortDescriptionHtml || longDescriptionHtml)).trim(), 170);
-  const metaKeywords = String(raw?.metaKeywords ?? '').trim();
   const linkRewrite = slugify(String(raw?.linkRewrite ?? name).trim());
   const notes = Array.isArray(raw?.notes) ? raw.notes.map((note: unknown) => String(note)).filter(Boolean) : [];
 
@@ -192,7 +191,7 @@ function normalizeProposal(raw: any, fallbackName: string): NormalizedProposal {
     longDescriptionHtml,
     metaTitle,
     metaDescription,
-    metaKeywords,
+    metaKeywords: '',
     linkRewrite,
     notes,
   };
@@ -212,7 +211,8 @@ function buildPrompt(input: AiContentProposalInput, product: any, template: any)
   return [
     `Zadanie: ${actionLabels[input.action]}.`,
     'Zwróć tylko JSON, bez Markdown i bez komentarza.',
-    'Wymagany ksztalt JSON: {"name":"","shortDescriptionHtml":"","longDescriptionHtml":"","metaTitle":"","metaDescription":"","metaKeywords":"","linkRewrite":"","notes":[]}.',
+    'Wymagany ksztalt JSON: {"name":"","shortDescriptionHtml":"","longDescriptionHtml":"","metaTitle":"","metaDescription":"","linkRewrite":"","notes":[]}.',
+    'Nie generuj metaKeywords / slow kluczowych. PrestaShop 9 nie uzywa tego pola dla produktu.',
     'Glowny opis ma byc w prostym HTML: p, br, strong, em, ul, ol, li, h2, h3. Bez klas, styli inline, tabel i skryptow.',
     'Nie wymyslaj parametrow, ktorych nie ma w danych lub nie wynikaja z obrazu.',
     '',
@@ -236,7 +236,6 @@ function buildPrompt(input: AiContentProposalInput, product: any, template: any)
     `Opis dlugi HTML: ${current.longDescriptionHtml ?? ''}`,
     `Meta title: ${current.metaTitle ?? ''}`,
     `Meta description: ${current.metaDescription ?? ''}`,
-    `Meta keywords: ${current.metaKeywords ?? ''}`,
     `URL: ${current.linkRewrite ?? ''}`,
   ].join('\n');
 }

@@ -31,7 +31,6 @@ function buildInput(job: any, item: any, snapshotPayload: unknown): AiContentPro
       longDescriptionHtml: content.longDescriptionHtml ?? '',
       metaTitle: seo.metaTitle ?? '',
       metaDescription: seo.metaDescription ?? '',
-      metaKeywords: seo.metaKeywords ?? '',
       linkRewrite: seo.linkRewrite ?? '',
     },
     categories: Array.isArray(snapshot.categories) ? snapshot.categories : [],

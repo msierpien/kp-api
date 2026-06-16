@@ -3,6 +3,7 @@ import prisma from '../../lib/prisma';
 import { decrypt, encrypt } from '../../lib/encryption';
 import { getTenantContext, getTenantId, isSuperAdmin } from '../../lib/tenant-context';
 import type { AiProvider, AiSettingsInput } from '../../schemas/admin.schema';
+import { normalizeAiModelId } from './ai-models';
 
 type ProviderKeyField = 'openaiApiKey' | 'anthropicApiKey' | 'deepseekApiKey';
 
@@ -18,8 +19,8 @@ const defaults = {
   visionProvider: 'OPENAI' as AiProvider,
   openaiTextModel: 'gpt-4.1-mini',
   openaiVisionModel: 'gpt-4.1-mini',
-  anthropicTextModel: 'claude-3-5-sonnet-latest',
-  anthropicVisionModel: 'claude-3-5-sonnet-latest',
+  anthropicTextModel: 'claude-sonnet-4-6',
+  anthropicVisionModel: 'claude-haiku-4-5',
   deepseekTextModel: 'deepseek-chat',
   deepseekVisionModel: null,
   dailyLimit: 200,
@@ -65,18 +66,18 @@ function toResponse(settings: any) {
     providers: {
       OPENAI: {
         key: maskEncryptedKey(settings.openaiApiKey),
-        textModel: settings.openaiTextModel ?? defaults.openaiTextModel,
-        visionModel: settings.openaiVisionModel ?? defaults.openaiVisionModel,
+        textModel: normalizeAiModelId(settings.openaiTextModel ?? defaults.openaiTextModel),
+        visionModel: normalizeAiModelId(settings.openaiVisionModel ?? defaults.openaiVisionModel),
       },
       ANTHROPIC: {
         key: maskEncryptedKey(settings.anthropicApiKey),
-        textModel: settings.anthropicTextModel ?? defaults.anthropicTextModel,
-        visionModel: settings.anthropicVisionModel ?? defaults.anthropicVisionModel,
+        textModel: normalizeAiModelId(settings.anthropicTextModel ?? defaults.anthropicTextModel),
+        visionModel: normalizeAiModelId(settings.anthropicVisionModel ?? defaults.anthropicVisionModel),
       },
       DEEPSEEK: {
         key: maskEncryptedKey(settings.deepseekApiKey),
-        textModel: settings.deepseekTextModel ?? defaults.deepseekTextModel,
-        visionModel: settings.deepseekVisionModel ?? defaults.deepseekVisionModel,
+        textModel: normalizeAiModelId(settings.deepseekTextModel ?? defaults.deepseekTextModel),
+        visionModel: normalizeAiModelId(settings.deepseekVisionModel ?? defaults.deepseekVisionModel),
       },
     },
     limits: {
@@ -124,12 +125,12 @@ export async function updateAiSettings(input: AiSettingsInput) {
     activeProvider: input.textProvider ?? input.activeProvider,
     textProvider: input.textProvider,
     visionProvider: input.visionProvider,
-    openaiTextModel: input.openaiTextModel,
-    openaiVisionModel: input.openaiVisionModel,
-    anthropicTextModel: input.anthropicTextModel,
-    anthropicVisionModel: input.anthropicVisionModel,
-    deepseekTextModel: input.deepseekTextModel,
-    deepseekVisionModel: input.deepseekVisionModel ?? null,
+    openaiTextModel: normalizeAiModelId(input.openaiTextModel),
+    openaiVisionModel: normalizeAiModelId(input.openaiVisionModel),
+    anthropicTextModel: normalizeAiModelId(input.anthropicTextModel),
+    anthropicVisionModel: normalizeAiModelId(input.anthropicVisionModel),
+    deepseekTextModel: normalizeAiModelId(input.deepseekTextModel),
+    deepseekVisionModel: normalizeAiModelId(input.deepseekVisionModel) ?? null,
     dailyLimit: input.dailyLimit,
     monthlyLimit: input.monthlyLimit,
     timeoutMs: input.timeoutMs,

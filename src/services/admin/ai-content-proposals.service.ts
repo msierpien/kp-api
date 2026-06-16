@@ -3,6 +3,7 @@ import { decrypt } from '../../lib/encryption';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
 import { getProductById } from './warehouse-products.service';
 import type { AiProvider } from '../../schemas/admin.schema';
+import { normalizeAiModelId } from './ai-models';
 
 type AiContentAction = 'GENERATE' | 'IMPROVE' | 'SHORTEN' | 'SEO';
 
@@ -269,9 +270,10 @@ export async function generateWarehouseProductContentProposal(productId: string,
   const encryptedKey = settings[providerKeyField[provider]];
   if (!encryptedKey) throw new Error(`Brak klucza API dla dostawcy ${provider}`);
 
-  const selectedModel = input.imageUrl && provider !== 'DEEPSEEK' && settings[visionModelField[provider]]
+  const configuredModel = input.imageUrl && provider !== 'DEEPSEEK' && settings[visionModelField[provider]]
     ? settings[visionModelField[provider]]
     : settings[textModelField[provider]];
+  const selectedModel = normalizeAiModelId(configuredModel);
 
   if (!selectedModel) throw new Error(`Brak modelu dla dostawcy ${provider}`);
 

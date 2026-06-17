@@ -63,6 +63,11 @@ export interface CreateWzForOrderResult {
   skippedReason?: string;
 }
 
+export interface CreateWzForOrderInput {
+  saveAsDraft?: boolean;
+  forceConfirm?: boolean;
+}
+
 export interface CreatePzFromWholesaleOrderResult {
   document: Awaited<ReturnType<typeof getDocumentById>>;
   created: boolean;
@@ -71,6 +76,7 @@ export interface CreatePzFromWholesaleOrderResult {
 
 export interface CreatePzFromWholesaleOrderInput {
   items?: DocumentItemInput[];
+  saveAsDraft?: boolean;
 }
 
 export interface WholesaleOrderCsvExportResult {
@@ -668,6 +674,7 @@ export async function createPzFromWholesaleOrder(id: string, input: CreatePzFrom
   }
 
   const documentDate = new Date();
+  const shouldConfirmPz = input.saveAsDraft !== true;
   const usesDeliveryCheckItems = Array.isArray(input.items);
   const sourceItemByProductId = new Map(sourceDocument.items.map((item) => [item.productId, item]));
   const sourceQuantityByProductId = new Map<string, number>();
@@ -736,6 +743,7 @@ export async function createPzFromWholesaleOrder(id: string, input: CreatePzFrom
       providerId: sourceMetadata.providerId,
       providerName: sourceMetadata.providerName,
       createdFromDeliveryCheck: usesDeliveryCheckItems,
+      savedAsDraft: !shouldConfirmPz,
       deliveryCheckSummary,
     };
 
@@ -744,12 +752,14 @@ export async function createPzFromWholesaleOrder(id: string, input: CreatePzFrom
         tenantId: sourceDocument.tenantId,
         number,
         type: 'PZ',
-        status: 'DRAFT',
+        status: shouldConfirmPz ? 'CONFIRMED' : 'DRAFT',
         date: documentDate,
         description: usesDeliveryCheckItems
           ? `PZ według kontroli dostawy ${sourceDocument.number}`
           : `PZ do zamówienia hurtowego ${sourceDocument.number}`,
         createdByUserId: context?.userId,
+        confirmedAt: shouldConfirmPz ? new Date() : undefined,
+        confirmedByUserId: shouldConfirmPz ? context?.userId : undefined,
         metadataJson: JSON.parse(JSON.stringify(metadataJson)),
         items: {
           create: pzItems.map((item) => {
@@ -779,6 +789,11 @@ export async function createPzFromWholesaleOrder(id: string, input: CreatePzFrom
       include: documentDetailInclude,
     });
 
+    if (shouldConfirmPz) {
+      await applyIncomingPurchaseCosts(tx, 'PZ', pz.items);
+      await applyStockDeltas(tx, 'PZ', pz.items);
+    }
+
     await tx.warehouseDocument.update({
       where: { id: sourceDocument.id },
       data: {
@@ -801,13 +816,19 @@ export async function createPzFromWholesaleOrder(id: string, input: CreatePzFrom
     return pz;
   });
 
+  if (shouldConfirmPz) {
+    const affectedProductIds = Array.from(new Set(createdDocument.items.map((item) => item.productId)));
+    await reallocateWholesaleBackordersForProducts(sourceDocument.tenantId, affectedProductIds);
+    await syncStockForProducts(affectedProductIds, 'DOCUMENT_CONFIRM', createdDocument.id);
+  }
+
   return {
     document: await withAuditUsers(createdDocument),
     created: true,
   };
 }
 
-export async function createWzForOrder(orderId: string): Promise<CreateWzForOrderResult> {
+export async function createWzForOrder(orderId: string, input: CreateWzForOrderInput = {}): Promise<CreateWzForOrderResult> {
   const contextTenantId = getTenantId();
   const order = await prisma.order.findFirst({
     where: {
@@ -893,7 +914,7 @@ export async function createWzForOrder(orderId: string): Promise<CreateWzForOrde
   if (shippingInfo) {
     metadata.shipping = shippingInfo;
   }
-  const shouldAutoConfirm = settings.autoConfirmWzOnOrder && !stockWarning;
+  const shouldAutoConfirm = input.saveAsDraft !== true && (input.forceConfirm === true || settings.autoConfirmWzOnOrder) && !stockWarning;
 
   const document = await prisma.$transaction(async (tx) => {
     const documentDate = new Date();

@@ -299,7 +299,7 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
   fastify.post('/documents/:id/create-pz', {
     schema: {
       tags: ['warehouse'],
-      summary: 'Utwórz roboczy PZ z zamówienia hurtowego ZH',
+      summary: 'Utwórz PZ z zamówienia hurtowego ZH',
       params: {
         type: 'object',
         required: ['id'],
@@ -325,6 +325,7 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
               },
             },
           },
+          saveAsDraft: { type: 'boolean' },
         },
       },
     },

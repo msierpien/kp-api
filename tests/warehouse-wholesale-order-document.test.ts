@@ -11,6 +11,7 @@ const MIGRATION = readFileSync(
 );
 const DOCS_SERVICE = readFileSync(join(ROOT, 'src/services/admin/warehouse-documents.service.ts'), 'utf8');
 const DOCS_ROUTES = readFileSync(join(ROOT, 'src/routes/admin/warehouse/documents.routes.ts'), 'utf8');
+const ORDERS_ROUTES = readFileSync(join(ROOT, 'src/routes/admin/orders.routes.ts'), 'utf8');
 const REPLENISHMENT_SERVICE = readFileSync(join(ROOT, 'src/services/admin/warehouse-replenishment.service.ts'), 'utf8');
 const REPLENISHMENT_ROUTES = readFileSync(join(ROOT, 'src/routes/admin/warehouse/replenishment.routes.ts'), 'utf8');
 const RESERVATIONS_SERVICE = readFileSync(join(ROOT, 'src/services/admin/warehouse-reservations.service.ts'), 'utf8');
@@ -56,6 +57,22 @@ describe('warehouse wholesale order document (ZH)', () => {
     assert.match(DOCS_SERVICE, /status: 'CONFIRMED'/);
     assert.match(DOCS_SERVICE, /confirmedAt: new Date\(\)/);
     assert.match(DOCS_SERVICE, /confirmedByUserId: context\?\.userId/);
+  });
+
+  it('PZ z ZH domyślnie jest zatwierdzony, chyba że zapisano roboczo', () => {
+    assert.match(DOCS_ROUTES, /saveAsDraft: \{ type: 'boolean' \}/);
+    assert.match(DOCS_SERVICE, /shouldConfirmPz = input\.saveAsDraft !== true/);
+    assert.match(DOCS_SERVICE, /status: shouldConfirmPz \? 'CONFIRMED' : 'DRAFT'/);
+    assert.match(DOCS_SERVICE, /applyStockDeltas\(tx, 'PZ', pz\.items\)/);
+    assert.match(DOCS_SERVICE, /reallocateWholesaleBackordersForProducts/);
+  });
+
+  it('ręczne WZ z zamówienia domyślnie wymusza zatwierdzenie', () => {
+    assert.match(ORDERS_ROUTES, /\/:id\/wz/);
+    assert.match(ORDERS_ROUTES, /saveAsDraft: \{ type: 'boolean' \}/);
+    assert.match(ORDERS_ROUTES, /forceConfirm: request\.body\?\.saveAsDraft !== true/);
+    assert.match(DOCS_SERVICE, /input\.forceConfirm === true \|\| settings\.autoConfirmWzOnOrder/);
+    assert.match(DOCS_SERVICE, /input\.saveAsDraft !== true/);
   });
 
   it('eksport CSV ZH zatwierdza robocze zamówienie hurtowe', () => {

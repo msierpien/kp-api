@@ -348,7 +348,7 @@ export async function ordersRoutes(fastify: FastifyInstance) {
     },
   );
 
-  fastify.post<{ Params: OrderParams }>(
+  fastify.post<{ Params: OrderParams; Body: { saveAsDraft?: boolean } }>(
     '/:id/invoice/preview',
     {
       schema: {
@@ -364,7 +364,7 @@ export async function ordersRoutes(fastify: FastifyInstance) {
     },
   );
 
-  fastify.post<{ Params: OrderParams }>(
+  fastify.post<{ Params: OrderParams; Body: { saveAsDraft?: boolean } }>(
     '/:id/invoice/issue',
     {
       schema: {
@@ -611,19 +611,31 @@ export async function ordersRoutes(fastify: FastifyInstance) {
     }
   );
 
-  fastify.post<{ Params: OrderParams }>(
+  fastify.post<{ Params: OrderParams; Body: { saveAsDraft?: boolean } }>(
     '/:id/wz',
     {
       schema: {
         tags: ['warehouse'],
         summary: 'Utwórz dokument WZ z aktywnych rezerwacji zamówienia',
         params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        body: {
+          type: 'object',
+          properties: {
+            saveAsDraft: { type: 'boolean' },
+          },
+        },
         response: { 200: looseObjectResponse },
       },
     },
-    async (request: FastifyRequest<{ Params: OrderParams }>, reply: FastifyReply) => {
+    async (request: FastifyRequest<{
+      Params: OrderParams;
+      Body: { saveAsDraft?: boolean };
+    }>, reply: FastifyReply) => {
       try {
-        const result = await createWzForOrder(request.params.id);
+        const result = await createWzForOrder(request.params.id, {
+          saveAsDraft: request.body?.saveAsDraft === true,
+          forceConfirm: request.body?.saveAsDraft !== true,
+        });
         return reply.send(result);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Błąd tworzenia WZ dla zamówienia';

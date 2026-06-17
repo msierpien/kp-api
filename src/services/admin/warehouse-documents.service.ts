@@ -69,6 +69,10 @@ export interface CreatePzFromWholesaleOrderResult {
   skippedReason?: string;
 }
 
+export interface CreatePzFromWholesaleOrderInput {
+  items?: DocumentItemInput[];
+}
+
 export interface WholesaleOrderCsvExportResult {
   providerId: string | null;
   providerName: string | null;
@@ -391,6 +395,19 @@ function metadataRecord(value: Prisma.JsonValue | null | undefined) {
   return value as Record<string, unknown>;
 }
 
+function numericQuantity(value: unknown) {
+  const number = Number(value ?? 0);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function addQuantity(map: Map<string, number>, productId: string, quantity: unknown) {
+  map.set(productId, (map.get(productId) ?? 0) + numericQuantity(quantity));
+}
+
+function formatDocumentQuantity(value: number) {
+  return new Intl.NumberFormat('pl-PL', { maximumFractionDigits: 3 }).format(value);
+}
+
 function metadataString(value: Prisma.JsonValue | null | undefined, key: string) {
   const record = metadataRecord(value);
   const item = record[key];
@@ -609,7 +626,7 @@ export async function exportWholesaleOrdersForProviderCsv(providerId: string): P
   };
 }
 
-export async function createPzFromWholesaleOrder(id: string): Promise<CreatePzFromWholesaleOrderResult> {
+export async function createPzFromWholesaleOrder(id: string, input: CreatePzFromWholesaleOrderInput = {}): Promise<CreatePzFromWholesaleOrderResult> {
   const tenantId = getTenantId();
   const context = getTenantContext();
   const where: any = { id };
@@ -640,6 +657,65 @@ export async function createPzFromWholesaleOrder(id: string): Promise<CreatePzFr
   }
 
   const documentDate = new Date();
+  const usesDeliveryCheckItems = Array.isArray(input.items);
+  const sourceItemByProductId = new Map(sourceDocument.items.map((item) => [item.productId, item]));
+  const sourceQuantityByProductId = new Map<string, number>();
+  for (const item of sourceDocument.items) {
+    addQuantity(sourceQuantityByProductId, item.productId, item.quantity);
+  }
+
+  const pzItems: PreparedDocumentItem[] = usesDeliveryCheckItems
+    ? await prepareDocumentItems(sourceDocument.tenantId, input.items ?? [], true, 'PZ')
+    : sourceDocument.items.map((item) => ({
+        productId: item.productId,
+        quantity: numericQuantity(item.quantity),
+        unitPrice: item.unitPrice === null || item.unitPrice === undefined ? undefined : Number(item.unitPrice),
+        notes: item.notes ?? `Przyjęcie z ${sourceDocument.number}`,
+      }));
+
+  if (pzItems.length === 0) {
+    throw new Error(usesDeliveryCheckItems ? 'Brak zeskanowanych pozycji do utworzenia PZ' : 'Dokument ZH nie ma żadnych pozycji');
+  }
+
+  const acceptedQuantityByProductId = new Map<string, number>();
+  for (const item of pzItems) {
+    addQuantity(acceptedQuantityByProductId, item.productId, item.quantity);
+  }
+
+  const deliveryCheckSummary = usesDeliveryCheckItems
+    ? {
+        totalExpected: Array.from(sourceQuantityByProductId.values()).reduce((sum, quantity) => sum + quantity, 0),
+        totalAccepted: Array.from(acceptedQuantityByProductId.values()).reduce((sum, quantity) => sum + quantity, 0),
+        missingItems: Array.from(sourceQuantityByProductId.entries())
+          .map(([productId, expected]) => {
+            const accepted = acceptedQuantityByProductId.get(productId) ?? 0;
+            return {
+              productId,
+              sku: sourceItemByProductId.get(productId)?.product?.sku,
+              name: sourceItemByProductId.get(productId)?.product?.name,
+              expected,
+              accepted,
+              missing: Math.max(0, expected - accepted),
+            };
+          })
+          .filter((item) => item.missing > 0),
+        overageItems: Array.from(acceptedQuantityByProductId.entries())
+          .map(([productId, accepted]) => {
+            const expected = sourceQuantityByProductId.get(productId) ?? 0;
+            return {
+              productId,
+              sku: sourceItemByProductId.get(productId)?.product?.sku,
+              name: sourceItemByProductId.get(productId)?.product?.name,
+              expected,
+              accepted,
+              overage: Math.max(0, accepted - expected),
+              outsideOrder: !sourceQuantityByProductId.has(productId),
+            };
+          })
+          .filter((item) => item.overage > 0),
+      }
+    : undefined;
+
   const createdDocument = await prisma.$transaction(async (tx) => {
     const number = await generateDocumentNumber(tx, sourceDocument.tenantId, 'PZ', documentDate);
     const metadataJson = {
@@ -648,6 +724,8 @@ export async function createPzFromWholesaleOrder(id: string): Promise<CreatePzFr
       wholesaleOrderNumber: sourceDocument.number,
       providerId: sourceMetadata.providerId,
       providerName: sourceMetadata.providerName,
+      createdFromDeliveryCheck: usesDeliveryCheckItems,
+      deliveryCheckSummary,
     };
 
     const pz = await tx.warehouseDocument.create({
@@ -657,16 +735,34 @@ export async function createPzFromWholesaleOrder(id: string): Promise<CreatePzFr
         type: 'PZ',
         status: 'DRAFT',
         date: documentDate,
-        description: `PZ do zamówienia hurtowego ${sourceDocument.number}`,
+        description: usesDeliveryCheckItems
+          ? `PZ według kontroli dostawy ${sourceDocument.number}`
+          : `PZ do zamówienia hurtowego ${sourceDocument.number}`,
         createdByUserId: context?.userId,
         metadataJson: JSON.parse(JSON.stringify(metadataJson)),
         items: {
-          create: sourceDocument.items.map((item) => ({
-            productId: item.productId,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            notes: item.notes ?? `Przyjęcie z ${sourceDocument.number}`,
-          })),
+          create: pzItems.map((item) => {
+            const sourceItem = sourceItemByProductId.get(item.productId);
+            const expected = sourceQuantityByProductId.get(item.productId);
+            const accepted = acceptedQuantityByProductId.get(item.productId) ?? numericQuantity(item.quantity);
+            const deliveryCheckNote = usesDeliveryCheckItems && expected !== undefined && accepted < expected
+              ? `Kontrola dostawy: przyjęto ${formatDocumentQuantity(accepted)} z ${formatDocumentQuantity(expected)}, brak ${formatDocumentQuantity(expected - accepted)}`
+              : usesDeliveryCheckItems && expected !== undefined && accepted > expected
+                ? `Kontrola dostawy: przyjęto ${formatDocumentQuantity(accepted)} z ${formatDocumentQuantity(expected)}, nadwyżka ${formatDocumentQuantity(accepted - expected)}`
+                : usesDeliveryCheckItems && expected === undefined
+                  ? `Kontrola dostawy: produkt poza ${sourceDocument.number}`
+                  : undefined;
+            return {
+              productId: item.productId,
+              quantity: item.quantity,
+              barcodeId: item.barcodeId,
+              scannedEan: item.scannedEan,
+              baseQuantity: item.baseQuantity,
+              quantityMultiplier: item.quantityMultiplier,
+              unitPrice: item.unitPrice ?? sourceItem?.unitPrice ?? null,
+              notes: item.notes ?? deliveryCheckNote ?? sourceItem?.notes ?? `Przyjęcie z ${sourceDocument.number}`,
+            };
+          }),
         },
       },
       include: documentDetailInclude,

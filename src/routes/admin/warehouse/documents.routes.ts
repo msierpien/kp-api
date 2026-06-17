@@ -305,10 +305,35 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
         required: ['id'],
         properties: { id: { type: 'string' } },
       },
+      body: {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['productId', 'quantity'],
+              properties: {
+                productId: { type: 'string' },
+                quantity: { type: 'number', exclusiveMinimum: 0 },
+                barcodeId: { type: 'string' },
+                scannedEan: { type: 'string' },
+                baseQuantity: { type: 'number', exclusiveMinimum: 0 },
+                quantityMultiplier: { type: 'number', exclusiveMinimum: 0 },
+                unitPrice: { type: 'number', minimum: 0 },
+                notes: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
     },
-  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: warehouseDocumentService.CreatePzFromWholesaleOrderInput;
+  }>, reply: FastifyReply) => {
     try {
-      const result = await warehouseDocumentService.createPzFromWholesaleOrder(request.params.id);
+      const result = await warehouseDocumentService.createPzFromWholesaleOrder(request.params.id, request.body ?? {});
       return reply.status(result.created ? 201 : 200).send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd tworzenia PZ z zamówienia hurtowego';

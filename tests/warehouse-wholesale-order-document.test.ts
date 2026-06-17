@@ -41,6 +41,16 @@ describe('warehouse wholesale order document (ZH)', () => {
     assert.match(DOCS_SERVICE, /createPzFromWholesaleOrder/);
   });
 
+  it('PZ z ZH może powstać według kontroli dostawy', () => {
+    assert.match(DOCS_ROUTES, /Body: warehouseDocumentService\.CreatePzFromWholesaleOrderInput/);
+    assert.match(DOCS_ROUTES, /items:[\s\S]{0,180}required: \['productId', 'quantity'\]/);
+    assert.match(DOCS_SERVICE, /CreatePzFromWholesaleOrderInput/);
+    assert.match(DOCS_SERVICE, /usesDeliveryCheckItems = Array\.isArray\(input\.items\)/);
+    assert.match(DOCS_SERVICE, /deliveryCheckSummary/);
+    assert.match(DOCS_SERVICE, /missingItems/);
+    assert.match(DOCS_SERVICE, /overageItems/);
+  });
+
   it('eksport CSV ZH zatwierdza robocze zamówienie hurtowe', () => {
     assert.match(DOCS_ROUTES, /\/documents\/:id\/export-csv/);
     assert.match(DOCS_ROUTES, /\/documents\/zh\/providers\/:providerId\/export-csv/);

@@ -1119,6 +1119,8 @@ model WarehouseProduct {
   averagePurchaseCost Decimal? @map("average_purchase_cost") @db.Decimal(10, 2)
   retailPrice   Decimal? @map("retail_price") @db.Decimal(10, 2)
   currentStock  Decimal  @default(0) @map("current_stock") @db.Decimal(10, 3)
+  reorderPoint  Decimal? @map("reorder_point") @db.Decimal(10, 3)
+  reorderQuantity Decimal? @map("reorder_quantity") @db.Decimal(10, 3)
   leadTimeDaysOverride Int? @map("lead_time_days_override")
   leadTimeGroupId String? @map("lead_time_group_id")
   isActive      Boolean  @default(true) @map("is_active")

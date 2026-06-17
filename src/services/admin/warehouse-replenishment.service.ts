@@ -51,6 +51,9 @@ export interface ReplenishmentItem {
   orderRefs: string[];
   currentStock?: number;
   lowStockThreshold?: number;
+  reorderPoint?: number | null;
+  orderMultiple?: number | null;
+  orderMultipleSource?: 'PRODUCT' | 'BARCODE' | 'NONE';
 }
 
 export interface ReplenishmentProviderGroup {
@@ -214,6 +217,20 @@ type ReservationIssue = {
   message?: string;
 };
 
+type LowStockProductRow = {
+  id: string;
+  sku: string;
+  name: string;
+  unit: string;
+  currentStock: Prisma.Decimal;
+  reorderPoint: Prisma.Decimal | null;
+  reorderQuantity: Prisma.Decimal | null;
+};
+
+type LowStockCountRow = {
+  count: number | bigint;
+};
+
 function requireTenantId() {
   const tenantId = getTenantId();
   if (!tenantId) throw new Error('Brak kontekstu tenanta');
@@ -313,6 +330,9 @@ function addReplenishmentItem(
     orderRef?: string | null;
     currentStock?: number;
     lowStockThreshold?: number;
+    reorderPoint?: number | null;
+    orderMultiple?: number | null;
+    orderMultipleSource?: 'PRODUCT' | 'BARCODE' | 'NONE';
   } = {},
 ) {
   if (quantity <= 0) return;
@@ -325,6 +345,9 @@ function addReplenishmentItem(
     if (options.orderRef) existing.orderRefs.add(options.orderRef);
     if (options.currentStock !== undefined) existing.currentStock = options.currentStock;
     if (options.lowStockThreshold !== undefined) existing.lowStockThreshold = options.lowStockThreshold;
+    if (options.reorderPoint !== undefined) existing.reorderPoint = options.reorderPoint;
+    if (options.orderMultiple !== undefined) existing.orderMultiple = options.orderMultiple;
+    if (options.orderMultipleSource !== undefined) existing.orderMultipleSource = options.orderMultipleSource;
     return;
   }
 
@@ -342,6 +365,9 @@ function addReplenishmentItem(
     supplierStock: toNumber(offer.lastKnownStock),
     currentStock: options.currentStock,
     lowStockThreshold: options.lowStockThreshold,
+    reorderPoint: options.reorderPoint,
+    orderMultiple: options.orderMultiple,
+    orderMultipleSource: options.orderMultipleSource,
     reasons: new Set([reason]),
     orderRefs: new Set(options.orderRef ? [options.orderRef] : []),
   });
@@ -349,6 +375,55 @@ function addReplenishmentItem(
 
 function roundQuantity(value: number) {
   return Math.round(value * 1000) / 1000;
+}
+
+function roundUpToMultiple(quantity: number, multiple: number | null | undefined) {
+  if (!multiple || multiple <= 0) return roundQuantity(quantity);
+  return roundQuantity(Math.ceil(quantity / multiple) * multiple);
+}
+
+async function loadProductOrderMultiples(tenantId: string, productIds: string[]) {
+  const rows = productIds.length > 0
+    ? await prisma.warehouseProductBarcode.findMany({
+        where: {
+          tenantId,
+          warehouseProductId: { in: productIds },
+          isActive: true,
+          quantityMultiplier: { gt: 1 },
+        },
+        select: {
+          warehouseProductId: true,
+          quantityMultiplier: true,
+        },
+      })
+    : [];
+
+  const multiples = new Map<string, number>();
+  for (const row of rows) {
+    const multiplier = toNumber(row.quantityMultiplier);
+    if (multiplier <= 1) continue;
+
+    const current = multiples.get(row.warehouseProductId);
+    if (current === undefined || multiplier < current) {
+      multiples.set(row.warehouseProductId, multiplier);
+    }
+  }
+
+  return multiples;
+}
+
+function productOrderMultiple(product: LowStockProductRow, barcodeMultiples: Map<string, number>) {
+  const configured = product.reorderQuantity === null ? null : toNumber(product.reorderQuantity);
+  if (configured !== null && configured > 0) {
+    return { quantity: configured, source: 'PRODUCT' as const };
+  }
+
+  const barcodeMultiple = barcodeMultiples.get(product.id) ?? null;
+  if (barcodeMultiple !== null && barcodeMultiple > 1) {
+    return { quantity: barcodeMultiple, source: 'BARCODE' as const };
+  }
+
+  return { quantity: null, source: 'NONE' as const };
 }
 
 async function loadBestOffersForProducts(tenantId: string, productIds: string[], providerId?: string) {
@@ -480,22 +555,37 @@ async function getLowStockReplenishment(
   limit: number,
   providerId?: string,
 ) {
-  const where: Prisma.WarehouseProductWhereInput = {
-    tenantId,
-    isActive: true,
-    currentStock: { lt: lowStockThreshold },
-  };
+  const effectiveDefaultThreshold = new Prisma.Decimal(lowStockThreshold);
+  const offset = (page - 1) * limit;
 
-  const [total, products] = await prisma.$transaction([
-    prisma.warehouseProduct.count({ where }),
-    prisma.warehouseProduct.findMany({
-      where,
-      skip: (page - 1) * limit,
-      take: limit,
-      select: { id: true, sku: true, name: true, unit: true, currentStock: true },
-      orderBy: [{ currentStock: 'asc' }, { name: 'asc' }],
-    }),
+  const [countRows, products] = await prisma.$transaction([
+    prisma.$queryRaw<LowStockCountRow[]>`
+      SELECT COUNT(*)::int AS "count"
+      FROM "warehouse_products"
+      WHERE "tenant_id" = ${tenantId}
+        AND "is_active" = true
+        AND "current_stock" < COALESCE("reorder_point", ${effectiveDefaultThreshold})
+    `,
+    prisma.$queryRaw<LowStockProductRow[]>`
+      SELECT
+        "id",
+        "sku",
+        "name",
+        "unit",
+        "current_stock" AS "currentStock",
+        "reorder_point" AS "reorderPoint",
+        "reorder_quantity" AS "reorderQuantity"
+      FROM "warehouse_products"
+      WHERE "tenant_id" = ${tenantId}
+        AND "is_active" = true
+        AND "current_stock" < COALESCE("reorder_point", ${effectiveDefaultThreshold})
+      ORDER BY "current_stock" ASC, "name" ASC
+      OFFSET ${offset}
+      LIMIT ${limit}
+    `,
   ]);
+  const total = Number(countRows[0]?.count ?? 0);
+  const barcodeMultiples = await loadProductOrderMultiples(tenantId, products.map((product) => product.id));
 
   const offersByProductId = await loadBestOffersForProducts(
     tenantId,
@@ -508,13 +598,23 @@ async function getLowStockReplenishment(
     if (!offer) continue;
 
     const currentStock = toNumber(product.currentStock);
+    const reorderPoint = product.reorderPoint === null ? null : toNumber(product.reorderPoint);
+    const effectiveThreshold = reorderPoint ?? lowStockThreshold;
+    const orderMultiple = productOrderMultiple(product, barcodeMultiples);
+    const shortage = Math.max(0, effectiveThreshold - currentStock);
     addReplenishmentItem(
       providers,
       offer,
       product,
-      Math.max(0, lowStockThreshold - currentStock),
+      roundUpToMultiple(shortage, orderMultiple.quantity),
       'LOW_STOCK',
-      { currentStock, lowStockThreshold },
+      {
+        currentStock,
+        lowStockThreshold: effectiveThreshold,
+        reorderPoint,
+        orderMultiple: orderMultiple.quantity,
+        orderMultipleSource: orderMultiple.source,
+      },
     );
   }
 

@@ -19,6 +19,8 @@ export interface CreateProductInput {
   description?: string;
   purchasePrice?: number;
   retailPrice?: number;
+  reorderPoint?: number | null;
+  reorderQuantity?: number | null;
   leadTimeDaysOverride?: number | null;
 }
 
@@ -30,6 +32,8 @@ export interface UpdateProductInput {
   description?: string;
   purchasePrice?: number | null;
   retailPrice?: number | null;
+  reorderPoint?: number | null;
+  reorderQuantity?: number | null;
   leadTimeDaysOverride?: number | null;
   isActive?: boolean;
 }
@@ -40,6 +44,8 @@ export interface BulkUpdateProductsInput {
   catalogId?: string | null;
   leadTimeGroupId?: string | null;
   leadTimeDaysOverride?: number | null;
+  reorderPoint?: number | null;
+  reorderQuantity?: number | null;
 }
 
 export interface BulkUpdateProductsResult {
@@ -540,6 +546,8 @@ export async function createProduct(input: CreateProductInput) {
       description: input.description,
       purchasePrice: input.purchasePrice,
       retailPrice: input.retailPrice,
+      reorderPoint: normalizeOptionalQuantity(input.reorderPoint, 'Minimalny stan'),
+      reorderQuantity: normalizeOptionalPositiveQuantity(input.reorderQuantity, 'Partia zamawiania'),
       leadTimeDaysOverride: normalizeOptionalLeadTimeDays(input.leadTimeDaysOverride),
     },
   });
@@ -573,6 +581,12 @@ export async function updateProduct(id: string, input: UpdateProductInput) {
   }
   if (input.leadTimeDaysOverride !== undefined) {
     data.leadTimeDaysOverride = normalizeOptionalLeadTimeDays(input.leadTimeDaysOverride);
+  }
+  if (input.reorderPoint !== undefined) {
+    data.reorderPoint = normalizeOptionalQuantity(input.reorderPoint, 'Minimalny stan');
+  }
+  if (input.reorderQuantity !== undefined) {
+    data.reorderQuantity = normalizeOptionalPositiveQuantity(input.reorderQuantity, 'Partia zamawiania');
   }
 
   const updatedProduct = await prisma.warehouseProduct.update({
@@ -617,7 +631,9 @@ export async function bulkUpdateProducts(input: BulkUpdateProductsInput): Promis
     input.isActive === undefined &&
     input.catalogId === undefined &&
     input.leadTimeGroupId === undefined &&
-    input.leadTimeDaysOverride === undefined
+    input.leadTimeDaysOverride === undefined &&
+    input.reorderPoint === undefined &&
+    input.reorderQuantity === undefined
   ) {
     throw new Error('Podaj przynajmniej jedną zmianę masową');
   }
@@ -666,6 +682,12 @@ export async function bulkUpdateProducts(input: BulkUpdateProductsInput): Promis
   }
   if (input.leadTimeDaysOverride !== undefined) {
     data.leadTimeDaysOverride = normalizeOptionalLeadTimeDays(input.leadTimeDaysOverride);
+  }
+  if (input.reorderPoint !== undefined) {
+    data.reorderPoint = normalizeOptionalQuantity(input.reorderPoint, 'Minimalny stan');
+  }
+  if (input.reorderQuantity !== undefined) {
+    data.reorderQuantity = normalizeOptionalPositiveQuantity(input.reorderQuantity, 'Partia zamawiania');
   }
 
   const result = await prisma.warehouseProduct.updateMany({
@@ -717,6 +739,24 @@ function normalizeOptionalLeadTimeDays(value: number | null | undefined) {
     throw new Error('Czas wysyłki musi być liczbą całkowitą od 0 do 365 dni');
   }
   return days;
+}
+
+function normalizeOptionalQuantity(value: number | null | undefined, label: string) {
+  if (value === undefined || value === null) return null;
+  const quantity = Number(value);
+  if (!Number.isFinite(quantity) || quantity < 0) {
+    throw new Error(`${label} musi być liczbą nieujemną`);
+  }
+  return new Prisma.Decimal(Math.round(quantity * 1000) / 1000);
+}
+
+function normalizeOptionalPositiveQuantity(value: number | null | undefined, label: string) {
+  if (value === undefined || value === null) return null;
+  const quantity = Number(value);
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    throw new Error(`${label} musi być liczbą większą od 0`);
+  }
+  return new Prisma.Decimal(Math.round(quantity * 1000) / 1000);
 }
 
 export async function bulkDeleteProducts(input: BulkDeleteProductsInput): Promise<BulkDeleteProductsResult> {

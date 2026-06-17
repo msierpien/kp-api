@@ -648,6 +648,17 @@ export async function createPzFromWholesaleOrder(id: string, input: CreatePzFrom
   if (existingPzId) {
     const existing = await getDocumentById(existingPzId);
     if (existing && existing.status !== 'CANCELLED') {
+      if (sourceDocument.status === 'DRAFT') {
+        await prisma.warehouseDocument.update({
+          where: { id: sourceDocument.id },
+          data: {
+            status: 'CONFIRMED',
+            confirmedAt: new Date(),
+            confirmedByUserId: context?.userId,
+          },
+        });
+      }
+
       return {
         document: existing,
         created: false,
@@ -771,6 +782,13 @@ export async function createPzFromWholesaleOrder(id: string, input: CreatePzFrom
     await tx.warehouseDocument.update({
       where: { id: sourceDocument.id },
       data: {
+        ...(sourceDocument.status === 'DRAFT'
+          ? {
+              status: 'CONFIRMED' as const,
+              confirmedAt: new Date(),
+              confirmedByUserId: context?.userId,
+            }
+          : {}),
         metadataJson: JSON.parse(JSON.stringify({
           ...sourceMetadata,
           convertedToPzDocumentId: pz.id,

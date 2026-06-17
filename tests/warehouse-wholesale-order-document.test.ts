@@ -51,6 +51,13 @@ describe('warehouse wholesale order document (ZH)', () => {
     assert.match(DOCS_SERVICE, /overageItems/);
   });
 
+  it('utworzenie PZ zamyka źródłowy ZH', () => {
+    assert.match(DOCS_SERVICE, /sourceDocument\.status === 'DRAFT'/);
+    assert.match(DOCS_SERVICE, /status: 'CONFIRMED'/);
+    assert.match(DOCS_SERVICE, /confirmedAt: new Date\(\)/);
+    assert.match(DOCS_SERVICE, /confirmedByUserId: context\?\.userId/);
+  });
+
   it('eksport CSV ZH zatwierdza robocze zamówienie hurtowe', () => {
     assert.match(DOCS_ROUTES, /\/documents\/:id\/export-csv/);
     assert.match(DOCS_ROUTES, /\/documents\/zh\/providers\/:providerId\/export-csv/);

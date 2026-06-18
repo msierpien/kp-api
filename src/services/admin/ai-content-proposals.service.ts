@@ -11,6 +11,7 @@ export interface AiContentProposalInput {
   templateId?: string | null;
   action: AiContentAction;
   imageUrl?: string | null;
+  inspiration?: string | null;
   current?: {
     name?: string;
     shortDescriptionHtml?: string;
@@ -228,6 +229,9 @@ function buildPrompt(input: AiContentProposalInput, product: any, template: any)
     `Opis lokalny: ${product.description ?? 'brak'}`,
     `Kategorie: ${categories}`,
     `Cechy:\n${features}`,
+    input.inspiration
+      ? `Inspiracje z konkurencji, tylko jako kontekst. Nie kopiuj tekstu 1:1, nie przepisuj unikalnych sformulowan i zweryfikuj fakty z danymi produktu:\n${input.inspiration}`
+      : 'Inspiracje z konkurencji: brak',
     input.imageUrl ? `Pierwsze zdjecie produktu: ${input.imageUrl}` : 'Pierwsze zdjecie produktu: brak',
     '',
     'Aktualny draft:',

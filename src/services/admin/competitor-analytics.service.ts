@@ -1,0 +1,1195 @@
+import { ObjectId, type Db } from 'mongodb';
+import { Prisma } from '@prisma/client';
+import prisma from '../../lib/prisma';
+import { analyticsMongoConfigured, getAnalyticsMongoDb } from '../../lib/analytics-mongo';
+import { getTenantContext, getTenantId } from '../../lib/tenant-context';
+import { NotFoundError, ValidationError } from '../../lib/errors';
+import * as productCardService from './product-card.service';
+import * as pricingService from './warehouse-pricing.service';
+import * as aiContentProposalService from './ai-content-proposals.service';
+
+export type CompetitorIssue =
+  | 'NO_MATCH'
+  | 'MISSING_CATEGORY'
+  | 'BAD_CATEGORY'
+  | 'PRICE_OUTLIER'
+  | 'MISSING_DESCRIPTION';
+
+export type CategoryApplyMode = 'ADD' | 'REPLACE';
+
+export interface ProductListQuery {
+  shopId?: string;
+  q?: string;
+  issue?: CompetitorIssue | 'ALL';
+  source?: string;
+  categoryId?: string;
+  page?: number | string;
+  limit?: number | string;
+}
+
+export interface CategoryMappingsQuery {
+  shopId: string;
+  source?: string;
+}
+
+export interface CategoryMappingInput {
+  shopId: string;
+  mappings: Array<{
+    source: string;
+    sourceCategoryId: string;
+    sourceCategoryName?: string | null;
+    sourceCategoryPath?: string | string[] | null;
+    targetCategoryId: string;
+    targetCategoryName?: string | null;
+  }>;
+}
+
+export interface CategoryPreviewInput {
+  shopId: string;
+  productIds: string[];
+  mode?: CategoryApplyMode;
+  targetCategoryId?: string;
+  targetCategoryName?: string | null;
+}
+
+export interface PricePreviewInput {
+  shopId: string;
+  productIds: string[];
+  items?: Array<{ warehouseProductId: string; grossPrice?: number | null }>;
+}
+
+export interface PriceApplyInput extends PricePreviewInput {
+  sync?: boolean;
+}
+
+export interface DescriptionAiInput {
+  shopId: string;
+  productIds: string[];
+  action?: aiContentProposalService.AiContentProposalInput['action'];
+  templateId?: string | null;
+  includeImages?: boolean;
+}
+
+const SOURCES = ['congee', 'kucmar', 'partybox'] as const;
+const MAX_LIST_LIMIT = 200;
+const MAX_BULK_PRODUCTS = 200;
+const PRICE_OUTLIER_PERCENT = 10;
+const PARTYBOX_WARNING =
+  'Partybox jest niekompletny: ceny i opisy sa dostepne, ale kategorie Partybox nie powinny byc traktowane jako pelne drzewo.';
+
+const productInclude = {
+  barcodes: { where: { isActive: true }, orderBy: [{ isPrimary: 'desc' as const }, { createdAt: 'asc' as const }] },
+  shopProductMappings: { where: { isActive: true }, include: { shop: true } },
+  shopPrices: true,
+  productChannelSnapshots: true,
+} satisfies Prisma.WarehouseProductInclude;
+
+type ProductForAnalytics = Prisma.WarehouseProductGetPayload<{ include: typeof productInclude }>;
+
+type MatchConfidence = 'EAN' | 'SKU' | 'NAME' | 'NONE';
+
+interface CompetitorCategory {
+  id: string;
+  path: string[];
+  url: string | null;
+}
+
+interface CompetitorBundleItem {
+  id: string;
+  sku: string | null;
+  ean: string | null;
+  title: string | null;
+  quantity: number | null;
+  price: number | null;
+  url: string | null;
+  raw: Record<string, unknown>;
+}
+
+interface CompetitorOffer {
+  id: string;
+  source: string;
+  sourceProductId: string;
+  sku: string | null;
+  ean: string | null;
+  title: string | null;
+  price: number | null;
+  currency: string;
+  availability: string | null;
+  url: string | null;
+  description: string | null;
+  shortDescription: string | null;
+  seoTitle: string | null;
+  seoDescription: string | null;
+  brand: string | null;
+  imageUrls: string[];
+  parameters: Record<string, unknown> | null;
+  categories: CompetitorCategory[];
+  bundleItems: CompetitorBundleItem[];
+}
+
+interface EnrichedProduct {
+  warehouseProductId: string;
+  sku: string;
+  name: string;
+  currentGrossPrice: number | null;
+  costNet: number | null;
+  currentCategories: Array<{ id: string; name: string; isDefault?: boolean }>;
+  hasDescription: boolean;
+  match: {
+    confidence: MatchConfidence;
+    matchedBy: string | null;
+    productId: string | null;
+  };
+  priceStats: {
+    minGross: number | null;
+    medianGross: number | null;
+    maxGross: number | null;
+    sourceCount: number;
+    offerCount: number;
+    diffPercentVsCurrent: number | null;
+    suggestedGross: number | null;
+    suggestedNet: number | null;
+    blockedBelowCost: boolean;
+  };
+  issues: CompetitorIssue[];
+  offers: CompetitorOffer[];
+  categorySuggestions: Array<{
+    source: string;
+    sourceCategoryId: string;
+    sourceCategoryPath: string[];
+    targetCategoryId: string;
+    targetCategoryName: string | null;
+  }>;
+}
+
+function requireTenantId() {
+  const tenantId = getTenantId() || getTenantContext()?.tenantId;
+  if (!tenantId) throw new ValidationError('Brak kontekstu tenanta');
+  return tenantId;
+}
+
+function normalizeText(value: unknown) {
+  return String(value ?? '').trim();
+}
+
+function normalizedIdentifier(value: unknown) {
+  const text = normalizeText(value);
+  return text ? text : null;
+}
+
+function unique(values: Array<string | null | undefined>) {
+  return Array.from(new Set(values.map((value) => normalizeText(value)).filter(Boolean)));
+}
+
+function pageValue(value: number | string | undefined, fallback: number, max = Number.POSITIVE_INFINITY) {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(Math.trunc(parsed), 1), max);
+}
+
+function decimalToNumber(value: Prisma.Decimal | number | string | null | undefined) {
+  if (value === null || value === undefined) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function round2(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  return Math.round(value * 100) / 100;
+}
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function exactRegex(value: string) {
+  return new RegExp(`^${escapeRegex(value)}$`, 'i');
+}
+
+function containsRegex(value: string) {
+  return new RegExp(escapeRegex(value), 'i');
+}
+
+function selectedSources(source?: string) {
+  if (!source || source === 'ALL') return [...SOURCES];
+  return SOURCES.includes(source as any) ? [source] : [];
+}
+
+function warningsForSources(sources: string[], context?: 'categories' | 'prices') {
+  const warnings = [];
+  if (sources.includes('partybox')) {
+    warnings.push(PARTYBOX_WARNING);
+    if (context === 'categories') warnings.push('Mapowania kategorii Partybox wymagaja recznego potwierdzenia.');
+  }
+  return warnings;
+}
+
+async function ensureMongo() {
+  if (!analyticsMongoConfigured()) {
+    throw new ValidationError('Brak konfiguracji ANALYTICS_MONGO_URI dla analityki konkurencji');
+  }
+  return getAnalyticsMongoDb();
+}
+
+async function requireShop(tenantId: string, shopId: string) {
+  const shop = await prisma.shop.findFirst({ where: { id: shopId, tenantId } });
+  if (!shop) throw new NotFoundError('Sklep nie istnieje w tym tenancie');
+  return shop;
+}
+
+function productIdentifiers(product: ProductForAnalytics) {
+  const eans = unique([
+    ...product.barcodes.map((barcode) => barcode.ean),
+    ...product.shopProductMappings.map((mapping) => mapping.externalEan),
+  ]);
+  const skus = unique([
+    product.sku,
+    ...product.shopProductMappings.map((mapping) => mapping.externalSku),
+  ]);
+
+  return { eans, skus };
+}
+
+function currentSnapshot(product: ProductForAnalytics, shopId?: string) {
+  if (shopId) {
+    return product.productChannelSnapshots.find((snapshot) => snapshot.shopId === shopId) ?? null;
+  }
+  return product.productChannelSnapshots[0] ?? null;
+}
+
+function currentCategories(product: ProductForAnalytics, shopId?: string) {
+  const payload = currentSnapshot(product, shopId)?.payloadJson as any;
+  const categories = Array.isArray(payload?.categories) ? payload.categories : [];
+  return categories
+    .map((category: any) => ({
+      id: String(category.id ?? ''),
+      name: String(category.name ?? category.id ?? ''),
+      isDefault: Boolean(category.isDefault),
+    }))
+    .filter((category: { id: string }) => category.id);
+}
+
+function hasCurrentDescription(product: ProductForAnalytics, shopId?: string) {
+  const payload = currentSnapshot(product, shopId)?.payloadJson as any;
+  const content = payload?.content ?? {};
+  return Boolean(normalizeText(content.longDescriptionHtml) || normalizeText(content.shortDescriptionHtml) || normalizeText(product.description));
+}
+
+function currentGrossPrice(product: ProductForAnalytics, shopId?: string) {
+  const shopPrice = shopId ? product.shopPrices.find((price) => price.shopId === shopId) : product.shopPrices[0];
+  return decimalToNumber(shopPrice?.grossPrice) ?? decimalToNumber(product.retailPrice);
+}
+
+function costNet(product: ProductForAnalytics) {
+  return decimalToNumber(product.averagePurchaseCost) ?? decimalToNumber(product.purchasePrice);
+}
+
+function priceStats(offers: CompetitorOffer[], currentGross: number | null, cost: number | null, vatRate = 23) {
+  const prices = offers
+    .map((offer) => offer.price)
+    .filter((price): price is number => typeof price === 'number' && Number.isFinite(price) && price > 0)
+    .sort((a, b) => a - b);
+
+  const minGross = prices.length ? prices[0] : null;
+  const maxGross = prices.length ? prices[prices.length - 1] : null;
+  const medianGross = prices.length
+    ? prices.length % 2
+      ? prices[Math.floor(prices.length / 2)]
+      : (prices[prices.length / 2 - 1] + prices[prices.length / 2]) / 2
+    : null;
+  const suggestedGross = round2(medianGross);
+  const suggestedNet = suggestedGross === null ? null : round2(suggestedGross / (1 + vatRate / 100));
+  const diffPercentVsCurrent = currentGross && suggestedGross
+    ? round2(((currentGross - suggestedGross) / suggestedGross) * 100)
+    : null;
+
+  return {
+    minGross: round2(minGross),
+    medianGross: round2(medianGross),
+    maxGross: round2(maxGross),
+    sourceCount: new Set(offers.map((offer) => offer.source)).size,
+    offerCount: offers.length,
+    diffPercentVsCurrent,
+    suggestedGross,
+    suggestedNet,
+    blockedBelowCost: Boolean(cost !== null && suggestedNet !== null && suggestedNet < cost),
+  };
+}
+
+function numberOrNull(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function firstIdentifier(row: any, fields: string[]) {
+  for (const field of fields) {
+    const value = normalizedIdentifier(row[field]);
+    if (value) return value;
+  }
+  return null;
+}
+
+function normalizeBundleItem(row: any): CompetitorBundleItem {
+  const raw = { ...row };
+  delete raw._id;
+
+  return {
+    id: String(row._id),
+    sku: firstIdentifier(row, ['item_sku', 'sku', 'store_sku', 'product_sku']),
+    ean: firstIdentifier(row, ['item_ean', 'ean', 'store_ean', 'product_ean']),
+    title: firstIdentifier(row, ['item_title', 'title', 'name', 'product_name', 'item_name']),
+    quantity: numberOrNull(row.quantity ?? row.qty ?? row.count),
+    price: decimalToNumber(row.price ?? row.unit_price ?? row.item_price),
+    url: firstIdentifier(row, ['product_url', 'url', 'item_url']),
+    raw,
+  };
+}
+
+function normalizeOffer(
+  row: any,
+  categories: CompetitorCategory[] = [],
+  bundleItems: CompetitorBundleItem[] = [],
+): CompetitorOffer {
+  return {
+    id: String(row._id),
+    source: String(row.source ?? ''),
+    sourceProductId: String(row.source_product_id ?? ''),
+    sku: normalizedIdentifier(row.store_sku),
+    ean: normalizedIdentifier(row.store_ean),
+    title: normalizedIdentifier(row.title),
+    price: decimalToNumber(row.price),
+    currency: normalizeText(row.currency) || 'PLN',
+    availability: normalizedIdentifier(row.availability),
+    url: normalizedIdentifier(row.product_url),
+    description: normalizedIdentifier(row.description),
+    shortDescription: normalizedIdentifier(row.short_description),
+    seoTitle: normalizedIdentifier(row.seo_title),
+    seoDescription: normalizedIdentifier(row.seo_description),
+    brand: normalizedIdentifier(row.brand),
+    imageUrls: Array.isArray(row.image_urls) ? row.image_urls.map(String).filter(Boolean) : [],
+    parameters: row.parameters && typeof row.parameters === 'object' && !Array.isArray(row.parameters) ? row.parameters : null,
+    categories,
+    bundleItems,
+  };
+}
+
+function offerKey(row: any) {
+  return `${row.source}:${row.source_product_id}`;
+}
+
+async function decorateOffers(db: Db, rows: any[]) {
+  const keys = rows
+    .map((row) => ({ source: row.source, source_product_id: row.source_product_id }))
+    .filter((row) => row.source && row.source_product_id)
+    .slice(0, 200);
+
+  if (keys.length === 0) return rows.map((row) => normalizeOffer(row));
+
+  const [categoryRows, bundleRows] = await Promise.all([
+    db.collection('regular_product_categories')
+      .find({ $or: keys })
+      .project({ source: 1, source_product_id: 1, category_id: 1, category_path: 1, category_url: 1 })
+      .toArray(),
+    db.collection('store_product_bundle_items')
+      .find({ $or: keys })
+      .limit(1000)
+      .toArray(),
+  ]);
+  const byOffer = new Map<string, CompetitorCategory[]>();
+  const bundlesByOffer = new Map<string, CompetitorBundleItem[]>();
+
+  for (const row of categoryRows) {
+    const key = `${row.source}:${row.source_product_id}`;
+    const list = byOffer.get(key) ?? [];
+    list.push({
+      id: String(row.category_id),
+      path: Array.isArray(row.category_path) ? row.category_path.map(String) : [],
+      url: normalizedIdentifier(row.category_url),
+    });
+    byOffer.set(key, list);
+  }
+
+  for (const row of bundleRows) {
+    const key = `${row.source}:${row.source_product_id}`;
+    const list = bundlesByOffer.get(key) ?? [];
+    list.push(normalizeBundleItem(row));
+    bundlesByOffer.set(key, list);
+  }
+
+  return rows.map((row) => normalizeOffer(
+    row,
+    byOffer.get(offerKey(row)) ?? [],
+    bundlesByOffer.get(offerKey(row)) ?? [],
+  ));
+}
+
+async function expandRowsByProductId(db: Db, rows: any[], sources: string[]) {
+  const productIds = rows
+    .map((row) => row.product_id)
+    .filter((value) => value instanceof ObjectId);
+
+  if (productIds.length === 0) return rows;
+
+  const expanded = await db.collection('store_products')
+    .find({ source: { $in: sources }, product_id: { $in: productIds } })
+    .limit(80)
+    .toArray();
+
+  return expanded.length ? expanded : rows;
+}
+
+async function rowsByBaseProducts(db: Db, productIds: ObjectId[], sources: string[]) {
+  if (productIds.length === 0) return [];
+  return db.collection('store_products')
+    .find({ source: { $in: sources }, product_id: { $in: productIds } })
+    .limit(80)
+    .toArray();
+}
+
+function exactOr(field: string, values: string[]) {
+  return values.slice(0, 20).map((value) => ({ [field]: exactRegex(value) }));
+}
+
+async function findCompetitorOffers(db: Db, product: ProductForAnalytics, source?: string, categoryId?: string) {
+  const sources = selectedSources(source);
+  const sourceFilter = { source: { $in: sources } };
+  const { eans, skus } = productIdentifiers(product);
+  let confidence: MatchConfidence = 'NONE';
+  let matchedBy: string | null = null;
+  let rows: any[] = [];
+
+  if (eans.length) {
+    rows = await db.collection('store_products')
+      .find({ ...sourceFilter, $or: exactOr('store_ean', eans) })
+      .limit(80)
+      .toArray();
+    if (rows.length) {
+      confidence = 'EAN';
+      matchedBy = eans[0];
+    } else {
+      const baseProducts = await db.collection('products')
+        .find({ $or: exactOr('ean', eans) })
+        .project({ _id: 1 })
+        .limit(20)
+        .toArray();
+      rows = await rowsByBaseProducts(db, baseProducts.map((row) => row._id), sources);
+      if (rows.length) {
+        confidence = 'EAN';
+        matchedBy = eans[0];
+      }
+    }
+  }
+
+  if (!rows.length && skus.length) {
+    rows = await db.collection('store_products')
+      .find({ ...sourceFilter, $or: exactOr('store_sku', skus) })
+      .limit(80)
+      .toArray();
+    if (rows.length) {
+      confidence = 'SKU';
+      matchedBy = skus[0];
+    } else {
+      const baseProducts = await db.collection('products')
+        .find({ $or: [...exactOr('sku', skus), ...exactOr('product_number', skus)] })
+        .project({ _id: 1 })
+        .limit(20)
+        .toArray();
+      rows = await rowsByBaseProducts(db, baseProducts.map((row) => row._id), sources);
+      if (rows.length) {
+        confidence = 'SKU';
+        matchedBy = skus[0];
+      }
+    }
+  }
+
+  if (!rows.length && product.name.length >= 4) {
+    rows = await db.collection('store_products')
+      .find({ ...sourceFilter, title: containsRegex(product.name) })
+      .limit(20)
+      .toArray();
+    if (rows.length) {
+      confidence = 'NAME';
+      matchedBy = product.name;
+    }
+  }
+
+  rows = await expandRowsByProductId(db, rows, sources);
+  const deduped = Array.from(new Map(rows.map((row) => [String(row._id), row])).values());
+  const offers = await decorateOffers(db, deduped);
+  const filteredOffers = categoryId
+    ? offers.filter((offer) => offer.categories.some((category) => category.id === categoryId))
+    : offers;
+
+  const productId = deduped.find((row) => row.product_id instanceof ObjectId)?.product_id;
+  return {
+    confidence: filteredOffers.length ? confidence : 'NONE',
+    matchedBy: filteredOffers.length ? matchedBy : null,
+    productId: productId ? String(productId) : null,
+    offers: filteredOffers.sort((a, b) => {
+      if (a.price === null && b.price === null) return a.source.localeCompare(b.source);
+      if (a.price === null) return 1;
+      if (b.price === null) return -1;
+      return a.price - b.price;
+    }),
+  };
+}
+
+async function mappingMap(tenantId: string, shopId?: string) {
+  if (!shopId) return new Map<string, any>();
+  const rows = await prisma.competitorCategoryMapping.findMany({ where: { tenantId, shopId } });
+  return new Map(rows.map((row) => [`${row.source}:${row.sourceCategoryId}`, row]));
+}
+
+function categorySuggestions(offers: CompetitorOffer[], mappings: Map<string, any>) {
+  const suggestions = new Map<string, EnrichedProduct['categorySuggestions'][number]>();
+
+  for (const offer of offers) {
+    for (const category of offer.categories) {
+      const mapping = mappings.get(`${offer.source}:${category.id}`);
+      if (!mapping) continue;
+      const key = `${mapping.targetCategoryId}:${offer.source}:${category.id}`;
+      suggestions.set(key, {
+        source: offer.source,
+        sourceCategoryId: category.id,
+        sourceCategoryPath: category.path,
+        targetCategoryId: mapping.targetCategoryId,
+        targetCategoryName: mapping.targetCategoryName,
+      });
+    }
+  }
+
+  return Array.from(suggestions.values());
+}
+
+function productIssues(enriched: Omit<EnrichedProduct, 'issues'>) {
+  const issues: CompetitorIssue[] = [];
+  if (enriched.match.confidence === 'NONE') issues.push('NO_MATCH');
+  if (enriched.currentCategories.length === 0) issues.push('MISSING_CATEGORY');
+  if (!enriched.hasDescription) issues.push('MISSING_DESCRIPTION');
+  if (
+    enriched.currentGrossPrice !== null &&
+    enriched.priceStats.suggestedGross !== null &&
+    enriched.priceStats.diffPercentVsCurrent !== null &&
+    Math.abs(enriched.priceStats.diffPercentVsCurrent) >= PRICE_OUTLIER_PERCENT
+  ) {
+    issues.push('PRICE_OUTLIER');
+  }
+  if (
+    enriched.currentCategories.length > 0 &&
+    enriched.categorySuggestions.length > 0 &&
+    !enriched.categorySuggestions.some((suggestion) =>
+      enriched.currentCategories.some((category) => category.id === suggestion.targetCategoryId)
+    )
+  ) {
+    issues.push('BAD_CATEGORY');
+  }
+  return issues;
+}
+
+async function enrichProduct(
+  db: Db,
+  tenantId: string,
+  product: ProductForAnalytics,
+  options: { shopId?: string; source?: string; categoryId?: string; vatRate?: number } = {},
+): Promise<EnrichedProduct> {
+  const match = await findCompetitorOffers(db, product, options.source, options.categoryId);
+  const currentPrice = currentGrossPrice(product, options.shopId);
+  const productCost = costNet(product);
+  const stats = priceStats(match.offers, currentPrice, productCost, options.vatRate);
+  const mappings = await mappingMap(tenantId, options.shopId);
+  const withoutIssues = {
+    warehouseProductId: product.id,
+    sku: product.sku,
+    name: product.name,
+    currentGrossPrice: currentPrice,
+    costNet: productCost,
+    currentCategories: currentCategories(product, options.shopId),
+    hasDescription: hasCurrentDescription(product, options.shopId),
+    match: {
+      confidence: match.confidence,
+      matchedBy: match.matchedBy,
+      productId: match.productId,
+    },
+    priceStats: stats,
+    offers: match.offers,
+    categorySuggestions: categorySuggestions(match.offers, mappings),
+  };
+
+  return { ...withoutIssues, issues: productIssues(withoutIssues) };
+}
+
+function serializeEnriched(product: EnrichedProduct, includeOffers = false) {
+  return {
+    warehouseProductId: product.warehouseProductId,
+    sku: product.sku,
+    name: product.name,
+    currentGrossPrice: product.currentGrossPrice,
+    costNet: product.costNet,
+    currentCategories: product.currentCategories,
+    hasDescription: product.hasDescription,
+    match: product.match,
+    priceStats: product.priceStats,
+    issues: product.issues,
+    categorySuggestions: product.categorySuggestions,
+    offerCount: product.offers.length,
+    sources: Array.from(new Set(product.offers.map((offer) => offer.source))),
+    offers: includeOffers ? product.offers : undefined,
+  };
+}
+
+async function pricingVatRate(tenantId: string) {
+  const settings = await prisma.warehousePricingSettings.findUnique({ where: { tenantId } });
+  return decimalToNumber(settings?.defaultVatRate) ?? 23;
+}
+
+async function productsByIds(tenantId: string, productIds: string[]) {
+  const ids = Array.from(new Set(productIds.filter(Boolean))).slice(0, MAX_BULK_PRODUCTS);
+  if (ids.length === 0) throw new ValidationError('Wybierz co najmniej jeden produkt');
+  const products = await prisma.warehouseProduct.findMany({
+    where: { tenantId, id: { in: ids } },
+    include: productInclude,
+  });
+  if (products.length !== ids.length) throw new ValidationError('Czesc produktow nie istnieje w tym tenancie');
+  return products;
+}
+
+export async function getOverview(query: { shopId?: string } = {}) {
+  const tenantId = requireTenantId();
+  const db = await ensureMongo();
+  if (query.shopId) await requireShop(tenantId, query.shopId);
+
+  const sourceStats = await db.collection('store_products').aggregate([
+    { $match: { source: { $in: SOURCES as unknown as string[] } } },
+    {
+      $group: {
+        _id: '$source',
+        products: { $sum: 1 },
+        withPrice: { $sum: { $cond: [{ $ne: ['$price', null] }, 1, 0] } },
+        withEan: { $sum: { $cond: [{ $and: [{ $ne: ['$store_ean', null] }, { $ne: ['$store_ean', ''] }] }, 1, 0] } },
+        withSku: { $sum: { $cond: [{ $and: [{ $ne: ['$store_sku', null] }, { $ne: ['$store_sku', ''] }] }, 1, 0] } },
+        withDescription: { $sum: { $cond: [{ $or: [{ $ne: ['$description', null] }, { $ne: ['$short_description', null] }] }, 1, 0] } },
+      },
+    },
+    { $sort: { _id: 1 } },
+  ]).toArray();
+
+  const categoryCoverage = await db.collection('store_products').aggregate([
+    { $match: { source: { $in: SOURCES as unknown as string[] } } },
+    {
+      $lookup: {
+        from: 'regular_product_categories',
+        let: { source: '$source', source_product_id: '$source_product_id' },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $eq: ['$source', '$$source'] },
+                  { $eq: ['$source_product_id', '$$source_product_id'] },
+                ],
+              },
+            },
+          },
+          { $limit: 1 },
+        ],
+        as: 'category',
+      },
+    },
+    { $group: { _id: { source: '$source', hasCategory: { $gt: [{ $size: '$category' }, 0] } }, products: { $sum: 1 } } },
+    { $sort: { '_id.source': 1 } },
+  ]).toArray();
+
+  const warehouseWhere: Prisma.WarehouseProductWhereInput = { tenantId };
+  if (query.shopId) warehouseWhere.shopProductMappings = { some: { shopId: query.shopId, isActive: true } };
+  const [warehouseProducts, mappedProducts, mappings] = await Promise.all([
+    prisma.warehouseProduct.count({ where: warehouseWhere }),
+    prisma.warehouseProduct.count({ where: { ...warehouseWhere, shopProductMappings: { some: { ...(query.shopId ? { shopId: query.shopId } : {}), isActive: true } } } }),
+    query.shopId ? prisma.competitorCategoryMapping.count({ where: { tenantId, shopId: query.shopId } }) : Promise.resolve(0),
+  ]);
+
+  return {
+    configured: true,
+    sources: SOURCES,
+    warnings: warningsForSources([...SOURCES], 'categories'),
+    sourceStats,
+    categoryCoverage,
+    warehouse: {
+      products: warehouseProducts,
+      mappedProducts,
+      categoryMappings: mappings,
+    },
+  };
+}
+
+export async function listProducts(query: ProductListQuery = {}) {
+  const tenantId = requireTenantId();
+  const db = await ensureMongo();
+  const page = pageValue(query.page, 1);
+  const limit = pageValue(query.limit, 50, MAX_LIST_LIMIT);
+  const search = normalizeText(query.q);
+  const source = query.source && query.source !== 'ALL' ? query.source : undefined;
+  const vatRate = await pricingVatRate(tenantId);
+
+  if (query.shopId) await requireShop(tenantId, query.shopId);
+  const where: Prisma.WarehouseProductWhereInput = { tenantId };
+  if (query.shopId) where.shopProductMappings = { some: { shopId: query.shopId, isActive: true } };
+  if (search) {
+    where.OR = [
+      { sku: { contains: search, mode: 'insensitive' } },
+      { name: { contains: search, mode: 'insensitive' } },
+      { barcodes: { some: { ean: { contains: search, mode: 'insensitive' } } } },
+      { shopProductMappings: { some: { externalSku: { contains: search, mode: 'insensitive' } } } },
+      { shopProductMappings: { some: { externalEan: { contains: search, mode: 'insensitive' } } } },
+    ];
+  }
+
+  const [products, total] = await Promise.all([
+    prisma.warehouseProduct.findMany({
+      where,
+      include: productInclude,
+      orderBy: { updatedAt: 'desc' },
+      skip: (page - 1) * limit,
+      take: limit,
+    }),
+    prisma.warehouseProduct.count({ where }),
+  ]);
+
+  const enriched = await Promise.all(products.map((product) =>
+    enrichProduct(db, tenantId, product, { shopId: query.shopId, source, categoryId: query.categoryId, vatRate })
+  ));
+  const filtered = query.issue && query.issue !== 'ALL'
+    ? enriched.filter((product) => product.issues.includes(query.issue as CompetitorIssue))
+    : enriched;
+
+  return {
+    data: filtered.map((product) => serializeEnriched(product)),
+    total,
+    page,
+    limit,
+    totalPages: Math.max(1, Math.ceil(total / limit)),
+    warnings: warningsForSources(selectedSources(source), query.categoryId ? 'categories' : 'prices'),
+  };
+}
+
+export async function getProductDetail(warehouseProductId: string, query: { shopId?: string; source?: string } = {}) {
+  const tenantId = requireTenantId();
+  const db = await ensureMongo();
+  if (query.shopId) await requireShop(tenantId, query.shopId);
+  const product = await prisma.warehouseProduct.findFirst({
+    where: { id: warehouseProductId, tenantId },
+    include: productInclude,
+  });
+  if (!product) throw new NotFoundError('Produkt nie istnieje');
+  const enriched = await enrichProduct(db, tenantId, product, {
+    shopId: query.shopId,
+    source: query.source && query.source !== 'ALL' ? query.source : undefined,
+    vatRate: await pricingVatRate(tenantId),
+  });
+  return { ...serializeEnriched(enriched, true), warnings: warningsForSources(selectedSources(query.source), 'categories') };
+}
+
+export async function getCategoryTree(query: { source?: string; includeCounts?: boolean | string } = {}) {
+  const db = await ensureMongo();
+  const source = query.source && query.source !== 'ALL' ? query.source : 'congee';
+  if (!SOURCES.includes(source as any)) throw new ValidationError('Nieznane zrodlo konkurencji');
+
+  const categories = await db.collection('store_categories')
+    .find({ source })
+    .sort({ depth: 1, name: 1 })
+    .toArray();
+  const counts = query.includeCounts === true || query.includeCounts === 'true'
+    ? await db.collection('regular_product_categories').aggregate([
+      { $match: { source } },
+      { $group: { _id: '$category_id', products: { $addToSet: '$source_product_id' } } },
+      { $project: { count: { $size: '$products' } } },
+    ]).toArray()
+    : [];
+  const countMap = new Map(counts.map((row) => [String(row._id), Number(row.count ?? 0)]));
+
+  return {
+    source,
+    warnings: warningsForSources([source], 'categories'),
+    categories: categories.map((category) => ({
+      id: String(category.source_category_id),
+      parentId: category.parent_source_category_id ? String(category.parent_source_category_id) : null,
+      name: String(category.name ?? ''),
+      path: Array.isArray(category.path) ? category.path.map(String) : [],
+      depth: Number(category.depth ?? 0),
+      productCount: countMap.get(String(category.source_category_id)) ?? 0,
+      url: category.product_list_url ?? category.navigation_url ?? category.canonical_url ?? null,
+    })),
+  };
+}
+
+export async function getCategoryMappings(query: CategoryMappingsQuery) {
+  const tenantId = requireTenantId();
+  await requireShop(tenantId, query.shopId);
+  const rows = await prisma.competitorCategoryMapping.findMany({
+    where: {
+      tenantId,
+      shopId: query.shopId,
+      ...(query.source && query.source !== 'ALL' ? { source: query.source } : {}),
+    },
+    orderBy: [{ source: 'asc' }, { sourceCategoryPath: 'asc' }],
+  });
+  return rows.map((row) => ({
+    id: row.id,
+    shopId: row.shopId,
+    source: row.source,
+    sourceCategoryId: row.sourceCategoryId,
+    sourceCategoryName: row.sourceCategoryName,
+    sourceCategoryPath: row.sourceCategoryPath,
+    targetCategoryId: row.targetCategoryId,
+    targetCategoryName: row.targetCategoryName,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }));
+}
+
+export async function saveCategoryMappings(input: CategoryMappingInput) {
+  const tenantId = requireTenantId();
+  await requireShop(tenantId, input.shopId);
+  if (!Array.isArray(input.mappings) || input.mappings.length === 0) {
+    throw new ValidationError('Dodaj co najmniej jedno mapowanie kategorii');
+  }
+
+  const saved = [];
+  for (const mapping of input.mappings.slice(0, MAX_BULK_PRODUCTS)) {
+    if (!mapping.source || !mapping.sourceCategoryId || !mapping.targetCategoryId) {
+      throw new ValidationError('Mapowanie wymaga zrodla, kategorii konkurencji i kategorii docelowej');
+    }
+    const sourceCategoryPath = Array.isArray(mapping.sourceCategoryPath)
+      ? mapping.sourceCategoryPath.join(' > ')
+      : mapping.sourceCategoryPath ?? null;
+    saved.push(await prisma.competitorCategoryMapping.upsert({
+      where: {
+        tenantId_shopId_source_sourceCategoryId: {
+          tenantId,
+          shopId: input.shopId,
+          source: mapping.source,
+          sourceCategoryId: mapping.sourceCategoryId,
+        },
+      },
+      create: {
+        tenantId,
+        shopId: input.shopId,
+        source: mapping.source,
+        sourceCategoryId: mapping.sourceCategoryId,
+        sourceCategoryName: mapping.sourceCategoryName ?? null,
+        sourceCategoryPath,
+        targetCategoryId: mapping.targetCategoryId,
+        targetCategoryName: mapping.targetCategoryName ?? null,
+      },
+      update: {
+        sourceCategoryName: mapping.sourceCategoryName ?? null,
+        sourceCategoryPath,
+        targetCategoryId: mapping.targetCategoryId,
+        targetCategoryName: mapping.targetCategoryName ?? null,
+      },
+    }));
+  }
+
+  return { saved: saved.length, mappings: saved };
+}
+
+export async function previewCategories(input: CategoryPreviewInput) {
+  const tenantId = requireTenantId();
+  const db = await ensureMongo();
+  await requireShop(tenantId, input.shopId);
+  const products = await productsByIds(tenantId, input.productIds);
+  const vatRate = await pricingVatRate(tenantId);
+
+  const items = [];
+  for (const product of products) {
+    const enriched = await enrichProduct(db, tenantId, product, { shopId: input.shopId, vatRate });
+    const suggestedIds = input.targetCategoryId
+      ? [{ targetCategoryId: input.targetCategoryId, targetCategoryName: input.targetCategoryName ?? null }]
+      : enriched.categorySuggestions;
+    const targetCategoryIds = unique(suggestedIds.map((suggestion) => suggestion.targetCategoryId));
+    const currentIds = enriched.currentCategories.map((category) => category.id);
+    const nextCategoryIds = input.mode === 'REPLACE'
+      ? targetCategoryIds
+      : unique([...currentIds, ...targetCategoryIds]);
+
+    items.push({
+      warehouseProductId: product.id,
+      sku: product.sku,
+      name: product.name,
+      status: targetCategoryIds.length ? 'READY' : enriched.match.confidence === 'NONE' ? 'NO_MATCH' : 'NO_MAPPING',
+      mode: input.mode ?? 'ADD',
+      currentCategories: enriched.currentCategories,
+      targetCategoryIds,
+      targetCategories: suggestedIds.map((suggestion) => ({
+        id: suggestion.targetCategoryId,
+        name: suggestion.targetCategoryName ?? null,
+      })),
+      nextCategoryIds,
+      suggestions: enriched.categorySuggestions,
+    });
+  }
+
+  return {
+    requested: products.length,
+    ready: items.filter((item) => item.status === 'READY').length,
+    blocked: items.filter((item) => item.status !== 'READY').length,
+    warnings: warningsForSources([...SOURCES], 'categories'),
+    items,
+  };
+}
+
+export async function applyCategories(input: CategoryPreviewInput) {
+  const preview = await previewCategories(input);
+  const result = {
+    requested: preview.requested,
+    updated: 0,
+    failed: 0,
+    preview,
+    errors: [] as Array<{ warehouseProductId: string; message: string }>,
+  };
+
+  for (const item of preview.items.filter((entry) => entry.status === 'READY')) {
+    try {
+      const card = await productCardService.getProductCard(item.warehouseProductId, {
+        shopId: input.shopId,
+        sections: 'parameters',
+      });
+      const remote = card.remote as any;
+      if (!remote?.hash) throw new Error('Brak snapshotu PrestaShop dla produktu');
+      const currentIds = Array.isArray(remote.categories) ? remote.categories.map((category: any) => String(category.id)) : [];
+      const nextCategoryIds = input.mode === 'REPLACE'
+        ? item.targetCategoryIds
+        : unique([...currentIds, ...item.targetCategoryIds]);
+      if (nextCategoryIds.length === 0) throw new Error('Brak kategorii docelowej');
+      const currentDefault = remote.identity?.idCategoryDefault ? String(remote.identity.idCategoryDefault) : '';
+      const defaultCategoryId = nextCategoryIds.includes(currentDefault) ? currentDefault : nextCategoryIds[0];
+
+      await productCardService.patchProductCardParameters(item.warehouseProductId, {
+        shopId: input.shopId,
+        expectedHash: remote.hash,
+        identity: { idCategoryDefault: Number(defaultCategoryId) },
+        categories: nextCategoryIds.map((categoryId) => Number(categoryId)),
+      });
+      result.updated += 1;
+    } catch (error) {
+      result.failed += 1;
+      result.errors.push({
+        warehouseProductId: item.warehouseProductId,
+        message: error instanceof Error ? error.message : 'Nie udalo sie zapisac kategorii',
+      });
+    }
+  }
+
+  result.failed += preview.items.filter((entry) => entry.status !== 'READY').length;
+  return result;
+}
+
+export async function previewPrices(input: PricePreviewInput) {
+  const tenantId = requireTenantId();
+  const db = await ensureMongo();
+  await requireShop(tenantId, input.shopId);
+  const productIds = input.items?.map((item) => item.warehouseProductId) ?? input.productIds;
+  const products = await productsByIds(tenantId, productIds);
+  const vatRate = await pricingVatRate(tenantId);
+  const overrides = new Map((input.items ?? []).map((item) => [item.warehouseProductId, item.grossPrice]));
+
+  const items = [];
+  for (const product of products) {
+    const enriched = await enrichProduct(db, tenantId, product, { shopId: input.shopId, vatRate });
+    const overrideGross = overrides.get(product.id);
+    const suggestedGross = typeof overrideGross === 'number' && Number.isFinite(overrideGross)
+      ? overrideGross
+      : enriched.priceStats.suggestedGross;
+    const suggestedNet = suggestedGross === null ? null : round2(suggestedGross / (1 + vatRate / 100));
+    const blockedBelowCost = Boolean(enriched.costNet !== null && suggestedNet !== null && suggestedNet < enriched.costNet);
+    const status = suggestedGross === null
+      ? 'NO_COMPETITOR_PRICE'
+      : blockedBelowCost
+        ? 'BELOW_COST'
+        : 'READY';
+
+    items.push({
+      warehouseProductId: product.id,
+      sku: product.sku,
+      name: product.name,
+      currentGrossPrice: enriched.currentGrossPrice,
+      minGross: enriched.priceStats.minGross,
+      medianGross: enriched.priceStats.medianGross,
+      maxGross: enriched.priceStats.maxGross,
+      suggestedGross: round2(suggestedGross),
+      suggestedNet,
+      costNet: enriched.costNet,
+      diffPercentVsCurrent: enriched.priceStats.diffPercentVsCurrent,
+      status,
+      offers: enriched.offers.slice(0, 6),
+    });
+  }
+
+  return {
+    requested: products.length,
+    ready: items.filter((item) => item.status === 'READY').length,
+    blocked: items.filter((item) => item.status !== 'READY').length,
+    vatRate,
+    warnings: warningsForSources([...SOURCES], 'prices'),
+    items,
+  };
+}
+
+export async function applyPrices(input: PriceApplyInput) {
+  const tenantId = requireTenantId();
+  const preview = await previewPrices(input);
+  const appliedIds: string[] = [];
+  const result = {
+    requested: preview.requested,
+    applied: 0,
+    skipped: 0,
+    enqueued: 0,
+    preview,
+    errors: [] as Array<{ warehouseProductId: string; message: string }>,
+  };
+
+  for (const item of preview.items) {
+    if (item.status !== 'READY' || item.suggestedNet === null) {
+      result.skipped += 1;
+      result.errors.push({ warehouseProductId: item.warehouseProductId, message: item.status });
+      continue;
+    }
+
+    const data = {
+      level: 'PRODUCT',
+      shopId: input.shopId,
+      catalogId: null,
+      priceGroupId: null,
+      warehouseProductId: item.warehouseProductId,
+      marginPercent: null,
+      minProfit: null,
+      fixedNetPrice: new Prisma.Decimal(item.suggestedNet),
+      priceMode: 'FIXED',
+      costCeilingEnabled: true,
+      vatRate: new Prisma.Decimal(preview.vatRate),
+      roundingMode: 'CENT',
+      syncMode: 'CONFIRM',
+      isActive: true,
+    };
+
+    const existingRules = await prisma.warehousePricingRule.findMany({
+      where: {
+        tenantId,
+        level: 'PRODUCT',
+        warehouseProductId: item.warehouseProductId,
+        shopId: input.shopId,
+        isActive: true,
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    if (existingRules[0]) {
+      await prisma.warehousePricingRule.update({ where: { id: existingRules[0].id }, data });
+      if (existingRules.length > 1) {
+        await prisma.warehousePricingRule.updateMany({
+          where: { id: { in: existingRules.slice(1).map((rule) => rule.id) }, tenantId },
+          data: { isActive: false },
+        });
+      }
+    } else {
+      await prisma.warehousePricingRule.create({ data: { tenantId, ...data } });
+    }
+
+    appliedIds.push(item.warehouseProductId);
+    result.applied += 1;
+  }
+
+  if (appliedIds.length) {
+    if (input.sync) {
+      const synced = await pricingService.syncPricing({ productIds: appliedIds, shopIds: [input.shopId], triggeredBy: 'MANUAL' });
+      result.enqueued = synced.enqueued;
+      result.errors.push(...synced.errors.map((error) => ({
+        warehouseProductId: error.warehouseProductId,
+        message: error.message,
+      })));
+    } else {
+      await pricingService.recalculatePricing({ productIds: appliedIds, shopIds: [input.shopId] });
+    }
+  }
+
+  return result;
+}
+
+function competitorInspiration(offers: CompetitorOffer[]) {
+  return offers
+    .filter((offer) => offer.description || offer.shortDescription || offer.seoDescription || offer.parameters)
+    .slice(0, 3)
+    .map((offer) => [
+      `Zrodlo: ${offer.source}`,
+      `Tytul: ${offer.title ?? 'brak'}`,
+      `Opis krotki: ${offer.shortDescription ?? 'brak'}`,
+      `Opis dlugi: ${offer.description ?? 'brak'}`,
+      `SEO: ${offer.seoTitle ?? ''} ${offer.seoDescription ?? ''}`.trim(),
+      offer.parameters ? `Parametry: ${JSON.stringify(offer.parameters).slice(0, 1500)}` : '',
+    ].filter(Boolean).join('\n'))
+    .join('\n\n---\n\n')
+    .slice(0, 6000);
+}
+
+export async function createDescriptionAiProposals(input: DescriptionAiInput) {
+  const tenantId = requireTenantId();
+  const db = await ensureMongo();
+  await requireShop(tenantId, input.shopId);
+  const settings = await prisma.aiSettings.findUnique({ where: { tenantId } });
+  const maxBatch = Math.min(MAX_BULK_PRODUCTS, settings?.maxBatchSize ?? 20);
+  const products = await productsByIds(tenantId, input.productIds.slice(0, maxBatch));
+  const proposals = [];
+
+  for (const product of products) {
+    const enriched = await enrichProduct(db, tenantId, product, { shopId: input.shopId });
+    const snapshot = currentSnapshot(product, input.shopId)?.payloadJson as any;
+    const inspiration = competitorInspiration(enriched.offers);
+    if (!inspiration) {
+      proposals.push({
+        warehouseProductId: product.id,
+        status: 'NO_INSPIRATION',
+        message: 'Brak opisow konkurencji dla produktu',
+      });
+      continue;
+    }
+
+    try {
+      const proposal = await aiContentProposalService.generateWarehouseProductContentProposal(product.id, {
+        shopId: input.shopId,
+        action: input.action ?? 'IMPROVE',
+        templateId: input.templateId ?? null,
+        imageUrl: input.includeImages === false ? null : enriched.offers.find((offer) => offer.imageUrls[0])?.imageUrls[0] ?? null,
+        current: {
+          name: snapshot?.identity?.name ?? product.name,
+          shortDescriptionHtml: snapshot?.content?.shortDescriptionHtml ?? '',
+          longDescriptionHtml: snapshot?.content?.longDescriptionHtml ?? '',
+          metaTitle: snapshot?.seo?.metaTitle ?? '',
+          metaDescription: snapshot?.seo?.metaDescription ?? '',
+          linkRewrite: snapshot?.seo?.linkRewrite ?? '',
+        },
+        categories: currentCategories(product, input.shopId),
+        features: [],
+        inspiration,
+      });
+      proposals.push({
+        warehouseProductId: product.id,
+        status: 'READY',
+        competitorSources: Array.from(new Set(enriched.offers.map((offer) => offer.source))),
+        proposal,
+      });
+    } catch (error) {
+      proposals.push({
+        warehouseProductId: product.id,
+        status: 'FAILED',
+        message: error instanceof Error ? error.message : 'Nie udalo sie utworzyc propozycji AI',
+      });
+    }
+  }
+
+  return {
+    requested: products.length,
+    ready: proposals.filter((proposal) => proposal.status === 'READY').length,
+    failed: proposals.filter((proposal) => proposal.status !== 'READY').length,
+    maxBatch,
+    proposals,
+  };
+}

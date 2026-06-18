@@ -49,6 +49,8 @@ services:
       API_HOST: 0.0.0.0
       # Database
       DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-personalization}?schema=public
+      ANALYTICS_MONGO_URI: ${ANALYTICS_MONGO_URI:-}
+      ANALYTICS_MONGO_DB: ${ANALYTICS_MONGO_DB:-appdb}
       # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379

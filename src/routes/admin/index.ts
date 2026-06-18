@@ -23,6 +23,7 @@ import { fontsRoutes } from './fonts.routes';
 import { warehouseCatalogsRoutes } from './warehouse-catalogs.routes';
 import { warehouseRoutes } from './warehouse.routes';
 import { wholesaleRoutes } from './wholesale.routes';
+import { competitorAnalyticsRoutes } from './competitor-analytics.routes';
 import { writeAdminAuditLog } from '../../services/audit/audit-log.service';
 
 export async function adminRoutes(fastify: FastifyInstance) {
@@ -56,4 +57,5 @@ export async function adminRoutes(fastify: FastifyInstance) {
   fastify.register(warehouseCatalogsRoutes, { prefix: '/warehouse/catalogs' });
   fastify.register(warehouseRoutes, { prefix: '/warehouse' });
   fastify.register(wholesaleRoutes, { prefix: '/wholesale' });
+  fastify.register(competitorAnalyticsRoutes, { prefix: '/competitor-analytics' });
 }

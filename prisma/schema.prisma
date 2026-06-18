@@ -68,6 +68,7 @@ model Tenant {
   productChannelSnapshots ProductChannelSnapshot[]
   productChannelSyncConfigs ProductChannelSyncConfig[]
   productCardOperationLogs ProductCardOperationLog[]
+  competitorCategoryMappings CompetitorCategoryMapping[]
 
   @@index([status])
   @@index([slug])
@@ -128,6 +129,7 @@ model Shop {
   ifirmaSettings       IfirmaSettings?
   salesDocuments       SalesDocument[]
   orderReturns         OrderReturn[]
+  competitorCategoryMappings CompetitorCategoryMapping[]
 
   @@index([tenantId])
   @@index([status])
@@ -1224,6 +1226,29 @@ model ProductCardOperationLog {
   @@index([status])
   @@index([createdAt])
   @@map("product_card_operation_logs")
+}
+
+model CompetitorCategoryMapping {
+  id                 String   @id @default(cuid())
+  tenantId           String   @map("tenant_id")
+  shopId             String   @map("shop_id")
+  source             String
+  sourceCategoryId   String   @map("source_category_id")
+  sourceCategoryName String?  @map("source_category_name")
+  sourceCategoryPath String?  @map("source_category_path") @db.Text
+  targetCategoryId   String   @map("target_category_id")
+  targetCategoryName String?  @map("target_category_name")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, shopId, source, sourceCategoryId])
+  @@index([tenantId])
+  @@index([shopId])
+  @@index([source])
+  @@map("competitor_category_mappings")
 }
 
 model WarehousePricingRule {

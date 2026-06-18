@@ -21,6 +21,8 @@ const envSchema = z.object({
 
   // Database
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+  ANALYTICS_MONGO_URI: z.string().optional(),
+  ANALYTICS_MONGO_DB: z.string().default('appdb'),
 
   // Redis
   REDIS_HOST: z.string().default('redis'),
@@ -140,6 +142,11 @@ export const config = {
    */
   database: {
     url: env.DATABASE_URL,
+  },
+
+  analytics: {
+    mongoUri: env.ANALYTICS_MONGO_URI,
+    mongoDb: env.ANALYTICS_MONGO_DB,
   },
 
   /**

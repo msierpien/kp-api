@@ -66,8 +66,25 @@ export const prestaShopCategoryProductsQuerySchema = z.object({
   sort: z.enum(['nameAsc', 'nameDesc', 'priceAsc', 'priceDesc', 'updatedDesc']).default('nameAsc'),
 });
 
+export const prestaShopSubcategoryCandidatesQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().min(1).max(500).default(500),
+  search: z.string().trim().max(160).optional().default(''),
+  sort: z.enum(['nameAsc', 'nameDesc', 'priceAsc', 'priceDesc', 'updatedDesc']).default('nameAsc'),
+});
+
 export const detachPrestaShopCategoryProductsSchema = z.object({
   productIds: z.array(z.string().min(1)).min(1).max(200),
+});
+
+export const distributePrestaShopSubcategoryProductsSchema = z.object({
+  mode: z.enum(['ADD', 'MOVE']).default('ADD'),
+  items: z.array(z.object({
+    productId: z.string().min(1),
+    targetCategoryId: z.union([z.string(), z.number()])
+      .transform((value) => String(value).trim())
+      .pipe(z.string().min(1)),
+  })).min(1).max(200),
 });
 
 const optionalCategoryText = z.string().trim().max(65535).optional().nullable();
@@ -105,7 +122,9 @@ export type ShopIdParamsInput = z.infer<typeof shopIdParamsSchema>;
 export type PrestaShopCategoriesQueryInput = z.infer<typeof prestaShopCategoriesQuerySchema>;
 export type PrestaShopCategoryParamsInput = z.infer<typeof prestaShopCategoryParamsSchema>;
 export type PrestaShopCategoryProductsQueryInput = z.infer<typeof prestaShopCategoryProductsQuerySchema>;
+export type PrestaShopSubcategoryCandidatesQueryInput = z.infer<typeof prestaShopSubcategoryCandidatesQuerySchema>;
 export type DetachPrestaShopCategoryProductsInput = z.infer<typeof detachPrestaShopCategoryProductsSchema>;
+export type DistributePrestaShopSubcategoryProductsInput = z.infer<typeof distributePrestaShopSubcategoryProductsSchema>;
 export type CreatePrestaShopCategoryInput = z.infer<typeof createPrestaShopCategorySchema>;
 export type UpdatePrestaShopCategoryInput = z.infer<typeof updatePrestaShopCategorySchema>;
 export type DeletePrestaShopCategoryQueryInput = z.infer<typeof deletePrestaShopCategoryQuerySchema>;

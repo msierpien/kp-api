@@ -4,10 +4,12 @@ import {
   createPrestaShopCategorySchema,
   deletePrestaShopCategoryQuerySchema,
   detachPrestaShopCategoryProductsSchema,
+  distributePrestaShopSubcategoryProductsSchema,
   ifirmaSettingsSchema,
   prestaShopCategoriesQuerySchema,
   prestaShopCategoryProductsQuerySchema,
   prestaShopCategoryParamsSchema,
+  prestaShopSubcategoryCandidatesQuerySchema,
   shopOrderStatusMappingSchema,
   updateShopSchema,
   updatePrestaShopCategorySchema,
@@ -16,9 +18,11 @@ import {
   type CreateShopInput,
   type DeletePrestaShopCategoryQueryInput,
   type DetachPrestaShopCategoryProductsInput,
+  type DistributePrestaShopSubcategoryProductsInput,
   type PrestaShopCategoriesQueryInput,
   type PrestaShopCategoryProductsQueryInput,
   type PrestaShopCategoryParamsInput,
+  type PrestaShopSubcategoryCandidatesQueryInput,
   type UpdateShopInput,
   type UpdatePrestaShopCategoryInput,
   type ShopIdParamsInput,
@@ -261,8 +265,24 @@ function parsePrestaShopCategoryProductsQuery(query: unknown): PrestaShopCategor
   return parsed.data;
 }
 
+function parsePrestaShopSubcategoryCandidatesQuery(query: unknown): PrestaShopSubcategoryCandidatesQueryInput {
+  const parsed = prestaShopSubcategoryCandidatesQuerySchema.safeParse(query);
+  if (!parsed.success) {
+    throw new ValidationError(parsed.error.errors[0].message, parsed.error.flatten());
+  }
+  return parsed.data;
+}
+
 function parseDetachPrestaShopCategoryProductsBody(body: unknown): DetachPrestaShopCategoryProductsInput {
   const parsed = detachPrestaShopCategoryProductsSchema.safeParse(body);
+  if (!parsed.success) {
+    throw new ValidationError(parsed.error.errors[0].message, parsed.error.flatten());
+  }
+  return parsed.data;
+}
+
+function parseDistributePrestaShopSubcategoryProductsBody(body: unknown): DistributePrestaShopSubcategoryProductsInput {
+  const parsed = distributePrestaShopSubcategoryProductsSchema.safeParse(body);
   if (!parsed.success) {
     throw new ValidationError(parsed.error.errors[0].message, parsed.error.flatten());
   }
@@ -387,6 +407,75 @@ export async function shopsRoutes(fastify: FastifyInstance) {
     const params = parsePrestaShopCategoryParams(request.params);
     const query = parsePrestaShopCategoryProductsQuery(request.query);
     return reply.send(await shopsUseCases.getPrestaShopCategoryProducts(params.id, params.categoryId, query));
+  });
+
+  fastify.get<{
+    Params: PrestaShopCategoryParamsInput;
+    Querystring: PrestaShopSubcategoryCandidatesQueryInput;
+  }>('/:id/prestashop-categories/:categoryId/subcategory-candidates', {
+    schema: {
+      tags: ['shops'],
+      summary: 'Produkty z kategorii nadrzędnej wymagające rozdzielenia do podkategorii',
+      params: {
+        type: 'object',
+        required: ['id', 'categoryId'],
+        properties: { id: { type: 'string' }, categoryId: { type: 'string' } },
+      },
+      querystring: {
+        type: 'object',
+        properties: {
+          page: { type: 'number' },
+          limit: { type: 'number' },
+          search: { type: 'string' },
+          sort: { type: 'string', enum: ['nameAsc', 'nameDesc', 'priceAsc', 'priceDesc', 'updatedDesc'] },
+        },
+      },
+      response: { 200: { type: 'object', additionalProperties: true } },
+    },
+  }, async (request, reply: FastifyReply) => {
+    const params = parsePrestaShopCategoryParams(request.params);
+    const query = parsePrestaShopSubcategoryCandidatesQuery(request.query);
+    return reply.send(await shopsUseCases.getPrestaShopSubcategoryCandidates(params.id, params.categoryId, query));
+  });
+
+  fastify.post<{
+    Params: PrestaShopCategoryParamsInput;
+    Body: DistributePrestaShopSubcategoryProductsInput;
+  }>('/:id/prestashop-categories/:categoryId/subcategory-distribution', {
+    schema: {
+      tags: ['shops'],
+      summary: 'Przypisz produkty z kategorii nadrzędnej do wybranych podkategorii',
+      params: {
+        type: 'object',
+        required: ['id', 'categoryId'],
+        properties: { id: { type: 'string' }, categoryId: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        required: ['items'],
+        properties: {
+          mode: { type: 'string', enum: ['ADD', 'MOVE'], default: 'ADD' },
+          items: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 200,
+            items: {
+              type: 'object',
+              required: ['productId', 'targetCategoryId'],
+              properties: {
+                productId: { type: 'string' },
+                targetCategoryId: { anyOf: [{ type: 'string' }, { type: 'number' }] },
+              },
+            },
+          },
+        },
+      },
+      response: { 200: { type: 'object', additionalProperties: true } },
+    },
+  }, async (request, reply: FastifyReply) => {
+    const params = parsePrestaShopCategoryParams(request.params);
+    const body = parseDistributePrestaShopSubcategoryProductsBody(request.body);
+    return reply.send(await shopsUseCases.distributePrestaShopSubcategoryProducts(params.id, params.categoryId, body));
   });
 
   fastify.post<{

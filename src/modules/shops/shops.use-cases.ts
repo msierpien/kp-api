@@ -10,9 +10,11 @@ import {
   deletePrestaShopCategory,
   deleteEmptyPrestaShopCategories,
   detachPrestaShopCategoryProducts,
+  distributePrestaShopSubcategoryProducts,
   deleteShop,
   getPrestaShopCategories,
   getPrestaShopCategoryProducts,
+  getPrestaShopSubcategoryCandidates,
   getShopAdminWhere,
   getShopImportReadiness,
   getShopDeletePreview,
@@ -285,6 +287,11 @@ export const shopsUseCases = {
     categoryId: string,
     query: Parameters<typeof getPrestaShopCategoryProducts>[2],
   ) => getPrestaShopCategoryProducts(id, categoryId, query),
+  getPrestaShopSubcategoryCandidates: (
+    id: string,
+    categoryId: string,
+    query: Parameters<typeof getPrestaShopSubcategoryCandidates>[2],
+  ) => getPrestaShopSubcategoryCandidates(id, categoryId, query),
 
   createPrestaShopCategory: (id: string, input: Parameters<typeof createPrestaShopCategory>[1]) => createPrestaShopCategory(id, input),
 
@@ -307,6 +314,11 @@ export const shopsUseCases = {
     categoryId: string,
     input: Parameters<typeof detachPrestaShopCategoryProducts>[2],
   ) => detachPrestaShopCategoryProducts(id, categoryId, input),
+  distributePrestaShopSubcategoryProducts: (
+    id: string,
+    categoryId: string,
+    input: Parameters<typeof distributePrestaShopSubcategoryProducts>[2],
+  ) => distributePrestaShopSubcategoryProducts(id, categoryId, input),
 
   mergePrestaShopCategories: (
     id: string,

@@ -85,8 +85,15 @@ const ISSUE_SCAN_CHUNK_SIZE = 50;
 const ISSUE_SCAN_MIN_LIMIT = 500;
 const ISSUE_SCAN_MAX_LIMIT = 1000;
 const PRICE_OUTLIER_PERCENT = 10;
+const MATCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_MATCH_CACHE_ENTRIES = 30;
 const PARTYBOX_WARNING =
   'Partybox jest niekompletny: ceny i opisy sa dostepne, ale kategorie Partybox nie powinny byc traktowane jako pelne drzewo.';
+
+const matchedSourceProductCache = new Map<string, {
+  expiresAt: number;
+  value: Map<string, Set<string>>;
+}>();
 
 const productInclude = {
   barcodes: { where: { isActive: true }, orderBy: [{ isPrimary: 'desc' as const }, { createdAt: 'asc' as const }] },
@@ -416,7 +423,44 @@ function addIdentifierTarget(map: Map<string, Set<string>>, identifier: unknown,
   map.set(key, ids);
 }
 
-async function matchedWarehouseProductIdsBySourceProduct(db: Db, tenantId: string, shopId: string, source: string) {
+function valueVariants(value: string) {
+  const variants: unknown[] = [value];
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) variants.push(numeric);
+  return variants;
+}
+
+function getMatchedSourceProductCache(key: string) {
+  const cached = matchedSourceProductCache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    matchedSourceProductCache.delete(key);
+    return null;
+  }
+  return cached.value;
+}
+
+function setMatchedSourceProductCache(key: string, value: Map<string, Set<string>>) {
+  if (matchedSourceProductCache.size >= MAX_MATCH_CACHE_ENTRIES) {
+    const oldest = matchedSourceProductCache.keys().next().value;
+    if (oldest) matchedSourceProductCache.delete(oldest);
+  }
+  matchedSourceProductCache.set(key, { expiresAt: Date.now() + MATCH_CACHE_TTL_MS, value });
+}
+
+async function matchedWarehouseProductIdsBySourceProduct(
+  db: Db,
+  tenantId: string,
+  shopId: string,
+  source: string,
+  sourceProductIds?: string[],
+) {
+  const cacheKey = sourceProductIds?.length ? null : `${tenantId}:${shopId}:${source}`;
+  if (cacheKey) {
+    const cached = getMatchedSourceProductCache(cacheKey);
+    if (cached) return cached;
+  }
+
   const warehouseProducts = await prisma.warehouseProduct.findMany({
     where: productWhere(tenantId, { shopId }),
     select: {
@@ -443,8 +487,11 @@ async function matchedWarehouseProductIdsBySourceProduct(db: Db, tenantId: strin
 
   if (productIdsByEan.size === 0 && productIdsBySku.size === 0) return new Map<string, Set<string>>();
 
+  const sourceProductFilter = sourceProductIds?.length
+    ? { source_product_id: { $in: sourceProductIds.flatMap(valueVariants) } }
+    : {};
   const storeProducts = await db.collection('store_products')
-    .find({ source })
+    .find({ source, ...sourceProductFilter })
     .project({ source_product_id: 1, store_ean: 1, store_sku: 1, product_id: 1 })
     .toArray();
   const baseProductIds = Array.from(new Set(
@@ -485,6 +532,7 @@ async function matchedWarehouseProductIdsBySourceProduct(db: Db, tenantId: strin
     matchedProductIdsBySourceProduct.set(sourceProductId, existing);
   }
 
+  if (cacheKey) setMatchedSourceProductCache(cacheKey, matchedProductIdsBySourceProduct);
   return matchedProductIdsBySourceProduct;
 }
 
@@ -514,8 +562,6 @@ async function categoryMatchedProductCounts(db: Db, tenantId: string, shopId: st
 }
 
 async function categoryMatchedWarehouseProductIds(db: Db, tenantId: string, shopId: string, source: string, categoryId: string) {
-  const matchedProductIdsBySourceProduct = await matchedWarehouseProductIdsBySourceProduct(db, tenantId, shopId, source);
-  if (matchedProductIdsBySourceProduct.size === 0) return [];
   const numericCategoryId = Number(categoryId);
   const categoryIdFilter = Number.isFinite(numericCategoryId)
     ? { $in: [categoryId, numericCategoryId] }
@@ -525,11 +571,20 @@ async function categoryMatchedWarehouseProductIds(db: Db, tenantId: string, shop
     .find({ source, category_id: categoryIdFilter })
     .project({ source_product_id: 1 })
     .toArray();
+  const sourceProductIds = unique(categoryRows.map((row) => normalizedIdentifier(row.source_product_id)));
+  if (sourceProductIds.length === 0) return [];
+  const matchedProductIdsBySourceProduct = await matchedWarehouseProductIdsBySourceProduct(
+    db,
+    tenantId,
+    shopId,
+    source,
+    sourceProductIds,
+  );
+  if (matchedProductIdsBySourceProduct.size === 0) return [];
 
   const productIds = new Set<string>();
-  for (const row of categoryRows) {
-    const sourceProductId = normalizedIdentifier(row.source_product_id);
-    const matchedProductIds = sourceProductId ? matchedProductIdsBySourceProduct.get(sourceProductId) : null;
+  for (const sourceProductId of sourceProductIds) {
+    const matchedProductIds = matchedProductIdsBySourceProduct.get(sourceProductId);
     if (!matchedProductIds?.size) continue;
     for (const productId of matchedProductIds) productIds.add(productId);
   }

@@ -81,6 +81,9 @@ export interface DescriptionAiInput {
 const SOURCES = ['congee', 'kucmar', 'partybox'] as const;
 const MAX_LIST_LIMIT = 200;
 const MAX_BULK_PRODUCTS = 200;
+const ISSUE_SCAN_CHUNK_SIZE = 50;
+const ISSUE_SCAN_MIN_LIMIT = 500;
+const ISSUE_SCAN_MAX_LIMIT = 1000;
 const PRICE_OUTLIER_PERCENT = 10;
 const PARTYBOX_WARNING =
   'Partybox jest niekompletny: ceny i opisy sa dostepne, ale kategorie Partybox nie powinny byc traktowane jako pelne drzewo.';
@@ -912,36 +915,95 @@ export async function listProducts(query: ProductListQuery = {}) {
   const limit = pageValue(query.limit, 50, MAX_LIST_LIMIT);
   const source = query.source && query.source !== 'ALL' ? query.source : undefined;
   const vatRate = await pricingVatRate(tenantId);
+  const issueFilter = query.issue && query.issue !== 'ALL' ? query.issue as CompetitorIssue : null;
 
   if (query.shopId) await requireShop(tenantId, query.shopId);
   const where = productWhere(tenantId, query);
+  const mappings = await mappingMap(tenantId, query.shopId);
 
-  const [products, total] = await Promise.all([
-    prisma.warehouseProduct.findMany({
+  if (!issueFilter) {
+    const [products, total] = await Promise.all([
+      prisma.warehouseProduct.findMany({
+        where,
+        include: productInclude,
+        orderBy: { updatedAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.warehouseProduct.count({ where }),
+    ]);
+
+    const enriched = await Promise.all(products.map((product) =>
+      enrichProduct(db, tenantId, product, { shopId: query.shopId, source, categoryId: query.categoryId, vatRate, mappings })
+    ));
+
+    return {
+      data: enriched.map((product) => serializeEnriched(product)),
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+      analysis: {
+        issueFilter: 'ALL',
+        totalCandidates: total,
+        analyzed: products.length,
+        matchingIssue: null,
+        complete: true,
+      },
+      warnings: warningsForSources(selectedSources(source), query.categoryId ? 'categories' : 'prices'),
+    };
+  }
+
+  const totalCandidates = await prisma.warehouseProduct.count({ where });
+  const requestedEnd = page * limit;
+  const maxScan = Math.min(
+    totalCandidates,
+    Math.max(ISSUE_SCAN_MIN_LIMIT, requestedEnd * 4),
+    ISSUE_SCAN_MAX_LIMIT,
+  );
+  const filtered: EnrichedProduct[] = [];
+  let scanned = 0;
+
+  while (scanned < maxScan && filtered.length < requestedEnd) {
+    const products = await prisma.warehouseProduct.findMany({
       where,
       include: productInclude,
       orderBy: { updatedAt: 'desc' },
-      skip: (page - 1) * limit,
-      take: limit,
-    }),
-    prisma.warehouseProduct.count({ where }),
-  ]);
+      skip: scanned,
+      take: Math.min(ISSUE_SCAN_CHUNK_SIZE, maxScan - scanned),
+    });
+    if (products.length === 0) break;
+    scanned += products.length;
 
-  const mappings = await mappingMap(tenantId, query.shopId);
-  const enriched = await Promise.all(products.map((product) =>
-    enrichProduct(db, tenantId, product, { shopId: query.shopId, source, categoryId: query.categoryId, vatRate, mappings })
-  ));
-  const filtered = query.issue && query.issue !== 'ALL'
-    ? enriched.filter((product) => product.issues.includes(query.issue as CompetitorIssue))
-    : enriched;
+    const enriched = await Promise.all(products.map((product) =>
+      enrichProduct(db, tenantId, product, { shopId: query.shopId, source, categoryId: query.categoryId, vatRate, mappings })
+    ));
+    filtered.push(...enriched.filter((product) => product.issues.includes(issueFilter)));
+  }
+
+  const pageItems = filtered.slice((page - 1) * limit, requestedEnd);
+  const warnings = warningsForSources(selectedSources(source), query.categoryId ? 'categories' : 'prices');
+  if (scanned < totalCandidates) {
+    warnings.push(
+      `Filtr problemu przeanalizowal pierwsze ${scanned} z ${totalCandidates} produktow. ` +
+      'Zawez wyszukiwanie, jesli chcesz dokladniejszy audyt.'
+    );
+  }
 
   return {
-    data: filtered.map((product) => serializeEnriched(product)),
-    total,
+    data: pageItems.map((product) => serializeEnriched(product)),
+    total: filtered.length,
     page,
     limit,
-    totalPages: Math.max(1, Math.ceil(total / limit)),
-    warnings: warningsForSources(selectedSources(source), query.categoryId ? 'categories' : 'prices'),
+    totalPages: Math.max(1, Math.ceil(filtered.length / limit)),
+    analysis: {
+      issueFilter,
+      totalCandidates,
+      analyzed: scanned,
+      matchingIssue: filtered.length,
+      complete: scanned >= totalCandidates,
+    },
+    warnings,
   };
 }
 

@@ -88,10 +88,14 @@ const ISSUE_SCAN_CHUNK_SIZE = 50;
 const ISSUE_SCAN_MIN_LIMIT = 500;
 const ISSUE_SCAN_MAX_LIMIT = 1000;
 const PRICE_OUTLIER_PERCENT = 10;
+const PRICE_REVIEW_DIFF_PERCENT = 40;
+const MIN_PRICE_SAMPLE_OFFERS = 3;
 const MATCH_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_MATCH_CACHE_ENTRIES = 30;
 const PARTYBOX_WARNING =
   'Partybox jest niekompletny: ceny i opisy sa dostepne, ale kategorie Partybox nie powinny byc traktowane jako pelne drzewo.';
+
+type PricePreviewStatus = 'READY' | 'BELOW_COST' | 'NO_COMPETITOR_PRICE' | 'LOW_SAMPLE' | 'LARGE_CHANGE';
 
 const matchedSourceProductCache = new Map<string, {
   expiresAt: number;
@@ -766,6 +770,12 @@ function costNet(product: ProductForAnalytics) {
   return decimalToNumber(product.averagePurchaseCost) ?? decimalToNumber(product.purchasePrice);
 }
 
+function priceDiffPercent(currentGross: number | null, suggestedGross: number | null) {
+  return currentGross && suggestedGross
+    ? round2(((currentGross - suggestedGross) / suggestedGross) * 100)
+    : null;
+}
+
 function priceStats(offers: CompetitorOffer[], currentGross: number | null, cost: number | null, vatRate = 23) {
   const prices = offers
     .map((offer) => offer.price)
@@ -781,9 +791,7 @@ function priceStats(offers: CompetitorOffer[], currentGross: number | null, cost
     : null;
   const suggestedGross = round2(medianGross);
   const suggestedNet = suggestedGross === null ? null : round2(suggestedGross / (1 + vatRate / 100));
-  const diffPercentVsCurrent = currentGross && suggestedGross
-    ? round2(((currentGross - suggestedGross) / suggestedGross) * 100)
-    : null;
+  const diffPercentVsCurrent = priceDiffPercent(currentGross, suggestedGross);
 
   return {
     minGross: round2(minGross),
@@ -1824,11 +1832,34 @@ export async function previewPrices(input: PricePreviewInput) {
       : enriched.priceStats.suggestedGross;
     const suggestedNet = suggestedGross === null ? null : round2(suggestedGross / (1 + vatRate / 100));
     const blockedBelowCost = Boolean(enriched.costNet !== null && suggestedNet !== null && suggestedNet < enriched.costNet);
-    const status = suggestedGross === null
+    const marketOfferCount = enriched.offers.filter((offer) => (
+      typeof offer.price === 'number' && Number.isFinite(offer.price) && offer.price > 0
+    )).length;
+    const diffPercentVsCurrent = priceDiffPercent(enriched.currentGrossPrice, suggestedGross);
+    const guardReasons: string[] = [];
+
+    if (suggestedGross === null) {
+      guardReasons.push('Brak ceny konkurencji do wyliczenia sugestii.');
+    }
+    if (blockedBelowCost) {
+      guardReasons.push('Sugestia netto jest ponizej kosztu zakupu.');
+    }
+    if (suggestedGross !== null && marketOfferCount > 0 && marketOfferCount < MIN_PRICE_SAMPLE_OFFERS) {
+      guardReasons.push(`Mala proba rynku: ${marketOfferCount} ofert cenowych, minimum ${MIN_PRICE_SAMPLE_OFFERS}.`);
+    }
+    if (diffPercentVsCurrent !== null && Math.abs(diffPercentVsCurrent) > PRICE_REVIEW_DIFF_PERCENT) {
+      guardReasons.push(`Zmiana wzgledem obecnej ceny przekracza ${PRICE_REVIEW_DIFF_PERCENT}%.`);
+    }
+
+    const status: PricePreviewStatus = suggestedGross === null
       ? 'NO_COMPETITOR_PRICE'
       : blockedBelowCost
         ? 'BELOW_COST'
-        : 'READY';
+        : diffPercentVsCurrent !== null && Math.abs(diffPercentVsCurrent) > PRICE_REVIEW_DIFF_PERCENT
+          ? 'LARGE_CHANGE'
+          : marketOfferCount > 0 && marketOfferCount < MIN_PRICE_SAMPLE_OFFERS
+            ? 'LOW_SAMPLE'
+            : 'READY';
 
     items.push({
       warehouseProductId: product.id,
@@ -1841,7 +1872,9 @@ export async function previewPrices(input: PricePreviewInput) {
       suggestedGross: round2(suggestedGross),
       suggestedNet,
       costNet: enriched.costNet,
-      diffPercentVsCurrent: enriched.priceStats.diffPercentVsCurrent,
+      diffPercentVsCurrent,
+      marketOfferCount,
+      guardReasons,
       status,
       offers: enriched.offers.slice(0, 6),
     });
@@ -1852,6 +1885,10 @@ export async function previewPrices(input: PricePreviewInput) {
     ready: items.filter((item) => item.status === 'READY').length,
     blocked: items.filter((item) => item.status !== 'READY').length,
     vatRate,
+    guardThresholds: {
+      maxDiffPercent: PRICE_REVIEW_DIFF_PERCENT,
+      minOfferCount: MIN_PRICE_SAMPLE_OFFERS,
+    },
     warnings: warningsForSources([...SOURCES], 'prices'),
     items,
   };

@@ -81,11 +81,19 @@ services:
       PUBLIC_STORAGE_URL: ${APP_URL}
     volumes:
       - api_storage:/app/storage  # Trwały wolumin dla plików
+    networks:
+      - default
+      - analytics_data
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+networks:
+  analytics_data:
+    external: true
+    name: kp-data_default
 
 volumes:
   postgres_data:

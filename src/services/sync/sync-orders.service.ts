@@ -9,7 +9,7 @@ import { decrypt } from '../../lib/encryption';
 import { emailService } from '../email/email.service';
 import { generateAccessToken } from '../../lib/token';
 import { createWzForOrder, shouldAutoCreateWzForTenant } from '../admin/warehouse-documents.service';
-import { reserveOrder } from '../admin/warehouse-reservations.service';
+import { releaseOrderReservations, reserveOrder } from '../admin/warehouse-reservations.service';
 import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
 import { getInventoryPublicationDecision, resolveInventoryPublishedLeadTime } from '../stock/stock-sync.service';
 import {
@@ -19,7 +19,11 @@ import {
   type ShippingPromise,
 } from '../orders/shipping-promise.service';
 import { resolveOrderSyncFromDate } from './order-sync-date';
-import { inferOperationalStatusFromShopStatus } from '../../lib/order-statuses';
+import {
+  inferOperationalStatusFromShopStatus,
+  isStockReservationOrderOperationalStatus,
+} from '../../lib/order-statuses';
+import type { OrderOperationalStatus } from '../../lib/order-statuses';
 import { findShopOrderStatusRecord } from '../shop-order-statuses.repository';
 
 const DEBUG_SHOP_SYNC = process.env.DEBUG_SHOP_SYNC === 'true';
@@ -62,6 +66,12 @@ type ShopSyncContext = {
   mappingsByExternalProductId: Map<string, any>;
   mappingsBySku: Map<string, any>;
   personalizationEnabledForTenant: boolean;
+};
+
+type OrderStatusSnapshot = {
+  externalStatusId: string;
+  externalStatusName: string | null;
+  operationalStatus: OrderOperationalStatus;
 };
 
 type OrderImportItem = {
@@ -332,7 +342,7 @@ async function resolveOrderStatusSnapshot(
   context: ShopSyncContext,
   externalOrderId: string,
   sourceOrder?: PrestaShopOrder,
-) {
+): Promise<OrderStatusSnapshot | null> {
   let externalStatusId = sourceOrder?.current_state == null ? null : String(sourceOrder.current_state);
   let externalStatusName: string | null = null;
   let orderStatus: PrestaShopOrderDetails['orderStatus'] = null;
@@ -364,9 +374,9 @@ async function refreshExistingOrderStatus(
   existingOrder: { id: string },
   externalOrderId: string,
   sourceOrder?: PrestaShopOrder,
-) {
+): Promise<OrderStatusSnapshot | null> {
   const status = await resolveOrderStatusSnapshot(context, externalOrderId, sourceOrder);
-  if (!status) return;
+  if (!status) return null;
 
   await prisma.order.update({
     where: { id: existingOrder.id },
@@ -378,6 +388,8 @@ async function refreshExistingOrderStatus(
       statusSyncError: null,
     },
   });
+
+  return status;
 }
 
 async function importPrestaShopOrderWithContext(
@@ -409,14 +421,15 @@ async function importPrestaShopOrderWithContext(
     result.orderId = existingOrder.id;
     result.skipped = true;
 
+    let currentStatus: OrderStatusSnapshot | null = null;
     try {
-      await refreshExistingOrderStatus(context, existingOrder, externalOrderId, sourceOrder);
+      currentStatus = await refreshExistingOrderStatus(context, existingOrder, externalOrderId, sourceOrder);
     } catch (statusError) {
       const message = statusError instanceof Error ? statusError.message : 'Unknown status refresh error';
       result.errors.push(`Order ${externalOrderId}: status not refreshed: ${message}`);
     }
 
-    if (options.reserveStock) {
+    if (options.reserveStock && isStockReservationOrderOperationalStatus(currentStatus?.operationalStatus ?? existingOrder.operationalStatus)) {
       try {
         await reserveOrder(existingOrder.id);
         if (options.autoCreateWz) {
@@ -425,6 +438,13 @@ async function importPrestaShopOrderWithContext(
       } catch (reservationError) {
         const message = reservationError instanceof Error ? reservationError.message : 'Unknown reservation error';
         result.errors.push(`Order ${externalOrderId}: reservation not updated: ${message}`);
+      }
+    } else if (currentStatus && !isStockReservationOrderOperationalStatus(currentStatus.operationalStatus)) {
+      try {
+        await releaseOrderReservations(existingOrder.id);
+      } catch (reservationError) {
+        const message = reservationError instanceof Error ? reservationError.message : 'Unknown reservation release error';
+        result.errors.push(`Order ${externalOrderId}: reservation not released: ${message}`);
       }
     }
 
@@ -681,7 +701,7 @@ async function createOrderFromDetails(
     });
   }
 
-  if (options.reserveStock) {
+  if (options.reserveStock && isStockReservationOrderOperationalStatus(operationalStatus)) {
     try {
       const reservationResult = await reserveOrder(order.id);
       if (DEBUG_SHOP_SYNC) {

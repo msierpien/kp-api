@@ -6,6 +6,7 @@ import { getTenantContext, getTenantId } from '../../lib/tenant-context';
 import { importPrestaShopOrder } from '../sync/sync-orders.service';
 import { releaseOrderReservations } from '../admin/warehouse-reservations.service';
 import { updateOrderExternalStatusFromWebhook } from '../admin/shop-order-statuses.service';
+import { isStockReservationOrderOperationalStatus } from '../../lib/order-statuses';
 
 export const PRESTASHOP_ORDER_WEBHOOK_EVENT_TYPES = ['order_created', 'order_status_updated'] as const;
 export type PrestaShopOrderWebhookEventType = typeof PRESTASHOP_ORDER_WEBHOOK_EVENT_TYPES[number];
@@ -260,17 +261,18 @@ export async function processShopWebhookEvent(eventId: string) {
   const paidStatusIds = new Set(webhookConfig.paidStatusIds);
   const releaseStatusIds = new Set(webhookConfig.releaseStatusIds);
   const shouldReserve = paidStatusIds.has(event.orderStatusId);
-  const shouldRelease = releaseStatusIds.has(event.orderStatusId);
+  const shouldReleaseByConfig = releaseStatusIds.has(event.orderStatusId);
 
   try {
     const errors: string[] = [];
 
-    await updateOrderExternalStatusFromWebhook({
+    const statusUpdate = await updateOrderExternalStatusFromWebhook({
       shopId: event.shopId,
       externalOrderId: event.externalOrderId,
       externalStatusId: event.orderStatusId,
       externalStatusName: event.orderStatusName,
     });
+    const shouldRelease = shouldReleaseByConfig || !isStockReservationOrderOperationalStatus(statusUpdate.operationalStatus);
 
     if (shouldReserve) {
       const imported = await importPrestaShopOrder(event.shopId, event.externalOrderId, {

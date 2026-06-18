@@ -115,8 +115,12 @@ export async function updateOrderExternalStatusFromWebhook(input: {
   externalStatusName?: string | null;
 }) {
   const status = await findShopOrderStatusRecord(input.shopId, input.externalStatusId);
+  const operationalStatus = inferOperationalStatusFromShopStatus(status ?? {
+    externalStatusId: input.externalStatusId,
+    name: input.externalStatusName,
+  });
 
-  await prisma.order.updateMany({
+  const result = await prisma.order.updateMany({
     where: {
       shopId: input.shopId,
       externalOrderId: input.externalOrderId,
@@ -124,13 +128,15 @@ export async function updateOrderExternalStatusFromWebhook(input: {
     data: {
       externalStatusId: input.externalStatusId,
       externalStatusName: input.externalStatusName ?? status?.name ?? null,
-      operationalStatus: inferOperationalStatusFromShopStatus(status ?? {
-        externalStatusId: input.externalStatusId,
-        name: input.externalStatusName,
-      }),
+      operationalStatus,
       statusSyncedAt: new Date(),
     },
   });
+
+  return {
+    updatedCount: result.count,
+    operationalStatus,
+  };
 }
 
 export async function updateOrderStatus(orderId: string, input: UpdateOrderStatusInput) {

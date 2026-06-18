@@ -416,7 +416,7 @@ function addIdentifierTarget(map: Map<string, Set<string>>, identifier: unknown,
   map.set(key, ids);
 }
 
-async function categoryMatchedProductCounts(db: Db, tenantId: string, shopId: string, source: string) {
+async function matchedWarehouseProductIdsBySourceProduct(db: Db, tenantId: string, shopId: string, source: string) {
   const warehouseProducts = await prisma.warehouseProduct.findMany({
     where: productWhere(tenantId, { shopId }),
     select: {
@@ -441,7 +441,7 @@ async function categoryMatchedProductCounts(db: Db, tenantId: string, shopId: st
     for (const sku of identifiers.skus) addIdentifierTarget(productIdsBySku, sku, product.id);
   }
 
-  if (productIdsByEan.size === 0 && productIdsBySku.size === 0) return new Map<string, number>();
+  if (productIdsByEan.size === 0 && productIdsBySku.size === 0) return new Map<string, Set<string>>();
 
   const storeProducts = await db.collection('store_products')
     .find({ source })
@@ -485,6 +485,11 @@ async function categoryMatchedProductCounts(db: Db, tenantId: string, shopId: st
     matchedProductIdsBySourceProduct.set(sourceProductId, existing);
   }
 
+  return matchedProductIdsBySourceProduct;
+}
+
+async function categoryMatchedProductCounts(db: Db, tenantId: string, shopId: string, source: string) {
+  const matchedProductIdsBySourceProduct = await matchedWarehouseProductIdsBySourceProduct(db, tenantId, shopId, source);
   if (matchedProductIdsBySourceProduct.size === 0) return new Map<string, number>();
 
   const categoryRows = await db.collection('regular_product_categories')
@@ -506,6 +511,30 @@ async function categoryMatchedProductCounts(db: Db, tenantId: string, shopId: st
   }
 
   return new Map(Array.from(productIdsByCategory.entries()).map(([categoryId, productIds]) => [categoryId, productIds.size]));
+}
+
+async function categoryMatchedWarehouseProductIds(db: Db, tenantId: string, shopId: string, source: string, categoryId: string) {
+  const matchedProductIdsBySourceProduct = await matchedWarehouseProductIdsBySourceProduct(db, tenantId, shopId, source);
+  if (matchedProductIdsBySourceProduct.size === 0) return [];
+  const numericCategoryId = Number(categoryId);
+  const categoryIdFilter = Number.isFinite(numericCategoryId)
+    ? { $in: [categoryId, numericCategoryId] }
+    : categoryId;
+
+  const categoryRows = await db.collection('regular_product_categories')
+    .find({ source, category_id: categoryIdFilter })
+    .project({ source_product_id: 1 })
+    .toArray();
+
+  const productIds = new Set<string>();
+  for (const row of categoryRows) {
+    const sourceProductId = normalizedIdentifier(row.source_product_id);
+    const matchedProductIds = sourceProductId ? matchedProductIdsBySourceProduct.get(sourceProductId) : null;
+    if (!matchedProductIds?.size) continue;
+    for (const productId of matchedProductIds) productIds.add(productId);
+  }
+
+  return Array.from(productIds);
 }
 
 function currentSnapshot(product: ProductForAnalytics, shopId?: string) {
@@ -1047,6 +1076,12 @@ export async function listProducts(query: ProductListQuery = {}) {
 
   if (query.shopId) await requireShop(tenantId, query.shopId);
   const where = productWhere(tenantId, query);
+  if (query.categoryId) {
+    if (!query.shopId) throw new ValidationError('Filtr kategorii konkurencji wymaga sklepu');
+    if (!source) throw new ValidationError('Filtr kategorii konkurencji wymaga konkretnego zrodla');
+    const categoryProductIds = await categoryMatchedWarehouseProductIds(db, tenantId, query.shopId, source, query.categoryId);
+    where.id = { in: categoryProductIds };
+  }
   const mappings = await mappingMap(tenantId, query.shopId);
 
   if (!issueFilter) {
@@ -1144,6 +1179,12 @@ export async function getMatchDiagnostics(query: MatchDiagnosticsQuery = {}) {
 
   if (query.shopId) await requireShop(tenantId, query.shopId);
   const where = productWhere(tenantId, query);
+  if (query.categoryId) {
+    if (!query.shopId) throw new ValidationError('Filtr kategorii konkurencji wymaga sklepu');
+    if (!source) throw new ValidationError('Filtr kategorii konkurencji wymaga konkretnego zrodla');
+    const categoryProductIds = await categoryMatchedWarehouseProductIds(db, tenantId, query.shopId, source, query.categoryId);
+    where.id = { in: categoryProductIds };
+  }
   const [products, totalCandidates] = await Promise.all([
     prisma.warehouseProduct.findMany({
       where,

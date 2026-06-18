@@ -27,6 +27,14 @@ export interface ProductListQuery {
   limit?: number | string;
 }
 
+export interface MatchDiagnosticsQuery {
+  shopId?: string;
+  q?: string;
+  source?: string;
+  categoryId?: string;
+  limit?: number | string;
+}
+
 export interface CategoryMappingsQuery {
   shopId: string;
   source?: string;
@@ -719,13 +727,19 @@ async function enrichProduct(
   db: Db,
   tenantId: string,
   product: ProductForAnalytics,
-  options: { shopId?: string; source?: string; categoryId?: string; vatRate?: number } = {},
+  options: {
+    shopId?: string;
+    source?: string;
+    categoryId?: string;
+    vatRate?: number;
+    mappings?: Map<string, any>;
+  } = {},
 ): Promise<EnrichedProduct> {
   const match = await findCompetitorOffers(db, product, options.source, options.categoryId);
   const currentPrice = currentGrossPrice(product, options.shopId);
   const productCost = costNet(product);
   const stats = priceStats(match.offers, currentPrice, productCost, options.vatRate);
-  const mappings = await mappingMap(tenantId, options.shopId);
+  const mappings = options.mappings ?? await mappingMap(tenantId, options.shopId);
   const withoutIssues = {
     warehouseProductId: product.id,
     sku: product.sku,
@@ -780,6 +794,47 @@ async function productsByIds(tenantId: string, productIds: string[]) {
   });
   if (products.length !== ids.length) throw new ValidationError('Czesc produktow nie istnieje w tym tenancie');
   return products;
+}
+
+function productWhere(tenantId: string, query: { shopId?: string; q?: string }) {
+  const search = normalizeText(query.q);
+  const where: Prisma.WarehouseProductWhereInput = { tenantId };
+  if (query.shopId) where.shopProductMappings = { some: { shopId: query.shopId, isActive: true } };
+  if (search) {
+    where.OR = [
+      { sku: { contains: search, mode: 'insensitive' } },
+      { name: { contains: search, mode: 'insensitive' } },
+      { barcodes: { some: { ean: { contains: search, mode: 'insensitive' } } } },
+      { shopProductMappings: { some: { externalSku: { contains: search, mode: 'insensitive' } } } },
+      { shopProductMappings: { some: { externalEan: { contains: search, mode: 'insensitive' } } } },
+    ];
+  }
+  return where;
+}
+
+function emptyIssueCounts() {
+  return {
+    NO_MATCH: 0,
+    MISSING_CATEGORY: 0,
+    BAD_CATEGORY: 0,
+    PRICE_OUTLIER: 0,
+    MISSING_DESCRIPTION: 0,
+  } satisfies Record<CompetitorIssue, number>;
+}
+
+function diagnosticProduct(product: EnrichedProduct) {
+  return {
+    warehouseProductId: product.warehouseProductId,
+    sku: product.sku,
+    name: product.name,
+    match: product.match,
+    offerCount: product.offers.length,
+    issues: product.issues,
+    currentGrossPrice: product.currentGrossPrice,
+    medianGross: product.priceStats.medianGross,
+    suggestedGross: product.priceStats.suggestedGross,
+    sources: Array.from(new Set(product.offers.map((offer) => offer.source))),
+  };
 }
 
 export async function getOverview(query: { shopId?: string } = {}) {
@@ -855,22 +910,11 @@ export async function listProducts(query: ProductListQuery = {}) {
   const db = await ensureMongo();
   const page = pageValue(query.page, 1);
   const limit = pageValue(query.limit, 50, MAX_LIST_LIMIT);
-  const search = normalizeText(query.q);
   const source = query.source && query.source !== 'ALL' ? query.source : undefined;
   const vatRate = await pricingVatRate(tenantId);
 
   if (query.shopId) await requireShop(tenantId, query.shopId);
-  const where: Prisma.WarehouseProductWhereInput = { tenantId };
-  if (query.shopId) where.shopProductMappings = { some: { shopId: query.shopId, isActive: true } };
-  if (search) {
-    where.OR = [
-      { sku: { contains: search, mode: 'insensitive' } },
-      { name: { contains: search, mode: 'insensitive' } },
-      { barcodes: { some: { ean: { contains: search, mode: 'insensitive' } } } },
-      { shopProductMappings: { some: { externalSku: { contains: search, mode: 'insensitive' } } } },
-      { shopProductMappings: { some: { externalEan: { contains: search, mode: 'insensitive' } } } },
-    ];
-  }
+  const where = productWhere(tenantId, query);
 
   const [products, total] = await Promise.all([
     prisma.warehouseProduct.findMany({
@@ -883,8 +927,9 @@ export async function listProducts(query: ProductListQuery = {}) {
     prisma.warehouseProduct.count({ where }),
   ]);
 
+  const mappings = await mappingMap(tenantId, query.shopId);
   const enriched = await Promise.all(products.map((product) =>
-    enrichProduct(db, tenantId, product, { shopId: query.shopId, source, categoryId: query.categoryId, vatRate })
+    enrichProduct(db, tenantId, product, { shopId: query.shopId, source, categoryId: query.categoryId, vatRate, mappings })
   ));
   const filtered = query.issue && query.issue !== 'ALL'
     ? enriched.filter((product) => product.issues.includes(query.issue as CompetitorIssue))
@@ -897,6 +942,104 @@ export async function listProducts(query: ProductListQuery = {}) {
     limit,
     totalPages: Math.max(1, Math.ceil(total / limit)),
     warnings: warningsForSources(selectedSources(source), query.categoryId ? 'categories' : 'prices'),
+  };
+}
+
+export async function getMatchDiagnostics(query: MatchDiagnosticsQuery = {}) {
+  const tenantId = requireTenantId();
+  const db = await ensureMongo();
+  const limit = pageValue(query.limit, 100, MAX_LIST_LIMIT);
+  const source = query.source && query.source !== 'ALL' ? query.source : undefined;
+  const vatRate = await pricingVatRate(tenantId);
+
+  if (query.shopId) await requireShop(tenantId, query.shopId);
+  const where = productWhere(tenantId, query);
+  const [products, totalCandidates] = await Promise.all([
+    prisma.warehouseProduct.findMany({
+      where,
+      include: productInclude,
+      orderBy: { updatedAt: 'desc' },
+      take: limit,
+    }),
+    prisma.warehouseProduct.count({ where }),
+  ]);
+
+  const mappings = await mappingMap(tenantId, query.shopId);
+  const enriched = await Promise.all(products.map((product) =>
+    enrichProduct(db, tenantId, product, {
+      shopId: query.shopId,
+      source,
+      categoryId: query.categoryId,
+      vatRate,
+      mappings,
+    })
+  ));
+
+  const byConfidence: Record<MatchConfidence, number> = { EAN: 0, SKU: 0, NAME: 0, NONE: 0 };
+  const issues = emptyIssueCounts();
+  const sourceCounts = new Map<string, number>();
+  let totalOffers = 0;
+  let withOffers = 0;
+  let withCompetitorPrice = 0;
+  let withCategorySuggestion = 0;
+  let withCurrentCategory = 0;
+  let withDescription = 0;
+  let blockedBelowCost = 0;
+
+  for (const product of enriched) {
+    byConfidence[product.match.confidence] += 1;
+    totalOffers += product.offers.length;
+    if (product.offers.length > 0) withOffers += 1;
+    if (product.priceStats.medianGross !== null) withCompetitorPrice += 1;
+    if (product.categorySuggestions.length > 0) withCategorySuggestion += 1;
+    if (product.currentCategories.length > 0) withCurrentCategory += 1;
+    if (product.hasDescription) withDescription += 1;
+    if (product.priceStats.blockedBelowCost) blockedBelowCost += 1;
+    for (const issue of product.issues) issues[issue] += 1;
+    for (const offer of product.offers) sourceCounts.set(offer.source, (sourceCounts.get(offer.source) ?? 0) + 1);
+  }
+
+  const analyzed = enriched.length;
+  const matched = analyzed - byConfidence.NONE;
+  const matchRatePercent = analyzed ? round2((matched / analyzed) * 100) : 0;
+
+  return {
+    totalCandidates,
+    analyzed,
+    limit,
+    source: source ?? 'ALL',
+    search: normalizeText(query.q) || null,
+    match: {
+      byConfidence,
+      matched,
+      unmatched: byConfidence.NONE,
+      matchRatePercent,
+    },
+    offers: {
+      withOffers,
+      withCompetitorPrice,
+      totalOffers,
+      averageOffers: analyzed ? round2(totalOffers / analyzed) : 0,
+      bySource: Array.from(sourceCounts.entries())
+        .map(([sourceName, count]) => ({ source: sourceName, count }))
+        .sort((a, b) => a.source.localeCompare(b.source)),
+    },
+    coverage: {
+      withCurrentCategory,
+      withCategorySuggestion,
+      withDescription,
+      blockedBelowCost,
+    },
+    issues,
+    samples: {
+      noMatch: enriched.filter((product) => product.match.confidence === 'NONE').slice(0, 8).map(diagnosticProduct),
+      nameMatch: enriched.filter((product) => product.match.confidence === 'NAME').slice(0, 8).map(diagnosticProduct),
+      withoutCompetitorPrice: enriched.filter((product) => product.priceStats.medianGross === null).slice(0, 8).map(diagnosticProduct),
+    },
+    warnings: [
+      ...warningsForSources(selectedSources(source), 'prices'),
+      ...(totalCandidates > analyzed ? [`Audyt pokazuje pierwsze ${analyzed} z ${totalCandidates} produktow pasujacych do filtrow.`] : []),
+    ],
   };
 }
 

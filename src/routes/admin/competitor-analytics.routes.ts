@@ -56,6 +56,30 @@ export async function competitorAnalyticsRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.get('/match-diagnostics', {
+    schema: {
+      tags: ['competitor-analytics'],
+      summary: 'Diagnostyka dopasowania produktów do konkurencji',
+      querystring: {
+        type: 'object',
+        properties: {
+          shopId: { type: 'string' },
+          q: { type: 'string' },
+          source: { type: 'string' },
+          categoryId: { type: 'string' },
+          limit: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: competitorAnalytics.MatchDiagnosticsQuery }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await competitorAnalytics.getMatchDiagnostics(request.query));
+    } catch (error) {
+      fastify.log.error(error);
+      return sendError(reply, error);
+    }
+  });
+
   fastify.get('/products/:warehouseProductId', {
     schema: {
       tags: ['competitor-analytics'],

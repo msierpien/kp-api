@@ -59,6 +59,8 @@ export interface CategoryPreviewInput {
   shopId: string;
   productIds: string[];
   mode?: CategoryApplyMode;
+  source?: string;
+  sourceCategoryId?: string;
   targetCategoryId?: string;
   targetCategoryName?: string | null;
 }
@@ -1727,6 +1729,28 @@ export async function previewCategories(input: CategoryPreviewInput) {
   const tenantId = requireTenantId();
   const db = await ensureMongo();
   await requireShop(tenantId, input.shopId);
+  if (input.source || input.sourceCategoryId) {
+    if (!input.source || !input.sourceCategoryId) {
+      throw new ValidationError('Walidacja zakresu wymaga zrodla i kategorii konkurencji');
+    }
+    if (!SOURCES.includes(input.source as any)) {
+      throw new ValidationError('Nieznane zrodlo konkurencji');
+    }
+    const allowedProductIds = new Set(await categoryMatchedWarehouseProductIds(
+      db,
+      tenantId,
+      input.shopId,
+      input.source,
+      input.sourceCategoryId,
+      true,
+    ));
+    const outsideScope = input.productIds.filter((productId) => !allowedProductIds.has(productId));
+    if (outsideScope.length > 0) {
+      throw new ValidationError(
+        `Zatrzymano zapis: ${outsideScope.length} produktow nie nalezy do wybranej kategorii konkurencji ${input.source} #${input.sourceCategoryId}.`
+      );
+    }
+  }
   const products = await productsByIds(tenantId, input.productIds);
   const vatRate = await pricingVatRate(tenantId);
 

@@ -442,68 +442,62 @@ async function categoryMatchedProductCounts(db: Db, tenantId: string, shopId: st
 
   if (productIdsByEan.size === 0 && productIdsBySku.size === 0) return new Map<string, number>();
 
-  const categoryRows = await db.collection('regular_product_categories').aggregate([
-    { $match: { source } },
-    {
-      $lookup: {
-        from: 'store_products',
-        let: { source: '$source', sourceProductId: '$source_product_id' },
-        pipeline: [
-          {
-            $match: {
-              $expr: {
-                $and: [
-                  { $eq: ['$source', '$$source'] },
-                  { $eq: ['$source_product_id', '$$sourceProductId'] },
-                ],
-              },
-            },
-          },
-          { $project: { store_ean: 1, store_sku: 1, product_id: 1 } },
-          { $limit: 1 },
-        ],
-        as: 'storeProduct',
-      },
-    },
-    { $unwind: '$storeProduct' },
-    {
-      $lookup: {
-        from: 'products',
-        localField: 'storeProduct.product_id',
-        foreignField: '_id',
-        as: 'baseProduct',
-      },
-    },
-    { $unwind: { path: '$baseProduct', preserveNullAndEmptyArrays: true } },
-    {
-      $project: {
-        category_id: 1,
-        store_ean: '$storeProduct.store_ean',
-        store_sku: '$storeProduct.store_sku',
-        product_ean: '$baseProduct.ean',
-        product_sku: '$baseProduct.sku',
-        product_number: '$baseProduct.product_number',
-      },
-    },
-  ], { allowDiskUse: true }).toArray();
+  const storeProducts = await db.collection('store_products')
+    .find({ source })
+    .project({ source_product_id: 1, store_ean: 1, store_sku: 1, product_id: 1 })
+    .toArray();
+  const baseProductIds = Array.from(new Set(
+    storeProducts
+      .map((row) => row.product_id)
+      .filter((value): value is ObjectId => value instanceof ObjectId)
+      .map((value) => String(value))
+  )).map((value) => new ObjectId(value));
+  const baseProducts = baseProductIds.length
+    ? await db.collection('products')
+      .find({ _id: { $in: baseProductIds } })
+      .project({ ean: 1, sku: 1, product_number: 1 })
+      .toArray()
+    : [];
+  const baseProductById = new Map(baseProducts.map((row) => [String(row._id), row]));
+  const matchedProductIdsBySourceProduct = new Map<string, Set<string>>();
 
-  const productIdsByCategory = new Map<string, Set<string>>();
-  for (const row of categoryRows) {
-    const categoryId = normalizedIdentifier(row.category_id);
-    if (!categoryId) continue;
-
+  for (const row of storeProducts) {
+    const sourceProductId = normalizedIdentifier(row.source_product_id);
+    if (!sourceProductId) continue;
+    const baseProduct = row.product_id instanceof ObjectId ? baseProductById.get(String(row.product_id)) : null;
     const matchedProductIds = new Set<string>();
-    for (const value of [row.store_ean, row.product_ean]) {
+
+    for (const value of [row.store_ean, baseProduct?.ean]) {
       const key = identifierKey(value);
       if (!key) continue;
       for (const productId of productIdsByEan.get(key) ?? []) matchedProductIds.add(productId);
     }
-    for (const value of [row.store_sku, row.product_sku, row.product_number]) {
+    for (const value of [row.store_sku, baseProduct?.sku, baseProduct?.product_number]) {
       const key = identifierKey(value);
       if (!key) continue;
       for (const productId of productIdsBySku.get(key) ?? []) matchedProductIds.add(productId);
     }
     if (matchedProductIds.size === 0) continue;
+
+    const existing = matchedProductIdsBySourceProduct.get(sourceProductId) ?? new Set<string>();
+    for (const productId of matchedProductIds) existing.add(productId);
+    matchedProductIdsBySourceProduct.set(sourceProductId, existing);
+  }
+
+  if (matchedProductIdsBySourceProduct.size === 0) return new Map<string, number>();
+
+  const categoryRows = await db.collection('regular_product_categories')
+    .find({ source })
+    .project({ category_id: 1, source_product_id: 1 })
+    .toArray();
+
+  const productIdsByCategory = new Map<string, Set<string>>();
+  for (const row of categoryRows) {
+    const categoryId = normalizedIdentifier(row.category_id);
+    if (!categoryId) continue;
+    const sourceProductId = normalizedIdentifier(row.source_product_id);
+    const matchedProductIds = sourceProductId ? matchedProductIdsBySourceProduct.get(sourceProductId) : null;
+    if (!matchedProductIds?.size) continue;
 
     const categoryProductIds = productIdsByCategory.get(categoryId) ?? new Set<string>();
     for (const productId of matchedProductIds) categoryProductIds.add(productId);

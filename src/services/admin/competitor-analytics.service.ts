@@ -100,6 +100,12 @@ const productInclude = {
   shopProductMappings: { where: { isActive: true }, include: { shop: true } },
   shopPrices: true,
   productChannelSnapshots: true,
+  wholesaleMappings: {
+    where: { isActive: true, provider: { isActive: true } },
+    include: { provider: { select: { id: true, name: true, configJson: true } } },
+    orderBy: [{ lastSyncAt: 'desc' as const }, { updatedAt: 'desc' as const }],
+    take: 10,
+  },
 } satisfies Prisma.WarehouseProductInclude;
 
 type ProductForAnalytics = Prisma.WarehouseProductGetPayload<{ include: typeof productInclude }>;
@@ -208,6 +214,18 @@ interface EnrichedProduct {
     targetCategoryId: string;
     targetCategoryName: string | null;
   }>;
+  wholesaleOffer: {
+    mappingId: string;
+    providerId: string;
+    providerName: string;
+    externalSku: string;
+    externalEan: string | null;
+    externalName: string | null;
+    lastKnownPrice: number | null;
+    lastKnownStock: number | null;
+    imageUrl: string | null;
+    available: boolean;
+  } | null;
 }
 
 function requireTenantId() {
@@ -619,6 +637,65 @@ function currentImageUrl(product: ProductForAnalytics, shopId?: string) {
   return normalizedIdentifier(first?.url);
 }
 
+function payloadString(payload: unknown, keys: Array<string | undefined>) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const record = payload as Record<string, unknown>;
+  for (const key of keys.filter(Boolean)) {
+    const value = record[key as string];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number') return String(value);
+  }
+  return null;
+}
+
+function wholesaleImageUrl(mapping: ProductForAnalytics['wholesaleMappings'][number]) {
+  const config = (mapping.provider.configJson || {}) as { fieldMapping?: { image?: string } };
+  const value = payloadString(mapping.payloadJson, [
+    config.fieldMapping?.image,
+    'photos',
+    'photo',
+    'image',
+    'images',
+    'Zdjęcie',
+    'Zdjecie',
+  ]);
+  if (!value) return null;
+  return value
+    .split(/[,\n;]/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((url) => (url.startsWith('//') ? `https:${url}` : url))
+    .find((url) => /^https?:\/\//i.test(url)) ?? null;
+}
+
+function bestWholesaleOffer(product: ProductForAnalytics): EnrichedProduct['wholesaleOffer'] {
+  const mappings = [...product.wholesaleMappings].sort((a, b) => {
+    const stockA = decimalToNumber(a.lastKnownStock) ?? 0;
+    const stockB = decimalToNumber(b.lastKnownStock) ?? 0;
+    if ((stockB > 0) !== (stockA > 0)) return stockB > 0 ? 1 : -1;
+    const priceA = decimalToNumber(a.lastKnownPrice) ?? Number.POSITIVE_INFINITY;
+    const priceB = decimalToNumber(b.lastKnownPrice) ?? Number.POSITIVE_INFINITY;
+    if (priceA !== priceB) return priceA - priceB;
+    return (b.lastSyncAt?.getTime() ?? 0) - (a.lastSyncAt?.getTime() ?? 0);
+  });
+  const mapping = mappings.find((item) => decimalToNumber(item.lastKnownStock) !== null || wholesaleImageUrl(item)) ?? mappings[0] ?? null;
+  if (!mapping) return null;
+  const lastKnownStock = decimalToNumber(mapping.lastKnownStock);
+
+  return {
+    mappingId: mapping.id,
+    providerId: mapping.providerId,
+    providerName: mapping.provider.name,
+    externalSku: mapping.externalSku,
+    externalEan: mapping.externalEan,
+    externalName: mapping.externalName,
+    lastKnownPrice: decimalToNumber(mapping.lastKnownPrice),
+    lastKnownStock,
+    imageUrl: wholesaleImageUrl(mapping),
+    available: Boolean(lastKnownStock !== null && lastKnownStock > 0),
+  };
+}
+
 function hasCurrentDescription(product: ProductForAnalytics, shopId?: string) {
   const payload = currentSnapshot(product, shopId)?.payloadJson as any;
   const content = payload?.content ?? {};
@@ -970,6 +1047,7 @@ async function enrichProduct(
     priceStats: stats,
     offers: match.offers,
     categorySuggestions: categorySuggestions(match.offers, mappings),
+    wholesaleOffer: bestWholesaleOffer(product),
   };
 
   return { ...withoutIssues, issues: productIssues(withoutIssues) };
@@ -992,6 +1070,7 @@ function serializeEnriched(product: EnrichedProduct, includeOffers = false) {
     offerCount: product.offers.length,
     sources: Array.from(new Set(product.offers.map((offer) => offer.source))),
     offers: includeOffers ? product.offers : undefined,
+    wholesaleOffer: product.wholesaleOffer,
   };
 }
 

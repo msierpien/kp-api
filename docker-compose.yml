@@ -56,6 +56,9 @@ services:
       DB_NAME: ${DB_NAME:-personalization}
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      # Competitor analytics MongoDB
+      ANALYTICS_MONGO_URI: ${ANALYTICS_MONGO_URI:-}
+      ANALYTICS_MONGO_DB: ${ANALYTICS_MONGO_DB:-appdb}
       # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -91,6 +94,9 @@ services:
       - ./pnpm-lock.yaml:/app/pnpm-lock.yaml
       - ./tsconfig.json:/app/tsconfig.json
       - /app/node_modules
+    networks:
+      - default
+      - analytics_data
     depends_on:
       postgres:
         condition: service_healthy
@@ -128,3 +134,7 @@ volumes:
   postgres_data:
   redis_data:
 
+networks:
+  analytics_data:
+    external: true
+    name: kp-data_default

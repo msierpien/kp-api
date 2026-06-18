@@ -23,6 +23,8 @@ export interface ProductListQuery {
   issue?: CompetitorIssue | 'ALL';
   source?: string;
   categoryId?: string;
+  shopPresence?: 'IN_SHOP' | 'MISSING_IN_SHOP' | 'ALL_WAREHOUSE';
+  wholesaleAvailable?: boolean | string;
   page?: number | string;
   limit?: number | string;
 }
@@ -32,6 +34,7 @@ export interface MatchDiagnosticsQuery {
   q?: string;
   source?: string;
   categoryId?: string;
+  shopPresence?: 'IN_SHOP' | 'MISSING_IN_SHOP' | 'ALL_WAREHOUSE';
   limit?: number | string;
 }
 
@@ -214,6 +217,7 @@ interface EnrichedProduct {
     targetCategoryId: string;
     targetCategoryName: string | null;
   }>;
+  inShop: boolean;
   wholesaleOffer: {
     mappingId: string;
     providerId: string;
@@ -251,6 +255,14 @@ function pageValue(value: number | string | undefined, fallback: number, max = N
   const parsed = Number(value ?? fallback);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(Math.max(Math.trunc(parsed), 1), max);
+}
+
+function booleanQuery(value: boolean | string | undefined) {
+  return value === true || value === 'true' || value === '1';
+}
+
+function shopPresenceValue(value: ProductListQuery['shopPresence'] | MatchDiagnosticsQuery['shopPresence']) {
+  return value === 'MISSING_IN_SHOP' || value === 'ALL_WAREHOUSE' ? value : 'IN_SHOP';
 }
 
 function decimalToNumber(value: Prisma.Decimal | number | string | null | undefined) {
@@ -472,15 +484,16 @@ async function matchedWarehouseProductIdsBySourceProduct(
   shopId: string,
   source: string,
   sourceProductIds?: string[],
+  restrictToShop = true,
 ) {
-  const cacheKey = sourceProductIds?.length ? null : `${tenantId}:${shopId}:${source}`;
+  const cacheKey = sourceProductIds?.length ? null : `${tenantId}:${shopId}:${source}:${restrictToShop ? 'shop' : 'warehouse'}`;
   if (cacheKey) {
     const cached = getMatchedSourceProductCache(cacheKey);
     if (cached) return cached;
   }
 
   const warehouseProducts = await prisma.warehouseProduct.findMany({
-    where: productWhere(tenantId, { shopId }),
+    where: productWhere(tenantId, { shopId: restrictToShop ? shopId : undefined }),
     select: {
       id: true,
       sku: true,
@@ -489,7 +502,7 @@ async function matchedWarehouseProductIdsBySourceProduct(
         select: { ean: true },
       },
       shopProductMappings: {
-        where: { shopId, isActive: true },
+        where: { ...(restrictToShop ? { shopId } : {}), isActive: true },
         select: { externalEan: true, externalSku: true },
       },
     },
@@ -579,7 +592,14 @@ async function categoryMatchedProductCounts(db: Db, tenantId: string, shopId: st
   return new Map(Array.from(productIdsByCategory.entries()).map(([categoryId, productIds]) => [categoryId, productIds.size]));
 }
 
-async function categoryMatchedWarehouseProductIds(db: Db, tenantId: string, shopId: string, source: string, categoryId: string) {
+async function categoryMatchedWarehouseProductIds(
+  db: Db,
+  tenantId: string,
+  shopId: string,
+  source: string,
+  categoryId: string,
+  restrictToShop = true,
+) {
   const numericCategoryId = Number(categoryId);
   const categoryIdFilter = Number.isFinite(numericCategoryId)
     ? { $in: [categoryId, numericCategoryId] }
@@ -597,6 +617,7 @@ async function categoryMatchedWarehouseProductIds(db: Db, tenantId: string, shop
     shopId,
     source,
     sourceProductIds,
+    restrictToShop,
   );
   if (matchedProductIdsBySourceProduct.size === 0) return [];
 
@@ -615,6 +636,10 @@ function currentSnapshot(product: ProductForAnalytics, shopId?: string) {
     return product.productChannelSnapshots.find((snapshot) => snapshot.shopId === shopId) ?? null;
   }
   return product.productChannelSnapshots[0] ?? null;
+}
+
+function isProductMappedToShop(product: ProductForAnalytics, shopId?: string) {
+  return Boolean(shopId && product.shopProductMappings.some((mapping) => mapping.shopId === shopId && mapping.isActive));
 }
 
 function currentCategories(product: ProductForAnalytics, shopId?: string) {
@@ -1047,6 +1072,7 @@ async function enrichProduct(
     priceStats: stats,
     offers: match.offers,
     categorySuggestions: categorySuggestions(match.offers, mappings),
+    inShop: isProductMappedToShop(product, options.shopId),
     wholesaleOffer: bestWholesaleOffer(product),
   };
 
@@ -1067,6 +1093,7 @@ function serializeEnriched(product: EnrichedProduct, includeOffers = false) {
     priceStats: product.priceStats,
     issues: product.issues,
     categorySuggestions: product.categorySuggestions,
+    inShop: product.inShop,
     offerCount: product.offers.length,
     sources: Array.from(new Set(product.offers.map((offer) => offer.source))),
     offers: includeOffers ? product.offers : undefined,
@@ -1207,13 +1234,36 @@ export async function listProducts(query: ProductListQuery = {}) {
   const source = query.source && query.source !== 'ALL' ? query.source : undefined;
   const vatRate = await pricingVatRate(tenantId);
   const issueFilter = query.issue && query.issue !== 'ALL' ? query.issue as CompetitorIssue : null;
+  const shopPresence = shopPresenceValue(query.shopPresence);
 
   if (query.shopId) await requireShop(tenantId, query.shopId);
-  const where = productWhere(tenantId, query);
+  const where = productWhere(tenantId, {
+    ...query,
+    shopId: shopPresence === 'IN_SHOP' ? query.shopId : undefined,
+  });
+  if (query.shopId && shopPresence === 'MISSING_IN_SHOP') {
+    where.shopProductMappings = { none: { shopId: query.shopId, isActive: true } };
+  }
+  if (booleanQuery(query.wholesaleAvailable)) {
+    where.wholesaleMappings = {
+      some: {
+        isActive: true,
+        lastKnownStock: { gt: 0 },
+        provider: { isActive: true },
+      },
+    };
+  }
   if (query.categoryId) {
     if (!query.shopId) throw new ValidationError('Filtr kategorii konkurencji wymaga sklepu');
     if (!source) throw new ValidationError('Filtr kategorii konkurencji wymaga konkretnego zrodla');
-    const categoryProductIds = await categoryMatchedWarehouseProductIds(db, tenantId, query.shopId, source, query.categoryId);
+    const categoryProductIds = await categoryMatchedWarehouseProductIds(
+      db,
+      tenantId,
+      query.shopId,
+      source,
+      query.categoryId,
+      shopPresence === 'IN_SHOP',
+    );
     where.id = { in: categoryProductIds };
   }
   const mappings = await mappingMap(tenantId, query.shopId);
@@ -1310,13 +1360,27 @@ export async function getMatchDiagnostics(query: MatchDiagnosticsQuery = {}) {
   const limit = pageValue(query.limit, 100, MAX_LIST_LIMIT);
   const source = query.source && query.source !== 'ALL' ? query.source : undefined;
   const vatRate = await pricingVatRate(tenantId);
+  const shopPresence = shopPresenceValue(query.shopPresence);
 
   if (query.shopId) await requireShop(tenantId, query.shopId);
-  const where = productWhere(tenantId, query);
+  const where = productWhere(tenantId, {
+    ...query,
+    shopId: shopPresence === 'IN_SHOP' ? query.shopId : undefined,
+  });
+  if (query.shopId && shopPresence === 'MISSING_IN_SHOP') {
+    where.shopProductMappings = { none: { shopId: query.shopId, isActive: true } };
+  }
   if (query.categoryId) {
     if (!query.shopId) throw new ValidationError('Filtr kategorii konkurencji wymaga sklepu');
     if (!source) throw new ValidationError('Filtr kategorii konkurencji wymaga konkretnego zrodla');
-    const categoryProductIds = await categoryMatchedWarehouseProductIds(db, tenantId, query.shopId, source, query.categoryId);
+    const categoryProductIds = await categoryMatchedWarehouseProductIds(
+      db,
+      tenantId,
+      query.shopId,
+      source,
+      query.categoryId,
+      shopPresence === 'IN_SHOP',
+    );
     where.id = { in: categoryProductIds };
   }
   const [products, totalCandidates] = await Promise.all([

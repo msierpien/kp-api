@@ -123,6 +123,7 @@ interface CategoryTreeNode {
   path: string[];
   depth: number;
   productCount: number;
+  matchedProductCount: number;
   url: string | null;
 }
 
@@ -157,6 +158,13 @@ interface CompetitorOffer {
   parameters: Record<string, unknown> | null;
   categories: CompetitorCategory[];
   bundleItems: CompetitorBundleItem[];
+}
+
+interface ProductIdentifierInput {
+  id?: string;
+  sku: string | null;
+  barcodes: Array<{ ean: string | null }>;
+  shopProductMappings: Array<{ externalEan: string | null; externalSku: string | null }>;
 }
 
 interface EnrichedProduct {
@@ -285,7 +293,11 @@ function sortCategoryNodes(a: CategoryTreeNode, b: CategoryTreeNode) {
   return a.id.localeCompare(b.id, 'pl');
 }
 
-function normalizeCategoryTree(rows: CategoryTreeRow[], countMap: Map<string, number>) {
+function normalizeCategoryTree(
+  rows: CategoryTreeRow[],
+  countMap: Map<string, number>,
+  matchedCountMap = new Map<string, number>(),
+) {
   const byId = new Map<string, { row: CategoryTreeRow; path: string[] }>();
   const byPath = new Map<string, { id: string; row: CategoryTreeRow; path: string[] }>();
   const diagnostics = {
@@ -329,6 +341,7 @@ function normalizeCategoryTree(rows: CategoryTreeRow[], countMap: Map<string, nu
       path,
       depth,
       productCount: countMap.get(id) ?? 0,
+      matchedProductCount: matchedCountMap.get(id) ?? 0,
       url: categoryUrl(row),
     });
   }
@@ -377,7 +390,7 @@ async function requireShop(tenantId: string, shopId: string) {
   return shop;
 }
 
-function productIdentifiers(product: ProductForAnalytics) {
+function productIdentifiers(product: ProductIdentifierInput) {
   const eans = unique([
     ...product.barcodes.map((barcode) => barcode.ean),
     ...product.shopProductMappings.map((mapping) => mapping.externalEan),
@@ -388,6 +401,116 @@ function productIdentifiers(product: ProductForAnalytics) {
   ]);
 
   return { eans, skus };
+}
+
+function identifierKey(value: unknown) {
+  return normalizedIdentifier(value)?.toLocaleLowerCase('pl') ?? null;
+}
+
+function addIdentifierTarget(map: Map<string, Set<string>>, identifier: unknown, productId: string) {
+  const key = identifierKey(identifier);
+  if (!key) return;
+  const ids = map.get(key) ?? new Set<string>();
+  ids.add(productId);
+  map.set(key, ids);
+}
+
+async function categoryMatchedProductCounts(db: Db, tenantId: string, shopId: string, source: string) {
+  const warehouseProducts = await prisma.warehouseProduct.findMany({
+    where: productWhere(tenantId, { shopId }),
+    select: {
+      id: true,
+      sku: true,
+      barcodes: {
+        where: { isActive: true },
+        select: { ean: true },
+      },
+      shopProductMappings: {
+        where: { shopId, isActive: true },
+        select: { externalEan: true, externalSku: true },
+      },
+    },
+  });
+
+  const productIdsByEan = new Map<string, Set<string>>();
+  const productIdsBySku = new Map<string, Set<string>>();
+  for (const product of warehouseProducts) {
+    const identifiers = productIdentifiers(product);
+    for (const ean of identifiers.eans) addIdentifierTarget(productIdsByEan, ean, product.id);
+    for (const sku of identifiers.skus) addIdentifierTarget(productIdsBySku, sku, product.id);
+  }
+
+  if (productIdsByEan.size === 0 && productIdsBySku.size === 0) return new Map<string, number>();
+
+  const categoryRows = await db.collection('regular_product_categories').aggregate([
+    { $match: { source } },
+    {
+      $lookup: {
+        from: 'store_products',
+        let: { source: '$source', sourceProductId: '$source_product_id' },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $eq: ['$source', '$$source'] },
+                  { $eq: ['$source_product_id', '$$sourceProductId'] },
+                ],
+              },
+            },
+          },
+          { $project: { store_ean: 1, store_sku: 1, product_id: 1 } },
+          { $limit: 1 },
+        ],
+        as: 'storeProduct',
+      },
+    },
+    { $unwind: '$storeProduct' },
+    {
+      $lookup: {
+        from: 'products',
+        localField: 'storeProduct.product_id',
+        foreignField: '_id',
+        as: 'baseProduct',
+      },
+    },
+    { $unwind: { path: '$baseProduct', preserveNullAndEmptyArrays: true } },
+    {
+      $project: {
+        category_id: 1,
+        store_ean: '$storeProduct.store_ean',
+        store_sku: '$storeProduct.store_sku',
+        product_ean: '$baseProduct.ean',
+        product_sku: '$baseProduct.sku',
+        product_number: '$baseProduct.product_number',
+      },
+    },
+  ], { allowDiskUse: true }).toArray();
+
+  const productIdsByCategory = new Map<string, Set<string>>();
+  for (const row of categoryRows) {
+    const categoryId = normalizedIdentifier(row.category_id);
+    if (!categoryId) continue;
+
+    const matchedProductIds = new Set<string>();
+    for (const value of [row.store_ean, row.product_ean]) {
+      const key = identifierKey(value);
+      if (!key) continue;
+      for (const productId of productIdsByEan.get(key) ?? []) matchedProductIds.add(productId);
+    }
+    for (const value of [row.store_sku, row.product_sku, row.product_number]) {
+      const key = identifierKey(value);
+      if (!key) continue;
+      for (const productId of productIdsBySku.get(key) ?? []) matchedProductIds.add(productId);
+    }
+    if (matchedProductIds.size === 0) continue;
+
+    const categoryProductIds = productIdsByCategory.get(categoryId) ?? new Set<string>();
+    for (const productId of matchedProductIds) categoryProductIds.add(productId);
+    productIdsByCategory.set(categoryId, categoryProductIds);
+  }
+
+  return new Map(Array.from(productIdsByCategory.entries()).map(([categoryId, productIds]) => [categoryId, productIds.size]));
 }
 
 function currentSnapshot(product: ProductForAnalytics, shopId?: string) {
@@ -1122,10 +1245,12 @@ export async function getProductDetail(warehouseProductId: string, query: { shop
   return { ...serializeEnriched(enriched, true), warnings: warningsForSources(selectedSources(query.source), 'categories') };
 }
 
-export async function getCategoryTree(query: { source?: string; includeCounts?: boolean | string } = {}) {
+export async function getCategoryTree(query: { source?: string; includeCounts?: boolean | string; shopId?: string } = {}) {
   const db = await ensureMongo();
   const source = query.source && query.source !== 'ALL' ? query.source : 'congee';
   if (!SOURCES.includes(source as any)) throw new ValidationError('Nieznane zrodlo konkurencji');
+  const tenantId = query.shopId ? requireTenantId() : null;
+  if (tenantId && query.shopId) await requireShop(tenantId, query.shopId);
 
   const categories = await db.collection('store_categories')
     .find({ source })
@@ -1148,7 +1273,10 @@ export async function getCategoryTree(query: { source?: string; includeCounts?: 
     ]).toArray()
     : [];
   const countMap = new Map(counts.map((row) => [String(row._id), Number(row.count ?? 0)]));
-  const normalized = normalizeCategoryTree(categories, countMap);
+  const matchedCountMap = tenantId && query.shopId
+    ? await categoryMatchedProductCounts(db, tenantId, query.shopId, source)
+    : new Map<string, number>();
+  const normalized = normalizeCategoryTree(categories, countMap, matchedCountMap);
   const dataWarnings = [];
   if (normalized.diagnostics.normalizedDepth > 0 || normalized.diagnostics.inferredParent > 0) {
     dataWarnings.push(

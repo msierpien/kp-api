@@ -114,11 +114,12 @@ export async function competitorAnalyticsRoutes(fastify: FastifyInstance) {
         type: 'object',
         properties: {
           source: { type: 'string' },
+          shopId: { type: 'string' },
           includeCounts: { anyOf: [{ type: 'boolean' }, { type: 'string' }] },
         },
       },
     },
-  }, async (request: FastifyRequest<{ Querystring: { source?: string; includeCounts?: boolean | string } }>, reply: FastifyReply) => {
+  }, async (request: FastifyRequest<{ Querystring: { source?: string; shopId?: string; includeCounts?: boolean | string } }>, reply: FastifyReply) => {
     try {
       return reply.send(await competitorAnalytics.getCategoryTree(request.query));
     } catch (error) {

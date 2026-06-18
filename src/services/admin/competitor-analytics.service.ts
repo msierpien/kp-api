@@ -94,6 +94,27 @@ interface CompetitorCategory {
   url: string | null;
 }
 
+interface CategoryTreeRow {
+  source_category_id?: unknown;
+  parent_source_category_id?: unknown;
+  name?: unknown;
+  path?: unknown;
+  depth?: unknown;
+  product_list_url?: unknown;
+  navigation_url?: unknown;
+  canonical_url?: unknown;
+}
+
+interface CategoryTreeNode {
+  id: string;
+  parentId: string | null;
+  name: string;
+  path: string[];
+  depth: number;
+  productCount: number;
+  url: string | null;
+}
+
 interface CompetitorBundleItem {
   id: string;
   sku: string | null;
@@ -222,6 +243,114 @@ function warningsForSources(sources: string[], context?: 'categories' | 'prices'
     if (context === 'categories') warnings.push('Mapowania kategorii Partybox wymagaja recznego potwierdzenia.');
   }
   return warnings;
+}
+
+function categoryPath(row: CategoryTreeRow) {
+  const path = Array.isArray(row.path)
+    ? row.path.map((part) => normalizeText(part)).filter(Boolean)
+    : [];
+  if (path.length > 0) return path;
+  const name = normalizeText(row.name);
+  return name ? [name] : [];
+}
+
+function categoryPathKey(path: string[]) {
+  return path.map((part) => part.trim().toLocaleLowerCase('pl')).join(' > ');
+}
+
+function categoryName(row: CategoryTreeRow, path: string[]) {
+  return normalizeText(row.name) || path[path.length - 1] || String(row.source_category_id);
+}
+
+function categoryUrl(row: CategoryTreeRow) {
+  return normalizedIdentifier(row.product_list_url)
+    ?? normalizedIdentifier(row.navigation_url)
+    ?? normalizedIdentifier(row.canonical_url);
+}
+
+function sortCategoryNodes(a: CategoryTreeNode, b: CategoryTreeNode) {
+  const pathCompare = categoryPathKey(a.path).localeCompare(categoryPathKey(b.path), 'pl');
+  if (pathCompare !== 0) return pathCompare;
+  return a.id.localeCompare(b.id, 'pl');
+}
+
+function normalizeCategoryTree(rows: CategoryTreeRow[], countMap: Map<string, number>) {
+  const byId = new Map<string, { row: CategoryTreeRow; path: string[] }>();
+  const byPath = new Map<string, { id: string; row: CategoryTreeRow; path: string[] }>();
+  const diagnostics = {
+    normalizedDepth: 0,
+    inferredParent: 0,
+    ignoredInvalidParent: 0,
+  };
+
+  for (const row of rows) {
+    const id = normalizedIdentifier(row.source_category_id);
+    if (!id) continue;
+    const path = categoryPath(row);
+    byId.set(id, { row, path });
+    if (path.length > 0) byPath.set(categoryPathKey(path), { id, row, path });
+  }
+
+  const nodes: CategoryTreeNode[] = [];
+  for (const [id, entry] of byId.entries()) {
+    const { row, path } = entry;
+    const rawParentId = normalizedIdentifier(row.parent_source_category_id);
+    const pathParent = path.length > 1 ? byPath.get(categoryPathKey(path.slice(0, -1))) : undefined;
+    const rawParentExists = rawParentId ? byId.has(rawParentId) : false;
+    let parentId: string | null = null;
+
+    if (pathParent && pathParent.id !== id) {
+      parentId = pathParent.id;
+      if (rawParentId !== parentId) diagnostics.inferredParent += 1;
+    } else if (rawParentId && rawParentExists && rawParentId !== id) {
+      parentId = rawParentId;
+    } else if (rawParentId && !rawParentExists) {
+      diagnostics.ignoredInvalidParent += 1;
+    }
+
+    const depth = Math.max(0, path.length - 1);
+    if (Number(row.depth ?? depth) !== depth) diagnostics.normalizedDepth += 1;
+
+    nodes.push({
+      id,
+      parentId,
+      name: categoryName(row, path),
+      path,
+      depth,
+      productCount: countMap.get(id) ?? 0,
+      url: categoryUrl(row),
+    });
+  }
+
+  const sorted = sortCategoryTreeDepthFirst(nodes);
+  return { nodes: sorted, diagnostics };
+}
+
+function sortCategoryTreeDepthFirst(nodes: CategoryTreeNode[]) {
+  const byParent = new Map<string, CategoryTreeNode[]>();
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+
+  for (const node of nodes) {
+    const parentId = node.parentId && byId.has(node.parentId) ? node.parentId : 'ROOT';
+    const siblings = byParent.get(parentId) ?? [];
+    siblings.push(node);
+    byParent.set(parentId, siblings);
+  }
+
+  for (const siblings of byParent.values()) siblings.sort(sortCategoryNodes);
+
+  const result: CategoryTreeNode[] = [];
+  const visited = new Set<string>();
+  const visit = (node: CategoryTreeNode) => {
+    if (visited.has(node.id)) return;
+    visited.add(node.id);
+    result.push(node);
+    for (const child of byParent.get(node.id) ?? []) visit(child);
+  };
+
+  for (const root of byParent.get('ROOT') ?? []) visit(root);
+  for (const node of nodes.sort(sortCategoryNodes)) visit(node);
+  return result;
 }
 
 async function ensureMongo() {
@@ -795,7 +924,16 @@ export async function getCategoryTree(query: { source?: string; includeCounts?: 
 
   const categories = await db.collection('store_categories')
     .find({ source })
-    .sort({ depth: 1, name: 1 })
+    .project({
+      source_category_id: 1,
+      parent_source_category_id: 1,
+      name: 1,
+      path: 1,
+      depth: 1,
+      product_list_url: 1,
+      navigation_url: 1,
+      canonical_url: 1,
+    })
     .toArray();
   const counts = query.includeCounts === true || query.includeCounts === 'true'
     ? await db.collection('regular_product_categories').aggregate([
@@ -805,19 +943,23 @@ export async function getCategoryTree(query: { source?: string; includeCounts?: 
     ]).toArray()
     : [];
   const countMap = new Map(counts.map((row) => [String(row._id), Number(row.count ?? 0)]));
+  const normalized = normalizeCategoryTree(categories, countMap);
+  const dataWarnings = [];
+  if (normalized.diagnostics.normalizedDepth > 0 || normalized.diagnostics.inferredParent > 0) {
+    dataWarnings.push(
+      `Drzewo kategorii ${source} zostalo skorygowane z path: ` +
+      `${normalized.diagnostics.normalizedDepth} poziomow i ` +
+      `${normalized.diagnostics.inferredParent} rodzicow.`
+    );
+  }
+  if (normalized.diagnostics.ignoredInvalidParent > 0) {
+    dataWarnings.push(`Pominieto ${normalized.diagnostics.ignoredInvalidParent} nieistniejacych rodzicow kategorii ${source}.`);
+  }
 
   return {
     source,
-    warnings: warningsForSources([source], 'categories'),
-    categories: categories.map((category) => ({
-      id: String(category.source_category_id),
-      parentId: category.parent_source_category_id ? String(category.parent_source_category_id) : null,
-      name: String(category.name ?? ''),
-      path: Array.isArray(category.path) ? category.path.map(String) : [],
-      depth: Number(category.depth ?? 0),
-      productCount: countMap.get(String(category.source_category_id)) ?? 0,
-      url: category.product_list_url ?? category.navigation_url ?? category.canonical_url ?? null,
-    })),
+    warnings: [...warningsForSources([source], 'categories'), ...dataWarnings],
+    categories: normalized.nodes,
   };
 }
 

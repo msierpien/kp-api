@@ -171,6 +171,7 @@ interface EnrichedProduct {
   warehouseProductId: string;
   sku: string;
   name: string;
+  imageUrl: string | null;
   currentGrossPrice: number | null;
   costNet: number | null;
   currentCategories: Array<{ id: string; name: string; isDefault?: boolean }>;
@@ -526,6 +527,14 @@ function currentCategories(product: ProductForAnalytics, shopId?: string) {
     .filter((category: { id: string }) => category.id);
 }
 
+function currentImageUrl(product: ProductForAnalytics, shopId?: string) {
+  const payload = currentSnapshot(product, shopId)?.payloadJson as any;
+  const images = Array.isArray(payload?.media?.images) ? payload.media.images : [];
+  const cover = images.find((image: any) => image?.cover && normalizedIdentifier(image.url));
+  const first = cover ?? images.find((image: any) => normalizedIdentifier(image?.url));
+  return normalizedIdentifier(first?.url);
+}
+
 function hasCurrentDescription(product: ProductForAnalytics, shopId?: string) {
   const payload = currentSnapshot(product, shopId)?.payloadJson as any;
   const content = payload?.content ?? {};
@@ -864,6 +873,7 @@ async function enrichProduct(
     warehouseProductId: product.id,
     sku: product.sku,
     name: product.name,
+    imageUrl: currentImageUrl(product, options.shopId),
     currentGrossPrice: currentPrice,
     costNet: productCost,
     currentCategories: currentCategories(product, options.shopId),
@@ -886,6 +896,7 @@ function serializeEnriched(product: EnrichedProduct, includeOffers = false) {
     warehouseProductId: product.warehouseProductId,
     sku: product.sku,
     name: product.name,
+    imageUrl: product.imageUrl,
     currentGrossPrice: product.currentGrossPrice,
     costNet: product.costNet,
     currentCategories: product.currentCategories,

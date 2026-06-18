@@ -7,7 +7,9 @@ import { ForbiddenError, NotFoundError, ValidationError } from '../../lib/errors
 import type {
   CreatePrestaShopCategoryInput,
   CreateShopInput,
+  DetachPrestaShopCategoryProductsInput,
   PrestaShopCategoriesQueryInput,
+  PrestaShopCategoryProductsQueryInput,
   UpdatePrestaShopCategoryInput,
   UpdateShopInput,
 } from '../../schemas/admin.schema';
@@ -17,11 +19,29 @@ import { getTenantContext } from '../../lib/tenant-context';
 import { PrestaShopClient } from '../prestashop/prestashop-client';
 import { normalizeBulkStockBatchSize } from '../shops/prestashop-stock-client';
 import { assertValidOrderSyncDate, normalizeOrderSyncDate } from '../sync/order-sync-date';
+import * as productCardService from './product-card.service';
 
 type ShopTenantScopeContext = {
   tenantId?: string | null;
   role?: UserRole | null;
   overrideTenantId?: string | null;
+};
+
+type CategoryProductRow = {
+  warehouseProductId: string;
+  sku: string;
+  name: string;
+  isActive: boolean;
+  currentStock: unknown;
+  retailPrice: unknown;
+  shopGrossPrice: unknown;
+  snapshotPrice: unknown;
+  snapshotHash: string;
+  fetchedAt: Date;
+  updatedAt: Date;
+  payloadJson: Prisma.JsonValue;
+  externalProductId: string | null;
+  externalSku: string | null;
 };
 
 export function resolveShopTenantWhereForContext(context: ShopTenantScopeContext | null): Prisma.ShopWhereInput {
@@ -690,6 +710,375 @@ export async function getShopImportReadiness(id: string) {
     },
     lastImportLog,
   };
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function toArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function stringValue(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return null;
+}
+
+function numberValue(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().replace(',', '.');
+    if (!normalized) return null;
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (value && typeof value === 'object' && 'toNumber' in value && typeof (value as { toNumber: () => number }).toNumber === 'function') {
+    const parsed = (value as { toNumber: () => number }).toNumber();
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function snapshotCategories(payload: Prisma.JsonValue) {
+  const root = toRecord(payload);
+  const parameters = toRecord(root.parameters);
+  const rawCategories = toArray(root.categories).length > 0 ? toArray(root.categories) : toArray(parameters.categories);
+
+  return rawCategories
+    .map((item) => {
+      const category = toRecord(item);
+      const id = stringValue(category.id ?? category.categoryId);
+      const name = stringValue(category.name ?? category.label) ?? (id ? `#${id}` : null);
+      if (!id || !name) return null;
+      return {
+        id,
+        name,
+        isDefault: category.isDefault === true || category.default === true,
+      };
+    })
+    .filter((item): item is { id: string; name: string; isDefault: boolean } => Boolean(item));
+}
+
+function defaultCategoryFromSnapshot(payload: Prisma.JsonValue) {
+  const root = toRecord(payload);
+  const identity = toRecord(root.identity);
+  const categories = snapshotCategories(payload);
+  const defaultId = stringValue(identity.idCategoryDefault ?? identity.defaultCategoryId)
+    ?? categories.find((category) => category.isDefault)?.id
+    ?? null;
+  const defaultCategory = defaultId ? categories.find((category) => category.id === defaultId) : null;
+
+  return {
+    id: defaultId,
+    name: defaultCategory?.name ?? null,
+  };
+}
+
+function snapshotImageUrl(payload: Prisma.JsonValue) {
+  const root = toRecord(payload);
+  const media = toRecord(root.media);
+  const images = toArray(media.images);
+  const cover = images.find((item) => {
+    const image = toRecord(item);
+    return image.isCover === true || image.cover === true;
+  }) ?? images[0];
+  const image = toRecord(cover);
+  return stringValue(image.url ?? image.src ?? image.thumbnailUrl ?? image.mediumUrl);
+}
+
+function snapshotIdentity(payload: Prisma.JsonValue) {
+  return toRecord(toRecord(payload).identity);
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function categoryProductOrderSql(sort: PrestaShopCategoryProductsQueryInput['sort'], priceSql: Prisma.Sql) {
+  if (sort === 'nameDesc') return Prisma.sql`wp.name DESC, wp.sku ASC`;
+  if (sort === 'priceAsc') return Prisma.sql`${priceSql} ASC NULLS LAST, wp.name ASC`;
+  if (sort === 'priceDesc') return Prisma.sql`${priceSql} DESC NULLS LAST, wp.name ASC`;
+  if (sort === 'updatedDesc') return Prisma.sql`s.updated_at DESC, wp.name ASC`;
+  return Prisma.sql`wp.name ASC, wp.sku ASC`;
+}
+
+async function getPrestaShopShopForCategoryProducts(id: string) {
+  const shop = await prisma.shop.findFirst({
+    where: getShopAdminWhere(id),
+    select: {
+      id: true,
+      tenantId: true,
+      name: true,
+      platform: true,
+      status: true,
+    },
+  });
+
+  if (!shop) throw new NotFoundError('Sklep nie znaleziony');
+  if (shop.status !== 'ACTIVE') throw new ValidationError('Sklep jest nieaktywny');
+  if (shop.platform !== 'PRESTASHOP') throw new ValidationError(`Kategorie PrestaShop nie obsługują platformy ${shop.platform}`);
+  return shop;
+}
+
+export async function getPrestaShopCategoryProducts(
+  id: string,
+  categoryId: string,
+  query: PrestaShopCategoryProductsQueryInput,
+) {
+  const shop = await getPrestaShopShopForCategoryProducts(id);
+  const category = String(categoryId).trim();
+  if (!category) throw new ValidationError('ID kategorii jest wymagane');
+
+  const page = query.page;
+  const limit = query.limit;
+  const offset = (page - 1) * limit;
+  const search = query.search.trim();
+  const like = `%${search}%`;
+  const searchSql = search
+    ? Prisma.sql`AND (
+        wp.sku ILIKE ${like}
+        OR wp.name ILIKE ${like}
+        OR s.payload_json->'identity'->>'reference' ILIKE ${like}
+        OR s.payload_json->'identity'->>'name' ILIKE ${like}
+        OR m.external_sku ILIKE ${like}
+      )`
+    : Prisma.empty;
+  const categoryMatchSql = Prisma.sql`EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(COALESCE(s.payload_json->'categories', '[]'::jsonb)) AS category_item
+    WHERE category_item->>'id' = ${category}
+  )`;
+  const priceSql = Prisma.sql`COALESCE(
+    wsp.gross_price,
+    wp.retail_price,
+    CASE
+      WHEN s.payload_json->'identity'->>'price' ~ '^-?[0-9]+([\\.,][0-9]+)?$'
+      THEN replace(s.payload_json->'identity'->>'price', ',', '.')::numeric
+      ELSE NULL
+    END
+  )`;
+  const orderSql = categoryProductOrderSql(query.sort, priceSql);
+
+  const countRows = await prisma.$queryRaw<Array<{ total: bigint }>>(Prisma.sql`
+    SELECT COUNT(*)::bigint AS total
+    FROM product_channel_snapshots s
+    JOIN warehouse_products wp ON wp.id = s.warehouse_product_id
+    LEFT JOIN LATERAL (
+      SELECT external_product_id, external_sku
+      FROM shop_product_mappings
+      WHERE shop_id = s.shop_id
+        AND warehouse_product_id = wp.id
+        AND is_active = true
+      ORDER BY updated_at DESC
+      LIMIT 1
+    ) m ON TRUE
+    WHERE s.shop_id = ${shop.id}
+      AND s.tenant_id = ${shop.tenantId}
+      AND ${categoryMatchSql}
+      ${searchSql}
+  `);
+
+  const rows = await prisma.$queryRaw<CategoryProductRow[]>(Prisma.sql`
+    SELECT
+      wp.id AS "warehouseProductId",
+      wp.sku AS "sku",
+      wp.name AS "name",
+      wp.is_active AS "isActive",
+      wp.current_stock AS "currentStock",
+      wp.retail_price AS "retailPrice",
+      wsp.gross_price AS "shopGrossPrice",
+      ${priceSql} AS "snapshotPrice",
+      s.hash AS "snapshotHash",
+      s.fetched_at AS "fetchedAt",
+      s.updated_at AS "updatedAt",
+      s.payload_json AS "payloadJson",
+      m.external_product_id AS "externalProductId",
+      m.external_sku AS "externalSku"
+    FROM product_channel_snapshots s
+    JOIN warehouse_products wp ON wp.id = s.warehouse_product_id
+    LEFT JOIN warehouse_product_shop_prices wsp
+      ON wsp.shop_id = s.shop_id
+      AND wsp.warehouse_product_id = wp.id
+    LEFT JOIN LATERAL (
+      SELECT external_product_id, external_sku
+      FROM shop_product_mappings
+      WHERE shop_id = s.shop_id
+        AND warehouse_product_id = wp.id
+        AND is_active = true
+      ORDER BY updated_at DESC
+      LIMIT 1
+    ) m ON TRUE
+    WHERE s.shop_id = ${shop.id}
+      AND s.tenant_id = ${shop.tenantId}
+      AND ${categoryMatchSql}
+      ${searchSql}
+    ORDER BY ${orderSql}
+    LIMIT ${limit}
+    OFFSET ${offset}
+  `);
+
+  const total = Number(countRows[0]?.total ?? 0);
+
+  return {
+    data: rows.map((row) => {
+      const identity = snapshotIdentity(row.payloadJson);
+      const categories = snapshotCategories(row.payloadJson);
+      const defaultCategory = defaultCategoryFromSnapshot(row.payloadJson);
+      const defaultCategoryId = defaultCategory.id;
+      const price = numberValue(row.shopGrossPrice)
+        ?? numberValue(row.retailPrice)
+        ?? numberValue(row.snapshotPrice)
+        ?? numberValue(identity.price);
+      const isDefaultInSelectedCategory = defaultCategoryId === category || categories.some((item) => item.id === category && item.isDefault);
+
+      return {
+        warehouseProductId: row.warehouseProductId,
+        sku: row.sku,
+        name: stringValue(identity.name) ?? row.name,
+        reference: stringValue(identity.reference) ?? row.sku,
+        imageUrl: snapshotImageUrl(row.payloadJson),
+        currentGrossPrice: price,
+        currentStock: numberValue(row.currentStock),
+        active: row.isActive,
+        externalProductId: row.externalProductId,
+        externalSku: row.externalSku,
+        categories,
+        defaultCategoryId,
+        defaultCategoryName: defaultCategory.name,
+        isDefaultInSelectedCategory,
+        looseCategoryMatch: Boolean(defaultCategoryId && defaultCategoryId !== category),
+        looseCategoryReason: defaultCategoryId && defaultCategoryId !== category
+          ? 'Domyślna kategoria produktu jest inna niż oglądana kategoria.'
+          : null,
+        channels: [
+          {
+            key: 'prestashop',
+            label: 'PrestaShop',
+            status: row.externalProductId ? 'published' : 'missing',
+          },
+        ],
+        snapshotHash: row.snapshotHash,
+        fetchedAt: row.fetchedAt,
+        updatedAt: row.updatedAt,
+      };
+    }),
+    total,
+    page,
+    limit,
+    totalPages: Math.max(1, Math.ceil(total / limit)),
+    shopId: shop.id,
+    categoryId: category,
+  };
+}
+
+export async function detachPrestaShopCategoryProducts(
+  id: string,
+  categoryId: string,
+  input: DetachPrestaShopCategoryProductsInput,
+) {
+  const shop = await getPrestaShopShopForCategoryProducts(id);
+  const category = String(categoryId).trim();
+  if (!category) throw new ValidationError('ID kategorii jest wymagane');
+
+  const productIds = uniqueStrings(input.productIds).slice(0, 200);
+  if (productIds.length === 0) throw new ValidationError('Wybierz produkty do odpięcia');
+
+  const snapshots = await prisma.productChannelSnapshot.findMany({
+    where: {
+      shopId: shop.id,
+      tenantId: shop.tenantId,
+      warehouseProductId: { in: productIds },
+    },
+    select: {
+      warehouseProductId: true,
+      payloadJson: true,
+      warehouseProduct: { select: { sku: true, name: true } },
+    },
+  });
+  const snapshotByProductId = new Map(snapshots.map((snapshot) => [snapshot.warehouseProductId, snapshot]));
+  const result = {
+    requested: productIds.length,
+    detached: 0,
+    blocked: 0,
+    failed: 0,
+    errors: [] as Array<{ warehouseProductId: string; sku?: string; name?: string; message: string }>,
+  };
+
+  for (const productId of productIds) {
+    const snapshot = snapshotByProductId.get(productId);
+    if (!snapshot) {
+      result.failed++;
+      result.errors.push({ warehouseProductId: productId, message: 'Brak snapshotu produktu dla wybranego sklepu' });
+      continue;
+    }
+
+    const categories = snapshotCategories(snapshot.payloadJson);
+    const currentCategoryIds = uniqueStrings(categories.map((item) => item.id));
+    const defaultCategory = defaultCategoryFromSnapshot(snapshot.payloadJson);
+    const hasCategory = currentCategoryIds.includes(category);
+
+    if (!hasCategory) {
+      result.failed++;
+      result.errors.push({
+        warehouseProductId: productId,
+        sku: snapshot.warehouseProduct.sku,
+        name: snapshot.warehouseProduct.name,
+        message: 'Produkt nie jest przypisany do tej kategorii',
+      });
+      continue;
+    }
+
+    if (defaultCategory.id === category || categories.some((item) => item.id === category && item.isDefault)) {
+      result.blocked++;
+      result.errors.push({
+        warehouseProductId: productId,
+        sku: snapshot.warehouseProduct.sku,
+        name: snapshot.warehouseProduct.name,
+        message: 'Nie można odpiąć kategorii domyślnej. Najpierw ustaw inną kategorię domyślną.',
+      });
+      continue;
+    }
+
+    const nextCategoryIds = currentCategoryIds
+      .filter((item) => item !== category)
+      .map((item) => Number(item))
+      .filter((item) => Number.isFinite(item) && item > 0);
+
+    if (nextCategoryIds.length === 0) {
+      result.blocked++;
+      result.errors.push({
+        warehouseProductId: productId,
+        sku: snapshot.warehouseProduct.sku,
+        name: snapshot.warehouseProduct.name,
+        message: 'Produkt musi mieć przynajmniej jedną kategorię.',
+      });
+      continue;
+    }
+
+    try {
+      await productCardService.patchProductCardParameters(productId, {
+        shopId: shop.id,
+        identity: defaultCategory.id ? { idCategoryDefault: Number(defaultCategory.id) } : {},
+        categories: nextCategoryIds,
+      });
+      result.detached++;
+    } catch (error) {
+      result.failed++;
+      result.errors.push({
+        warehouseProductId: productId,
+        sku: snapshot.warehouseProduct.sku,
+        name: snapshot.warehouseProduct.name,
+        message: error instanceof Error ? error.message : 'Nie udało się odpiąć kategorii',
+      });
+    }
+  }
+
+  return result;
 }
 
 export async function getPrestaShopCategories(id: string, query: PrestaShopCategoriesQueryInput = { activeOnly: true, tree: false }) {

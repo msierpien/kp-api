@@ -3,8 +3,10 @@ import {
   createShopSchema,
   createPrestaShopCategorySchema,
   deletePrestaShopCategoryQuerySchema,
+  detachPrestaShopCategoryProductsSchema,
   ifirmaSettingsSchema,
   prestaShopCategoriesQuerySchema,
+  prestaShopCategoryProductsQuerySchema,
   prestaShopCategoryParamsSchema,
   shopOrderStatusMappingSchema,
   updateShopSchema,
@@ -13,7 +15,9 @@ import {
   type CreatePrestaShopCategoryInput,
   type CreateShopInput,
   type DeletePrestaShopCategoryQueryInput,
+  type DetachPrestaShopCategoryProductsInput,
   type PrestaShopCategoriesQueryInput,
+  type PrestaShopCategoryProductsQueryInput,
   type PrestaShopCategoryParamsInput,
   type UpdateShopInput,
   type UpdatePrestaShopCategoryInput,
@@ -168,6 +172,47 @@ const prestaShopCategoryResponseSchema = {
   additionalProperties: true,
 };
 
+const prestaShopCategoryProductResponseSchema = {
+  type: 'object',
+  properties: {
+    warehouseProductId: { type: 'string' },
+    sku: { type: 'string' },
+    name: { type: 'string' },
+    reference: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    imageUrl: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    currentGrossPrice: { anyOf: [{ type: 'number' }, { type: 'null' }] },
+    currentStock: { anyOf: [{ type: 'number' }, { type: 'null' }] },
+    active: { type: 'boolean' },
+    externalProductId: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    externalSku: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    categories: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    defaultCategoryId: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    defaultCategoryName: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    isDefaultInSelectedCategory: { type: 'boolean' },
+    looseCategoryMatch: { type: 'boolean' },
+    looseCategoryReason: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    channels: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    snapshotHash: { type: 'string' },
+    fetchedAt: { type: 'string' },
+    updatedAt: { type: 'string' },
+  },
+  additionalProperties: true,
+};
+
+const prestaShopCategoryProductsResponseSchema = {
+  type: 'object',
+  properties: {
+    data: { type: 'array', items: prestaShopCategoryProductResponseSchema },
+    total: { type: 'number' },
+    page: { type: 'number' },
+    limit: { type: 'number' },
+    totalPages: { type: 'number' },
+    shopId: { type: 'string' },
+    categoryId: { type: 'string' },
+  },
+  additionalProperties: true,
+};
+
 function parseShopParams(params: unknown) {
   const parsed = shopIdParamsSchema.safeParse(params);
   if (!parsed.success) {
@@ -202,6 +247,22 @@ function parsePrestaShopCategoriesQuery(query: unknown) {
 
 function parsePrestaShopCategoryParams(params: unknown) {
   const parsed = prestaShopCategoryParamsSchema.safeParse(params);
+  if (!parsed.success) {
+    throw new ValidationError(parsed.error.errors[0].message, parsed.error.flatten());
+  }
+  return parsed.data;
+}
+
+function parsePrestaShopCategoryProductsQuery(query: unknown): PrestaShopCategoryProductsQueryInput {
+  const parsed = prestaShopCategoryProductsQuerySchema.safeParse(query);
+  if (!parsed.success) {
+    throw new ValidationError(parsed.error.errors[0].message, parsed.error.flatten());
+  }
+  return parsed.data;
+}
+
+function parseDetachPrestaShopCategoryProductsBody(body: unknown): DetachPrestaShopCategoryProductsInput {
+  const parsed = detachPrestaShopCategoryProductsSchema.safeParse(body);
   if (!parsed.success) {
     throw new ValidationError(parsed.error.errors[0].message, parsed.error.flatten());
   }
@@ -297,6 +358,62 @@ export async function shopsRoutes(fastify: FastifyInstance) {
   }, async (request, reply: FastifyReply) => {
     const params = parseShopParams(request.params);
     return reply.send(await shopsUseCases.deleteEmptyPrestaShopCategories(params.id, request.body.categoryIds ?? []));
+  });
+
+  fastify.get<{
+    Params: PrestaShopCategoryParamsInput;
+    Querystring: PrestaShopCategoryProductsQueryInput;
+  }>('/:id/prestashop-categories/:categoryId/products', {
+    schema: {
+      tags: ['shops'],
+      summary: 'Lista produktów przypisanych do kategorii PrestaShop',
+      params: {
+        type: 'object',
+        required: ['id', 'categoryId'],
+        properties: { id: { type: 'string' }, categoryId: { type: 'string' } },
+      },
+      querystring: {
+        type: 'object',
+        properties: {
+          page: { type: 'number' },
+          limit: { type: 'number' },
+          search: { type: 'string' },
+          sort: { type: 'string', enum: ['nameAsc', 'nameDesc', 'priceAsc', 'priceDesc', 'updatedDesc'] },
+        },
+      },
+      response: { 200: prestaShopCategoryProductsResponseSchema },
+    },
+  }, async (request, reply: FastifyReply) => {
+    const params = parsePrestaShopCategoryParams(request.params);
+    const query = parsePrestaShopCategoryProductsQuery(request.query);
+    return reply.send(await shopsUseCases.getPrestaShopCategoryProducts(params.id, params.categoryId, query));
+  });
+
+  fastify.post<{
+    Params: PrestaShopCategoryParamsInput;
+    Body: DetachPrestaShopCategoryProductsInput;
+  }>('/:id/prestashop-categories/:categoryId/products/detach', {
+    schema: {
+      tags: ['shops'],
+      summary: 'Odepnij produkty od wybranej kategorii PrestaShop',
+      params: {
+        type: 'object',
+        required: ['id', 'categoryId'],
+        properties: { id: { type: 'string' }, categoryId: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        required: ['productIds'],
+        properties: {
+          productIds: { type: 'array', minItems: 1, maxItems: 200, items: { type: 'string' } },
+        },
+      },
+      response: { 200: { type: 'object', additionalProperties: true } },
+    },
+  }, async (request, reply: FastifyReply) => {
+    const params = parsePrestaShopCategoryParams(request.params);
+    const body = parseDetachPrestaShopCategoryProductsBody(request.body);
+    return reply.send(await shopsUseCases.detachPrestaShopCategoryProducts(params.id, params.categoryId, body));
   });
 
   fastify.post<{

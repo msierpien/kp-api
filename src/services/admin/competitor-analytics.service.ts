@@ -119,6 +119,23 @@ interface CompetitorCategory {
   id: string;
   path: string[];
   url: string | null;
+  price: number | null;
+  currency: string | null;
+  availability: string | null;
+  pageUrl: string | null;
+  categoryUrl: string | null;
+  updatedAt: string | null;
+  lastSeenAt: string | null;
+}
+
+interface CompetitorPriceHistoryItem {
+  oldPrice: number | null;
+  newPrice: number | null;
+  currency: string;
+  changedAt: string | null;
+  sourceCategoryId: string | null;
+  categoryUrl: string | null;
+  pageUrl: string | null;
 }
 
 interface CategoryTreeRow {
@@ -163,6 +180,10 @@ interface CompetitorOffer {
   title: string | null;
   price: number | null;
   currency: string;
+  priceHistory: CompetitorPriceHistoryItem[];
+  lastPriceChangedAt: string | null;
+  lastSeenAt: string | null;
+  updatedAt: string | null;
   availability: string | null;
   url: string | null;
   description: string | null;
@@ -265,10 +286,19 @@ function shopPresenceValue(value: ProductListQuery['shopPresence'] | MatchDiagno
   return value === 'MISSING_IN_SHOP' || value === 'ALL_WAREHOUSE' ? value : 'IN_SHOP';
 }
 
-function decimalToNumber(value: Prisma.Decimal | number | string | null | undefined) {
+function decimalToNumber(value: Prisma.Decimal | number | string | null | undefined | unknown) {
   if (value === null || value === undefined) return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function normalizeDateString(value: unknown) {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  const text = normalizeText(value);
+  if (!text) return null;
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? text : date.toISOString();
 }
 
 function round2(value: number | null | undefined) {
@@ -797,11 +827,34 @@ function normalizeBundleItem(row: any): CompetitorBundleItem {
   };
 }
 
+function normalizePriceHistory(value: unknown): CompetitorPriceHistoryItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 3).map((item) => ({
+    oldPrice: decimalToNumber(item?.old_price),
+    newPrice: decimalToNumber(item?.new_price),
+    currency: normalizeText(item?.currency) || 'PLN',
+    changedAt: normalizeDateString(item?.changed_at),
+    sourceCategoryId: normalizedIdentifier(item?.source_category_id),
+    categoryUrl: normalizedIdentifier(item?.category_url),
+    pageUrl: normalizedIdentifier(item?.page_url),
+  }));
+}
+
+function normalizeOfferPrice(row: any) {
+  return decimalToNumber(row.price ?? row.current_price ?? row.gross_price ?? row.listing_price);
+}
+
 function normalizeOffer(
   row: any,
   categories: CompetitorCategory[] = [],
   bundleItems: CompetitorBundleItem[] = [],
 ): CompetitorOffer {
+  const categoryPrice = categories.find((category) => category.price !== null)?.price ?? null;
+  const categoryCurrency = categories.find((category) => category.currency)?.currency ?? null;
+  const categoryAvailability = categories.find((category) => category.availability)?.availability ?? null;
+  const categoryPageUrl = categories.find((category) => category.pageUrl)?.pageUrl ?? null;
+  const rowPrice = normalizeOfferPrice(row);
+
   return {
     id: String(row._id),
     source: String(row.source ?? ''),
@@ -809,10 +862,14 @@ function normalizeOffer(
     sku: normalizedIdentifier(row.store_sku),
     ean: normalizedIdentifier(row.store_ean),
     title: normalizedIdentifier(row.title),
-    price: decimalToNumber(row.price),
-    currency: normalizeText(row.currency) || 'PLN',
-    availability: normalizedIdentifier(row.availability),
-    url: normalizedIdentifier(row.product_url),
+    price: rowPrice && rowPrice > 0 ? rowPrice : categoryPrice ?? rowPrice,
+    currency: normalizeText(row.currency) || categoryCurrency || 'PLN',
+    priceHistory: normalizePriceHistory(row.price_history),
+    lastPriceChangedAt: normalizeDateString(row.last_price_changed_at),
+    lastSeenAt: normalizeDateString(row.last_seen_at),
+    updatedAt: normalizeDateString(row.updated_at),
+    availability: normalizedIdentifier(row.availability) ?? categoryAvailability,
+    url: normalizedIdentifier(row.product_url) ?? categoryPageUrl,
     description: normalizedIdentifier(row.description),
     shortDescription: normalizedIdentifier(row.short_description),
     seoTitle: normalizedIdentifier(row.seo_title),
@@ -840,7 +897,19 @@ async function decorateOffers(db: Db, rows: any[]) {
   const [categoryRows, bundleRows] = await Promise.all([
     db.collection('regular_product_categories')
       .find({ $or: keys })
-      .project({ source: 1, source_product_id: 1, category_id: 1, category_path: 1, category_url: 1 })
+      .project({
+        source: 1,
+        source_product_id: 1,
+        category_id: 1,
+        category_path: 1,
+        category_url: 1,
+        page_url: 1,
+        price: 1,
+        currency: 1,
+        availability: 1,
+        last_seen_at: 1,
+        updated_at: 1,
+      })
       .toArray(),
     db.collection('store_product_bundle_items')
       .find({ $or: keys })
@@ -857,6 +926,13 @@ async function decorateOffers(db: Db, rows: any[]) {
       id: String(row.category_id),
       path: Array.isArray(row.category_path) ? row.category_path.map(String) : [],
       url: normalizedIdentifier(row.category_url),
+      price: decimalToNumber(row.price),
+      currency: normalizedIdentifier(row.currency),
+      availability: normalizedIdentifier(row.availability),
+      pageUrl: normalizedIdentifier(row.page_url),
+      categoryUrl: normalizedIdentifier(row.category_url),
+      updatedAt: normalizeDateString(row.updated_at),
+      lastSeenAt: normalizeDateString(row.last_seen_at),
     });
     byOffer.set(key, list);
   }
@@ -1203,6 +1279,26 @@ export async function getOverview(query: { shopId?: string } = {}) {
     { $group: { _id: { source: '$source', hasCategory: { $gt: [{ $size: '$category' }, 0] } }, products: { $sum: 1 } } },
     { $sort: { '_id.source': 1 } },
   ]).toArray();
+  const latestScanRuns = await db.collection('scan_runs').aggregate([
+    { $match: { source: { $in: SOURCES as unknown as string[] } } },
+    {
+      $addFields: {
+        sortDate: { $ifNull: ['$finished_at', { $ifNull: ['$updated_at', '$started_at'] }] },
+      },
+    },
+    { $sort: { source: 1, sortDate: -1, _id: -1 } },
+    {
+      $group: {
+        _id: '$source',
+        status: { $first: '$status' },
+        startedAt: { $first: '$started_at' },
+        finishedAt: { $first: '$finished_at' },
+        priceUpdates: { $first: { $ifNull: ['$price_updates', 0] } },
+        priceUnchanged: { $first: { $ifNull: ['$price_unchanged', 0] } },
+      },
+    },
+    { $sort: { _id: 1 } },
+  ]).toArray();
 
   const warehouseWhere: Prisma.WarehouseProductWhereInput = { tenantId };
   if (query.shopId) warehouseWhere.shopProductMappings = { some: { shopId: query.shopId, isActive: true } };
@@ -1218,6 +1314,14 @@ export async function getOverview(query: { shopId?: string } = {}) {
     warnings: warningsForSources([...SOURCES], 'categories'),
     sourceStats,
     categoryCoverage,
+    latestScanRuns: latestScanRuns.map((row) => ({
+      source: row._id,
+      status: row.status ?? null,
+      startedAt: normalizeDateString(row.startedAt),
+      finishedAt: normalizeDateString(row.finishedAt),
+      priceUpdates: Number(row.priceUpdates ?? 0),
+      priceUnchanged: Number(row.priceUnchanged ?? 0),
+    })),
     warehouse: {
       products: warehouseProducts,
       mappedProducts,

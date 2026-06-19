@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import test from 'node:test';
 import {
   normalizeEanMatchCandidates,
@@ -30,4 +32,23 @@ test('SKU matching accepts supplier hash-code variants', () => {
 
 test('SKU matching does not extract ordinary first words from product names', () => {
   assert.deepEqual(productNameSkuCandidates('Album na 24 zdjęcia'), []);
+});
+
+test('wholesale sync keeps mapped offers missing from feed as zero-stock mappings', () => {
+  const source = readFileSync(join(process.cwd(), 'src/services/admin/wholesale-sync.service.ts'), 'utf8');
+  const start = source.indexOf('async function markMappingsMissingFromFeed');
+  const end = source.indexOf('function normalizeSyncLimit', start);
+  const body = source.slice(start, end);
+  const mappedUpdate = body.slice(
+    body.indexOf('for (let i = 0; i < mappedIds.length'),
+    body.indexOf('for (let i = 0; i < unmappedIds.length'),
+  );
+  const unmappedUpdate = body.slice(body.indexOf('for (let i = 0; i < unmappedIds.length'));
+
+  assert.match(body, /const mappedIds = staleMappings/);
+  assert.match(body, /const unmappedIds = staleMappings/);
+  assert.match(mappedUpdate, /lastKnownStock: ZERO/);
+  assert.doesNotMatch(mappedUpdate, /isActive: false/);
+  assert.match(unmappedUpdate, /isActive: false/);
+  assert.match(body, /zeroedMapped: mappedIds\.length/);
 });

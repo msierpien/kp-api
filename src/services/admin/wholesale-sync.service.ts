@@ -201,7 +201,7 @@ export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
     let updated = 0;
     let skipped = 0;
     let processed = 0;
-    let deactivatedMissing = 0;
+    let handledMissingFromFeed = 0;
 
     for (let offset = 0; offset < limitedRecords.length; offset += batchSize) {
       const batch = limitedRecords.slice(offset, offset + batchSize);
@@ -236,8 +236,8 @@ export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
         syncStartedAt,
         finishedAt,
       });
-      deactivatedMissing = missing.deactivated;
-      updated += missing.deactivated;
+      handledMissingFromFeed = missing.deactivated + missing.zeroedMapped;
+      updated += handledMissingFromFeed;
     }
 
     const finishedLog = await prisma.wholesaleSyncLog.update({
@@ -249,7 +249,7 @@ export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
         processedItems: processed,
         mappingsCreated: created,
         mappingsUpdated: updated,
-        skipped: skipped + deactivatedMissing,
+        skipped: skipped + handledMissingFromFeed,
         errorMessage: null,
         finishedAt,
       },
@@ -437,17 +437,32 @@ async function markMappingsMissingFromFeed(input: {
   });
 
   if (staleMappings.length === 0) {
-    return { deactivated: 0 };
+    return { deactivated: 0, zeroedMapped: 0 };
   }
 
   const changedProductIds = staleMappings
     .filter((mapping) => mapping.warehouseProductId && isPositiveDecimal(mapping.lastKnownStock))
     .map((mapping) => mapping.warehouseProductId as string);
-  const ids = staleMappings.map((mapping) => mapping.id);
+  const mappedIds = staleMappings
+    .filter((mapping) => mapping.warehouseProductId)
+    .map((mapping) => mapping.id);
+  const unmappedIds = staleMappings
+    .filter((mapping) => !mapping.warehouseProductId)
+    .map((mapping) => mapping.id);
 
-  for (let i = 0; i < ids.length; i += 1000) {
+  for (let i = 0; i < mappedIds.length; i += 1000) {
     await prisma.wholesaleProductMapping.updateMany({
-      where: { id: { in: ids.slice(i, i + 1000) } },
+      where: { id: { in: mappedIds.slice(i, i + 1000) } },
+      data: {
+        lastKnownStock: ZERO,
+        lastSyncAt: input.finishedAt,
+      },
+    });
+  }
+
+  for (let i = 0; i < unmappedIds.length; i += 1000) {
+    await prisma.wholesaleProductMapping.updateMany({
+      where: { id: { in: unmappedIds.slice(i, i + 1000) } },
       data: {
         isActive: false,
         lastKnownStock: ZERO,
@@ -458,7 +473,7 @@ async function markMappingsMissingFromFeed(input: {
 
   await enqueueWholesaleAvailabilityStockSync(changedProductIds, input.tenantId);
 
-  return { deactivated: staleMappings.length };
+  return { deactivated: unmappedIds.length, zeroedMapped: mappedIds.length };
 }
 
 function normalizeSyncLimit(limit?: number) {

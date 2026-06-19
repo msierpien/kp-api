@@ -53,6 +53,7 @@ export interface PricingProductsQuery {
   priceGroupId?: string;
   categoryId?: string;
   categoryIds?: string;
+  groupVariants?: boolean | string;
   source?: PricingPriceSource | 'ALL';
   status?: 'ALL' | 'READY' | 'MISSING_PRICE' | 'WARNING' | 'ALERT' | 'NO_GROUP' | 'OVERRIDES_GROUP' | 'BELOW_COST';
   page?: number | string;
@@ -177,6 +178,16 @@ function normalizePage(value: number | string | undefined, fallback: number, max
 function normalizeSearch(value: string | undefined) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function normalizeBoolean(value: boolean | string | undefined, fallback = false) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['1', 'true', 'yes', 'tak'].includes(normalized)) return true;
+    if (['0', 'false', 'no', 'nie'].includes(normalized)) return false;
+  }
+  return fallback;
 }
 
 function toRecord(value: unknown): Record<string, unknown> {
@@ -560,12 +571,42 @@ function productMatchesCategories(product: ProductForPricingList, shopId: string
   return false;
 }
 
+function skuFamilyBase(sku: string) {
+  const normalized = sku.trim().replace(/\s+/g, '').toUpperCase();
+  if (!normalized || !normalized.includes('-')) return null;
+  const parts = normalized.split('-').filter(Boolean);
+  if (parts.length < 2) return null;
+  if (parts.length >= 3) return parts.slice(0, -1).join('-');
+  if (!/[A-Z]/.test(parts[0])) return null;
+  return parts[0];
+}
+
+function variantFamily(product: ProductForPricing) {
+  const base = skuFamilyBase(product.sku);
+  if (!base) {
+    return {
+      variantFamilyKey: `product:${product.id}`,
+      variantFamilyName: product.name,
+      variantFamilySource: 'SELF',
+      variantSortKey: product.sku,
+    };
+  }
+
+  return {
+    variantFamilyKey: `sku:${base}`,
+    variantFamilyName: base,
+    variantFamilySource: 'SKU',
+    variantSortKey: product.sku,
+  };
+}
+
 function calculatePrice(product: ProductForPricing, shop: ShopForPricing, state: PricingState) {
   const rule = resolveRule(product, shop.id, state);
   const productGroups = state.groupsByProduct.get(product.id) ?? [];
   const primaryGroup = productGroups[0] ?? null;
   const ruleGroup = rule?.priceGroup ?? null;
   const visibleGroup = ruleGroup ?? primaryGroup;
+  const family = variantFamily(product);
   const { costBasis, costSource } = resolveCostBasis(product);
   const marginPercent = decimal(rule?.marginPercent) ?? decimal(state.settings.defaultMarginPercent) ?? new Prisma.Decimal(DEFAULT_PRICING.marginPercent);
   const minProfit = decimal(rule?.minProfit) ?? decimal(state.settings.defaultMinProfit) ?? new Prisma.Decimal(DEFAULT_PRICING.minProfit);
@@ -606,6 +647,7 @@ function calculatePrice(product: ProductForPricing, shop: ShopForPricing, state:
       infoCode: null as PricingInfoCode,
       overridesGroup,
       syncMode,
+      ...family,
     };
   }
 
@@ -674,10 +716,29 @@ function calculatePrice(product: ProductForPricing, shop: ShopForPricing, state:
     infoCode,
     overridesGroup,
     syncMode,
+    ...family,
   };
 }
 
-type PricingItem = ReturnType<typeof calculatePrice>;
+type BasePricingItem = ReturnType<typeof calculatePrice>;
+type PricingItem = BasePricingItem & {
+  isVariantFamily?: boolean;
+  variantCount?: number;
+  variantProductIds?: string[];
+  variants?: PricingItem[];
+  familyStats?: {
+    minCostBasis: number | null;
+    maxCostBasis: number | null;
+    minNetPrice: number | null;
+    maxNetPrice: number | null;
+    minGrossPrice: number | null;
+    maxGrossPrice: number | null;
+    ready: number;
+    warnings: number;
+    missingPrice: number;
+    overridesGroup: number;
+  };
+};
 
 export async function previewPricing(input: PricingProductsInput = {}) {
   const tenantId = requireTenantId();
@@ -850,6 +911,119 @@ export async function syncPricing(input: PricingProductsInput = {}) {
   return { ...preview, enqueued, errors };
 }
 
+function numericValues(items: PricingItem[], field: keyof PricingItem) {
+  return items
+    .map((item) => Number(item[field]))
+    .filter((value) => Number.isFinite(value));
+}
+
+function minOrNull(values: number[]) {
+  return values.length ? Math.min(...values) : null;
+}
+
+function maxOrNull(values: number[]) {
+  return values.length ? Math.max(...values) : null;
+}
+
+function commonPrefix(values: string[]) {
+  if (values.length === 0) return '';
+  let prefix = values[0] ?? '';
+  for (const value of values.slice(1)) {
+    let index = 0;
+    while (index < prefix.length && index < value.length && prefix[index]?.toLowerCase() === value[index]?.toLowerCase()) {
+      index += 1;
+    }
+    prefix = prefix.slice(0, index);
+    if (!prefix) break;
+  }
+  return prefix.replace(/[\s,;:./\\()[\]{}_-]+$/g, '').trim();
+}
+
+function familyDisplayName(items: PricingItem[], fallback: string) {
+  const prefix = commonPrefix(items.map((item) => item.name ?? '').filter(Boolean));
+  if (prefix.length >= 8) return prefix;
+  const firstName = items[0]?.name?.replace(/\s+[-–—]\s+.*$/, '').replace(/,\s*.*$/, '').trim();
+  return firstName && firstName.length >= 8 ? firstName : fallback;
+}
+
+function decorateVariantFamily(items: PricingItem[]) {
+  if (items.length === 0) return [];
+  const variantProductIds = items.map((item) => item.warehouseProductId);
+  const variantCount = items.length;
+  const costValues = numericValues(items, 'costBasis');
+  const netValues = numericValues(items, 'netPrice');
+  const grossValues = numericValues(items, 'grossPrice');
+
+  return items.map((item) => ({
+    ...item,
+    variantCount,
+    variantProductIds,
+    familyStats: {
+      minCostBasis: minOrNull(costValues),
+      maxCostBasis: maxOrNull(costValues),
+      minNetPrice: minOrNull(netValues),
+      maxNetPrice: maxOrNull(netValues),
+      minGrossPrice: minOrNull(grossValues),
+      maxGrossPrice: maxOrNull(grossValues),
+      ready: items.filter((variant) => variant.netPrice !== null).length,
+      warnings: items.filter((variant) => variant.warningCode).length,
+      missingPrice: items.filter((variant) => variant.netPrice === null).length,
+      overridesGroup: items.filter((variant) => variant.overridesGroup).length,
+    },
+  }));
+}
+
+function groupVariantPricingItems(items: PricingItem[]) {
+  const groups = new Map<string, PricingItem[]>();
+  for (const item of items) {
+    const key = item.variantFamilyKey || `product:${item.warehouseProductId}`;
+    const list = groups.get(key) ?? [];
+    list.push(item);
+    groups.set(key, list);
+  }
+
+  const result: PricingItem[] = [];
+  for (const groupItems of groups.values()) {
+    const sorted = [...groupItems].sort((a, b) => String(a.variantSortKey ?? a.sku).localeCompare(String(b.variantSortKey ?? b.sku)));
+    const decorated = decorateVariantFamily(sorted);
+    if (decorated.length <= 1) {
+      result.push(decorated[0]);
+      continue;
+    }
+
+    const representative = decorated.find((item) => !item.warningCode && item.netPrice !== null)
+      ?? decorated.find((item) => item.netPrice !== null)
+      ?? decorated[0];
+    result.push({
+      ...representative,
+      isVariantFamily: true,
+      variantFamilyName: familyDisplayName(decorated, representative.variantFamilyName ?? representative.name),
+      variantCount: decorated.length,
+      variantProductIds: decorated.map((item) => item.warehouseProductId),
+      variants: decorated,
+      familyStats: decorated[0].familyStats,
+    });
+  }
+
+  return result;
+}
+
+function decorateFlatVariantPricingItems(items: PricingItem[]) {
+  const grouped = new Map<string, PricingItem[]>();
+  for (const item of items) {
+    const key = item.variantFamilyKey || `product:${item.warehouseProductId}`;
+    const list = grouped.get(key) ?? [];
+    list.push(item);
+    grouped.set(key, list);
+  }
+
+  return items.map((item) => {
+    const variants = grouped.get(item.variantFamilyKey || `product:${item.warehouseProductId}`) ?? [item];
+    const decorated = decorateVariantFamily(variants);
+    return decorated.find((variant) => variant.warehouseProductId === item.warehouseProductId) ?? item;
+  });
+}
+
 export async function getPricingProducts(query: PricingProductsQuery) {
   const tenantId = requireTenantId();
   if (!query.shopId) throw new Error('Wybierz sklep dla widoku cennika');
@@ -857,6 +1031,7 @@ export async function getPricingProducts(query: PricingProductsQuery) {
   const limit = normalizePage(query.limit, 50, 200);
   const search = normalizeSearch(query.search);
   const categoryIds = normalizeCategoryIdSet(query);
+  const groupVariants = normalizeBoolean(query.groupVariants, false);
   const productWhere: Prisma.WarehouseProductWhereInput = {
     tenantId,
     isActive: true,
@@ -913,12 +1088,19 @@ export async function getPricingProducts(query: PricingProductsQuery) {
     if (statusFilter === 'BELOW_COST') return item.warningCode === 'BELOW_COST';
     return true;
   });
-  const total = filtered.length;
+  const presentationItems = groupVariants ? groupVariantPricingItems(filtered) : decorateFlatVariantPricingItems(filtered);
+  const total = presentationItems.length;
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const offset = (Math.min(page, totalPages) - 1) * limit;
   return {
     summary: buildPricingSummary(baseItems),
-    data: filtered.slice(offset, offset + limit),
+    variantSummary: {
+      products: filtered.length,
+      families: presentationItems.filter((item) => item.isVariantFamily || (item.variantCount ?? 1) > 1).length,
+      collapsedProducts: presentationItems.reduce((sum, item) => sum + Math.max(0, (item.variantCount ?? 1) - 1), 0),
+      grouped: groupVariants,
+    },
+    data: presentationItems.slice(offset, offset + limit),
     page: Math.min(page, totalPages),
     limit,
     total,

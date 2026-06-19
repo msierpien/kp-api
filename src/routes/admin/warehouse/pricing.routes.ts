@@ -66,6 +66,7 @@ export async function registerWarehousePricingRoutes(fastify: FastifyInstance) {
           priceGroupId: { type: 'string' },
           categoryId: { type: 'string' },
           categoryIds: { type: 'string' },
+          groupVariants: { anyOf: [{ type: 'boolean' }, { type: 'string' }] },
           source: { type: 'string', enum: ['ALL', 'PRODUCT', 'GROUP', 'CATALOG', 'SHOP', 'DEFAULT', 'CEILING_FALLBACK'] },
           status: { type: 'string', enum: ['ALL', 'READY', 'MISSING_PRICE', 'WARNING', 'ALERT', 'NO_GROUP', 'OVERRIDES_GROUP', 'BELOW_COST'] },
           page: { type: 'integer', minimum: 1 },

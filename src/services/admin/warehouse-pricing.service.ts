@@ -1,8 +1,10 @@
 import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
+import { decrypt } from '../../lib/encryption';
 import { getTenantId } from '../../lib/tenant-context';
 import { syncProductPrice } from '../price/price-sync.service';
 import type { PriceSyncTriggeredBy } from '../queue/price-sync.queue';
+import { PrestaShopClient, type PrestaShopCategoryDetails } from '../prestashop/prestashop-client';
 
 export type PricingRuleLevel = 'GLOBAL' | 'SHOP' | 'CATALOG' | 'GROUP' | 'PRODUCT';
 export type PricingPriceMode = 'MARGIN' | 'FIXED';
@@ -120,6 +122,10 @@ const DEFAULT_PRICING = {
 
 const MAX_PRICING_PRODUCTS = 500;
 const MAX_PRICING_LIST_PRODUCTS = 5000;
+const CATEGORY_LISTING_CACHE_TTL_MS = 5 * 60 * 1000;
+const CATEGORY_LISTING_MAX_PAGES = 50;
+
+const categoryListingProductIdsCache = new Map<string, { expiresAt: number; externalProductIds: string[] }>();
 
 const productPricingInclude = {
   catalog: { select: { id: true, name: true } },
@@ -214,6 +220,20 @@ function normalizeCategoryIdSet(query: PricingProductsQuery) {
     .map((value) => value.trim())
     .filter((value) => value && value !== 'ALL');
   return new Set(ids);
+}
+
+function normalizeCategoryId(value: unknown) {
+  const id = String(value ?? '').trim();
+  return id && id !== 'ALL' ? id : null;
+}
+
+function categorySlug(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
 function validatePriceMode(value: PricingPriceMode | undefined) {
@@ -536,9 +556,8 @@ function resolveCostBasis(product: ProductForPricing): { costBasis: Prisma.Decim
   return { costBasis: null, costSource: null };
 }
 
-function snapshotCategoryIds(product: ProductForPricingList, shopId: string) {
-  const snapshot = product.productChannelSnapshots?.find((item) => item.shopId === shopId) ?? null;
-  const root = toRecord(snapshot?.payloadJson);
+function categoryIdsFromSnapshotPayload(payloadJson: Prisma.JsonValue | null | undefined) {
+  const root = toRecord(payloadJson);
   const parameters = toRecord(root.parameters);
   const identity = toRecord(root.identity);
   const rawCategories = toArray(root.categories).length > 0 ? toArray(root.categories) : toArray(parameters.categories);
@@ -562,6 +581,11 @@ function snapshotCategoryIds(product: ProductForPricingList, shopId: string) {
   return ids;
 }
 
+function snapshotCategoryIds(product: ProductForPricingList, shopId: string) {
+  const snapshot = product.productChannelSnapshots?.find((item) => item.shopId === shopId) ?? null;
+  return categoryIdsFromSnapshotPayload(snapshot?.payloadJson);
+}
+
 function productMatchesCategories(product: ProductForPricingList, shopId: string, categoryIds: Set<string>) {
   if (categoryIds.size === 0) return true;
   const productCategoryIds = snapshotCategoryIds(product, shopId);
@@ -569,6 +593,115 @@ function productMatchesCategories(product: ProductForPricingList, shopId: string
     if (productCategoryIds.has(categoryId)) return true;
   }
   return false;
+}
+
+type PricingCategoryShop = {
+  id: string;
+  tenantId: string;
+  name: string;
+  platform: string;
+  baseUrl: string;
+  apiKey: string;
+  configJson: Prisma.JsonValue | null;
+};
+
+function publicCategoryUrl(shop: PricingCategoryShop, category: PrestaShopCategoryDetails) {
+  const baseUrl = shop.baseUrl.replace(/\/+$/, '').replace(/\/api$/, '');
+  const rewrite = category.linkRewrite?.trim() || categorySlug(category.name) || category.id;
+  return `${baseUrl}/${encodeURIComponent(category.id)}-${encodeURIComponent(rewrite)}`;
+}
+
+async function fetchPublicCategoryProductIds(shop: PricingCategoryShop, categoryId: string) {
+  if (shop.platform !== 'PRESTASHOP') return [];
+
+  const cacheKey = `${shop.id}:${categoryId}`;
+  const cached = categoryListingProductIdsCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.externalProductIds;
+
+  try {
+    const config = toRecord(shop.configJson);
+    const client = new PrestaShopClient({
+      baseUrl: shop.baseUrl,
+      apiKey: decrypt(shop.apiKey),
+      authType: stringValue(config.authType) === 'ADMIN_API' ? 'ADMIN_API' : 'WEB_SERVICE',
+      adminApiConfig: config.authType === 'ADMIN_API' ? (config.adminApi as any) : undefined,
+    });
+    const category = await client.fetchCategory(categoryId);
+    const baseUrl = publicCategoryUrl(shop, category);
+    const externalProductIds = new Set<string>();
+
+    for (let page = 1; page <= CATEGORY_LISTING_MAX_PAGES; page++) {
+      const url = page === 1 ? baseUrl : `${baseUrl}?page=${page}`;
+      const response = await fetch(url, {
+        headers: { 'user-agent': 'KP Admin category pricing lookup' },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!response.ok) break;
+
+      const html = await response.text();
+      for (const match of html.matchAll(/data-id-product=["'](\d+)["']/g)) {
+        if (match[1]) externalProductIds.add(match[1]);
+      }
+
+      const nextPagePattern = new RegExp(`[?&]page=${page + 1}(?:["'&<])`);
+      if (!nextPagePattern.test(html)) break;
+    }
+
+    const result = Array.from(externalProductIds);
+    categoryListingProductIdsCache.set(cacheKey, {
+      expiresAt: Date.now() + CATEGORY_LISTING_CACHE_TTL_MS,
+      externalProductIds: result,
+    });
+    return result;
+  } catch {
+    categoryListingProductIdsCache.set(cacheKey, {
+      expiresAt: Date.now() + 30_000,
+      externalProductIds: [],
+    });
+    return [];
+  }
+}
+
+async function resolveCategoryWarehouseProductIds(
+  tenantId: string,
+  shop: PricingCategoryShop,
+  query: PricingProductsQuery,
+  categoryIds: Set<string>,
+) {
+  const productIds = new Set<string>();
+
+  const snapshots = await prisma.productChannelSnapshot.findMany({
+    where: { tenantId, shopId: shop.id },
+    select: { warehouseProductId: true, shopId: true, payloadJson: true },
+  });
+  for (const snapshot of snapshots) {
+    const snapshotCategoryIds = categoryIdsFromSnapshotPayload(snapshot.payloadJson);
+    if (Array.from(categoryIds).some((categoryId) => snapshotCategoryIds.has(categoryId))) {
+      productIds.add(snapshot.warehouseProductId);
+    }
+  }
+
+  const selectedCategoryId = normalizeCategoryId(query.categoryId);
+  if (selectedCategoryId) {
+    const externalProductIds = await fetchPublicCategoryProductIds(shop, selectedCategoryId);
+    if (externalProductIds.length > 0) {
+      const mappings = await prisma.shopProductMapping.findMany({
+        where: {
+          tenantId,
+          shopId: shop.id,
+          isActive: true,
+          externalProductId: { in: externalProductIds },
+          warehouseProductId: { not: null },
+        },
+        select: { warehouseProductId: true },
+      });
+      for (const mapping of mappings) {
+        if (mapping.warehouseProductId) productIds.add(mapping.warehouseProductId);
+      }
+    }
+  }
+
+  return productIds;
 }
 
 function skuFamilyBase(sku: string) {
@@ -1032,9 +1165,31 @@ export async function getPricingProducts(query: PricingProductsQuery) {
   const search = normalizeSearch(query.search);
   const categoryIds = normalizeCategoryIdSet(query);
   const groupVariants = normalizeBoolean(query.groupVariants, false);
+
+  const [shop, state] = await Promise.all([
+    prisma.shop.findFirst({
+      where: { tenantId, status: 'ACTIVE', id: query.shopId },
+      select: {
+        id: true,
+        tenantId: true,
+        name: true,
+        platform: true,
+        baseUrl: true,
+        apiKey: true,
+        configJson: true,
+      },
+    }),
+    loadPricingState(tenantId),
+  ]);
+  if (!shop) throw new Error('Sklep nie istnieje albo nie jest aktywny');
+
+  const categoryProductIds = categoryIds.size > 0
+    ? await resolveCategoryWarehouseProductIds(tenantId, shop, query, categoryIds)
+    : null;
   const productWhere: Prisma.WarehouseProductWhereInput = {
     tenantId,
     isActive: true,
+    ...(categoryProductIds ? { id: { in: Array.from(categoryProductIds) } } : {}),
     ...(search ? {
       OR: [
         { sku: { contains: search, mode: 'insensitive' } },
@@ -1048,32 +1203,21 @@ export async function getPricingProducts(query: PricingProductsQuery) {
         : { priceGroupMembers: { some: { priceGroupId: query.priceGroupId } } }
       : {}),
   };
-  const [products, shops, state] = await Promise.all([
-    prisma.warehouseProduct.findMany({
-      where: productWhere,
-      take: MAX_PRICING_LIST_PRODUCTS,
-      include: {
-        ...productPricingInclude,
-        productChannelSnapshots: {
-          where: { shopId: query.shopId },
-          select: { shopId: true, payloadJson: true },
-        },
-      },
-      orderBy: { name: 'asc' },
-    }),
-    prisma.shop.findMany({
-      where: { tenantId, status: 'ACTIVE', id: query.shopId },
-      select: { id: true, name: true },
-    }),
-    loadPricingState(tenantId),
-  ]);
-  const shop = shops[0];
-  if (!shop) throw new Error('Sklep nie istnieje albo nie jest aktywny');
 
-  const categoryProducts = categoryIds.size > 0
-    ? products.filter((product) => productMatchesCategories(product, query.shopId, categoryIds))
-    : products;
-  const baseItems = categoryProducts.map((product) => calculatePrice(product, shop, state));
+  const products = await prisma.warehouseProduct.findMany({
+    where: productWhere,
+    ...(categoryProductIds ? {} : { take: MAX_PRICING_LIST_PRODUCTS }),
+    include: {
+      ...productPricingInclude,
+      productChannelSnapshots: {
+        where: { shopId: query.shopId },
+        select: { shopId: true, payloadJson: true },
+      },
+    },
+    orderBy: { name: 'asc' },
+  });
+
+  const baseItems = products.map((product) => calculatePrice(product, shop, state));
   const sourceFilter = query.source && query.source !== 'ALL' ? query.source : null;
   const statusFilter = query.status && query.status !== 'ALL' ? query.status : null;
   const filtered = baseItems.filter((item) => {

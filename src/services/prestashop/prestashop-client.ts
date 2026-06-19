@@ -114,6 +114,7 @@ export interface PrestaShopProductDetails {
 export interface PrestaShopCategoryDetails {
   id: string;
   name: string;
+  linkRewrite?: string | null;
   active: boolean;
   parentId: string | null;
   levelDepth: number | null;
@@ -1235,6 +1236,7 @@ function normalizePrestaShopCategory(category: PrestaShopCategory): PrestaShopCa
   return {
     id,
     name: normalizePrestaShopLocalizedValue(category.name) || `Kategoria ${id}`,
+    linkRewrite: normalizePrestaShopLocalizedValue((category as any).link_rewrite) || null,
     active: category.active === undefined ? true : String(category.active) !== '0',
     parentId,
     levelDepth: normalizeNullableNumber(category.level_depth),

@@ -51,6 +51,8 @@ export interface PricingProductsQuery {
   shopId: string;
   search?: string;
   priceGroupId?: string;
+  categoryId?: string;
+  categoryIds?: string;
   source?: PricingPriceSource | 'ALL';
   status?: 'ALL' | 'READY' | 'MISSING_PRICE' | 'WARNING' | 'ALERT' | 'NO_GROUP' | 'OVERRIDES_GROUP' | 'BELOW_COST';
   page?: number | string;
@@ -175,6 +177,32 @@ function normalizePage(value: number | string | undefined, fallback: number, max
 function normalizeSearch(value: string | undefined) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function toArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function stringValue(value: unknown) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (typeof value === 'number' || typeof value === 'bigint') return String(value);
+  return null;
+}
+
+function normalizeCategoryIdSet(query: PricingProductsQuery) {
+  const ids = [query.categoryId, query.categoryIds]
+    .flatMap((value) => String(value ?? '').split(','))
+    .map((value) => value.trim())
+    .filter((value) => value && value !== 'ALL');
+  return new Set(ids);
 }
 
 function validatePriceMode(value: PricingPriceMode | undefined) {
@@ -385,6 +413,12 @@ type ProductForPricing = Awaited<ReturnType<typeof resolveProductsAndShops>>['pr
 type ShopForPricing = Awaited<ReturnType<typeof resolveProductsAndShops>>['shops'][number];
 type RuleForPricing = Awaited<ReturnType<typeof loadPricingRules>>[number];
 type SettingsForPricing = Awaited<ReturnType<typeof ensurePricingSettings>>;
+type ProductForPricingList = ProductForPricing & {
+  productChannelSnapshots?: Array<{
+    shopId: string;
+    payloadJson: Prisma.JsonValue;
+  }>;
+};
 
 interface PriceGroupInfo {
   id: string;
@@ -489,6 +523,41 @@ function resolveCostBasis(product: ProductForPricing): { costBasis: Prisma.Decim
   if (wholesaleCost) return { costBasis: wholesaleCost, costSource: 'WHOLESALE' };
 
   return { costBasis: null, costSource: null };
+}
+
+function snapshotCategoryIds(product: ProductForPricingList, shopId: string) {
+  const snapshot = product.productChannelSnapshots?.find((item) => item.shopId === shopId) ?? null;
+  const root = toRecord(snapshot?.payloadJson);
+  const parameters = toRecord(root.parameters);
+  const identity = toRecord(root.identity);
+  const rawCategories = toArray(root.categories).length > 0 ? toArray(root.categories) : toArray(parameters.categories);
+  const ids = new Set<string>();
+
+  for (const item of rawCategories) {
+    const directId = stringValue(item);
+    if (directId) {
+      ids.add(directId);
+      continue;
+    }
+
+    const category = toRecord(item);
+    const id = stringValue(category.id ?? category.categoryId ?? category.id_category);
+    if (id) ids.add(id);
+  }
+
+  const defaultId = stringValue(identity.idCategoryDefault ?? identity.defaultCategoryId ?? identity.id_category_default);
+  if (defaultId) ids.add(defaultId);
+
+  return ids;
+}
+
+function productMatchesCategories(product: ProductForPricingList, shopId: string, categoryIds: Set<string>) {
+  if (categoryIds.size === 0) return true;
+  const productCategoryIds = snapshotCategoryIds(product, shopId);
+  for (const categoryId of categoryIds) {
+    if (productCategoryIds.has(categoryId)) return true;
+  }
+  return false;
 }
 
 function calculatePrice(product: ProductForPricing, shop: ShopForPricing, state: PricingState) {
@@ -787,6 +856,7 @@ export async function getPricingProducts(query: PricingProductsQuery) {
   const page = normalizePage(query.page, 1);
   const limit = normalizePage(query.limit, 50, 200);
   const search = normalizeSearch(query.search);
+  const categoryIds = normalizeCategoryIdSet(query);
   const productWhere: Prisma.WarehouseProductWhereInput = {
     tenantId,
     isActive: true,
@@ -803,22 +873,32 @@ export async function getPricingProducts(query: PricingProductsQuery) {
         : { priceGroupMembers: { some: { priceGroupId: query.priceGroupId } } }
       : {}),
   };
-  const [{ products, shops }, state] = await Promise.all([
-    resolveProductsAndShops(tenantId, { shopIds: [query.shopId] }, MAX_PRICING_LIST_PRODUCTS).then(async ({ shops }) => ({
-      shops,
-      products: await prisma.warehouseProduct.findMany({
-        where: productWhere,
-        take: MAX_PRICING_LIST_PRODUCTS,
-        include: productPricingInclude,
-        orderBy: { name: 'asc' },
-      }),
-    })),
+  const [products, shops, state] = await Promise.all([
+    prisma.warehouseProduct.findMany({
+      where: productWhere,
+      take: MAX_PRICING_LIST_PRODUCTS,
+      include: {
+        ...productPricingInclude,
+        productChannelSnapshots: {
+          where: { shopId: query.shopId },
+          select: { shopId: true, payloadJson: true },
+        },
+      },
+      orderBy: { name: 'asc' },
+    }),
+    prisma.shop.findMany({
+      where: { tenantId, status: 'ACTIVE', id: query.shopId },
+      select: { id: true, name: true },
+    }),
     loadPricingState(tenantId),
   ]);
   const shop = shops[0];
   if (!shop) throw new Error('Sklep nie istnieje albo nie jest aktywny');
 
-  const baseItems = products.map((product) => calculatePrice(product, shop, state));
+  const categoryProducts = categoryIds.size > 0
+    ? products.filter((product) => productMatchesCategories(product, query.shopId, categoryIds))
+    : products;
+  const baseItems = categoryProducts.map((product) => calculatePrice(product, shop, state));
   const sourceFilter = query.source && query.source !== 'ALL' ? query.source : null;
   const statusFilter = query.status && query.status !== 'ALL' ? query.status : null;
   const filtered = baseItems.filter((item) => {

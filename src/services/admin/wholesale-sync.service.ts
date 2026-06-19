@@ -320,6 +320,7 @@ async function processWholesaleSyncBatch(input: {
   const createData: Prisma.WholesaleProductMappingCreateManyInput[] = [];
   const updateOperations: Prisma.PrismaPromise<unknown>[] = [];
   const availabilityChangedProductIds = new Set<string>();
+  const missingCostCandidates = new Map<string, Prisma.Decimal>();
 
   for (const mapped of mappedRecords) {
     const existing = existingBySku.get(mapped.externalSku);
@@ -342,6 +343,9 @@ async function processWholesaleSyncBatch(input: {
       if (existing.warehouseProductId && (wasAvailable !== isAvailable || availabilityDateChanged)) {
         availabilityChangedProductIds.add(existing.warehouseProductId);
       }
+      if (existing.warehouseProductId && isPositiveDecimal(mapped.lastKnownPrice)) {
+        missingCostCandidates.set(existing.warehouseProductId, mapped.lastKnownPrice!);
+      }
       updateOperations.push(prisma.wholesaleProductMapping.update({
         where: { id: existing.id },
         data,
@@ -361,6 +365,21 @@ async function processWholesaleSyncBatch(input: {
     : [];
   const results = await prisma.$transaction([...createOperation, ...updateOperations]);
   const created = createData.length > 0 ? (results[0] as Prisma.BatchPayload).count : 0;
+
+  const costFillOperations = Array.from(missingCostCandidates.entries()).map(([warehouseProductId, purchasePrice]) =>
+    prisma.warehouseProduct.updateMany({
+      where: {
+        id: warehouseProductId,
+        tenantId: input.tenantId,
+        purchasePrice: null,
+        averagePurchaseCost: null,
+      },
+      data: { purchasePrice },
+    }),
+  );
+  if (costFillOperations.length > 0) {
+    await prisma.$transaction(costFillOperations);
+  }
 
   await enqueueWholesaleAvailabilityStockSync(Array.from(availabilityChangedProductIds), input.tenantId);
 

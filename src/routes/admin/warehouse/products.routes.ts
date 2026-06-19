@@ -505,10 +505,10 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
       summary: 'Masowo utwórz nieaktywne szkice produktów w sklepie',
       body: {
         type: 'object',
-        required: ['shopId', 'categoryId', 'items'],
+        required: ['shopId', 'items'],
         properties: {
           shopId: { type: 'string' },
-          categoryId: { type: 'string', minLength: 1 },
+          categoryId: { type: ['string', 'null'], minLength: 1 },
           imageLimit: { type: ['integer', 'null'], minimum: 0, maximum: 20, default: 10 },
           items: {
             type: 'array',
@@ -516,10 +516,10 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
             maxItems: 50,
             items: {
               type: 'object',
-              required: ['warehouseProductId', 'price'],
+              required: ['warehouseProductId'],
               properties: {
                 warehouseProductId: { type: 'string' },
-                price: { type: 'number', minimum: 0 },
+                price: { type: ['number', 'null'], minimum: 0 },
                 sourceWholesaleMappingId: { type: ['string', 'null'] },
               },
             },

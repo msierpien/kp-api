@@ -43,7 +43,7 @@ export interface BulkShopProductPublicationPreviewInput {
 
 export interface BulkShopProductPublicationInput {
   shopId: string;
-  categoryId: string;
+  categoryId?: string | null;
   imageLimit?: number | null;
   items: ShopProductPublicationItemInput[];
 }
@@ -109,7 +109,7 @@ export interface ShopProductPublicationResultItem {
 
 export interface BulkShopProductPublicationResult {
   shopId: string;
-  categoryId: string;
+  categoryId: string | null;
   requested: number;
   created: number;
   skipped: number;
@@ -262,8 +262,7 @@ export async function createBulkShopProductsFromWarehouseProducts(
   input: BulkShopProductPublicationInput,
 ): Promise<BulkShopProductPublicationResult> {
   const tenantId = requireTenantId();
-  const categoryId = input.categoryId?.trim();
-  if (!categoryId) throw new Error('categoryId jest wymagane');
+  const categoryId = input.categoryId?.trim() || null;
 
   const imageLimit = normalizeImageLimit(input.imageLimit);
   const items = normalizeCreateItems(input.items);
@@ -342,6 +341,18 @@ export async function createBulkShopProductsFromWarehouseProducts(
           previewStatus: preview.status,
           warnings: [],
           message: preview.messages.join('; ') || 'Produkt nie jest gotowy do utworzenia',
+        });
+        continue;
+      }
+
+      if (!categoryId) {
+        resultItems.push({
+          warehouseProductId: product.id,
+          sku: product.sku,
+          status: 'SKIPPED',
+          previewStatus: preview.status,
+          warnings: [],
+          message: 'Wybierz kategorię PrestaShop, żeby utworzyć nowy produkt',
         });
         continue;
       }

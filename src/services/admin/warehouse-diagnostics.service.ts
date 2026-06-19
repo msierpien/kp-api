@@ -361,9 +361,24 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
     ...productBaseWhere,
     shopProductMappings: { none: { isActive: true } },
   };
+  const activeWholesaleMappingFilter = {
+    isActive: true,
+    provider: { isActive: true },
+  };
+  const availableWholesaleMappingFilter = {
+    ...activeWholesaleMappingFilter,
+    lastKnownStock: { gt: 0 },
+  };
   const withoutWholesaleOfferWhere: Prisma.WarehouseProductWhereInput = {
     ...productBaseWhere,
-    wholesaleMappings: { none: { isActive: true } },
+    wholesaleMappings: { none: activeWholesaleMappingFilter },
+  };
+  const productsWithUnavailableWholesaleOfferWhere: Prisma.WarehouseProductWhereInput = {
+    ...productBaseWhere,
+    AND: [
+      { wholesaleMappings: { some: activeWholesaleMappingFilter } },
+      { wholesaleMappings: { none: availableWholesaleMappingFilter } },
+    ],
   };
   const failedStockSyncWhere: Prisma.StockSyncLogWhereInput = {
     tenantId,
@@ -390,6 +405,7 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
     productsWithoutBarcodeCount,
     productsWithoutShopMappingCount,
     productsWithoutWholesaleOfferCount,
+    productsWithUnavailableWholesaleOfferCount,
     failedStockSyncLogsCount,
     failedPriceSyncLogsCount,
     failedWholesaleSyncLogsCount,
@@ -399,6 +415,7 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
     productsWithoutBarcode,
     productsWithoutShopMapping,
     productsWithoutWholesaleOffer,
+    productsWithUnavailableWholesaleOffer,
     failedStockSyncLogs,
     failedPriceSyncLogs,
     failedWholesaleSyncLogs,
@@ -411,6 +428,7 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
     prisma.warehouseProduct.count({ where: withoutBarcodeWhere }),
     prisma.warehouseProduct.count({ where: withoutShopMappingWhere }),
     prisma.warehouseProduct.count({ where: withoutWholesaleOfferWhere }),
+    prisma.warehouseProduct.count({ where: productsWithUnavailableWholesaleOfferWhere }),
     prisma.stockSyncLog.count({ where: failedStockSyncWhere }),
     prisma.priceSyncLog.count({ where: failedPriceSyncWhere }),
     prisma.wholesaleSyncLog.count({ where: failedWholesaleSyncWhere }),
@@ -441,6 +459,12 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
     }),
     prisma.warehouseProduct.findMany({
       where: withoutWholesaleOfferWhere,
+      take: limit,
+      orderBy: { name: 'asc' },
+      include: { catalog: true },
+    }),
+    prisma.warehouseProduct.findMany({
+      where: productsWithUnavailableWholesaleOfferWhere,
       take: limit,
       orderBy: { name: 'asc' },
       include: { catalog: true },
@@ -483,6 +507,7 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
       productsWithoutBarcode: productsWithoutBarcodeCount,
       productsWithoutShopMapping: productsWithoutShopMappingCount,
       productsWithoutWholesaleOffer: productsWithoutWholesaleOfferCount,
+      productsWithUnavailableWholesaleOffer: productsWithUnavailableWholesaleOfferCount,
       failedStockSyncLogs: failedStockSyncLogsCount,
       failedPriceSyncLogs: failedPriceSyncLogsCount,
       failedWholesaleSyncLogs: failedWholesaleSyncLogsCount,
@@ -499,6 +524,7 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
       productsWithoutBarcode,
       productsWithoutShopMapping,
       productsWithoutWholesaleOffer,
+      productsWithUnavailableWholesaleOffer,
       failedStockSyncLogs,
       failedPriceSyncLogs,
       failedWholesaleSyncLogs,

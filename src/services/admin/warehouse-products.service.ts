@@ -356,6 +356,7 @@ const PRODUCT_VIEW_QUERIES = {
   withoutEan: { isActive: true, hasBarcode: false },
   withoutMapping: { isActive: true, hasShopMapping: false },
   withoutWholesaleOffer: { isActive: true, hasWholesaleOffer: false },
+  wholesaleUnavailable: { isActive: true, wholesaleStockStatus: 'unavailable' },
   withoutPrice: { isActive: true, missingPrice: 'retail' },
 } satisfies Record<string, ProductsWhereQuery>;
 

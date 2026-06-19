@@ -74,6 +74,7 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
             withoutEan: { type: 'integer' },
             withoutMapping: { type: 'integer' },
             withoutWholesaleOffer: { type: 'integer' },
+            wholesaleUnavailable: { type: 'integer' },
             withoutPrice: { type: 'integer' },
           },
         },

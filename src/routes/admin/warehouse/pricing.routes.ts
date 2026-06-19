@@ -67,7 +67,7 @@ export async function registerWarehousePricingRoutes(fastify: FastifyInstance) {
           categoryId: { type: 'string' },
           categoryIds: { type: 'string' },
           groupVariants: { anyOf: [{ type: 'boolean' }, { type: 'string' }] },
-          source: { type: 'string', enum: ['ALL', 'PRODUCT', 'GROUP', 'CATALOG', 'SHOP', 'DEFAULT', 'CEILING_FALLBACK'] },
+          source: { type: 'string', enum: ['ALL', 'CLEARANCE', 'PRODUCT', 'GROUP', 'CATALOG', 'SHOP', 'DEFAULT', 'CEILING_FALLBACK'] },
           status: { type: 'string', enum: ['ALL', 'READY', 'MISSING_PRICE', 'WARNING', 'ALERT', 'NO_GROUP', 'OVERRIDES_GROUP', 'BELOW_COST'] },
           page: { type: 'integer', minimum: 1 },
           limit: { type: 'integer', minimum: 1, maximum: 200 },
@@ -121,6 +121,30 @@ export async function registerWarehousePricingRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.get('/pricing/groups/:id/members', {
+    schema: {
+      tags: ['warehouse-pricing'],
+      summary: 'Lista produktów w grupie cenowej',
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      querystring: {
+        type: 'object',
+        properties: {
+          page: { type: 'integer', minimum: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 100 },
+          search: { type: 'string' },
+          shopId: { type: 'string' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string }; Querystring: pricingService.PriceGroupMembersQuery }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await pricingService.listPriceGroupMembers(request.params.id, request.query));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania produktów grupy';
+      return reply.status(message.includes('nie znaleziona') ? 404 : 400).send({ error: 'Error', message });
+    }
+  });
+
   fastify.post('/pricing/groups/:id/members', {
     schema: {
       tags: ['warehouse-pricing'],
@@ -168,6 +192,78 @@ export async function registerWarehousePricingRoutes(fastify: FastifyInstance) {
       return reply.send(await pricingService.setPriceGroupPrice(request.params.id, request.body));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd ustawiania ceny grupy';
+      return reply.status(message.includes('nie znaleziona') ? 404 : 400).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.get('/pricing/clearances', {
+    schema: {
+      tags: ['warehouse-pricing'],
+      summary: 'Lista wyprzedaży cennika',
+      querystring: {
+        type: 'object',
+        properties: {
+          scope: { type: 'string', enum: ['PRODUCT', 'GROUP'] },
+          warehouseProductId: { type: 'string' },
+          priceGroupId: { type: 'string' },
+          shopId: { type: 'string' },
+          isActive: { anyOf: [{ type: 'boolean' }, { type: 'string' }] },
+          page: { type: 'integer', minimum: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 100 },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: pricingService.ClearanceQuery }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await pricingService.listClearances(request.query));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania wyprzedaży';
+      return reply.status(400).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/pricing/clearances', {
+    schema: {
+      tags: ['warehouse-pricing'],
+      summary: 'Utwórz wyprzedaż produktu albo grupy',
+      body: clearanceBodySchema(),
+    },
+  }, async (request: FastifyRequest<{ Body: pricingService.ClearanceInput }>, reply: FastifyReply) => {
+    try {
+      return reply.status(201).send(await pricingService.createClearance(request.body));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd tworzenia wyprzedaży';
+      return reply.status(400).send({ error: 'Bad Request', message });
+    }
+  });
+
+  fastify.patch('/pricing/clearances/:id', {
+    schema: {
+      tags: ['warehouse-pricing'],
+      summary: 'Edytuj wyprzedaż',
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      body: clearanceBodySchema(false),
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: Partial<pricingService.ClearanceInput> }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await pricingService.updateClearance(request.params.id, request.body));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd edycji wyprzedaży';
+      return reply.status(message.includes('nie znaleziona') ? 404 : 400).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.delete('/pricing/clearances/:id', {
+    schema: {
+      tags: ['warehouse-pricing'],
+      summary: 'Dezaktywuj wyprzedaż',
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await pricingService.deactivateClearance(request.params.id));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd dezaktywacji wyprzedaży';
       return reply.status(message.includes('nie znaleziona') ? 404 : 400).send({ error: 'Error', message });
     }
   });
@@ -276,6 +372,9 @@ export function pricingProductsBodySchema() {
       shopIds: { type: 'array', items: { type: 'string' } },
       catalogId: { type: 'string' },
       priceGroupId: { type: 'string' },
+      scope: { type: 'string', enum: ['SELECTED', 'FILTERED', 'GROUP', 'CATEGORY', 'SHOP'] },
+      filters: { type: 'object', additionalProperties: true },
+      allowBelowCostSync: { type: 'boolean' },
     },
   };
 }
@@ -345,6 +444,24 @@ function groupPriceBodySchema() {
       vatRate: { type: ['number', 'null'], minimum: 0 },
       roundingMode: { type: ['string', 'null'], enum: ['END_99', 'TENTH', 'CENT'] },
       syncMode: { type: ['string', 'null'], enum: ['AUTO', 'CONFIRM', 'MANUAL'] },
+    },
+  };
+}
+
+function clearanceBodySchema(requireScope = true) {
+  return {
+    type: 'object',
+    ...(requireScope ? { required: ['scope', 'clearanceNetPrice'] } : {}),
+    properties: {
+      scope: { type: 'string', enum: ['PRODUCT', 'GROUP'] },
+      warehouseProductId: { type: ['string', 'null'] },
+      priceGroupId: { type: ['string', 'null'] },
+      shopId: { type: ['string', 'null'] },
+      clearanceNetPrice: { type: 'number', minimum: 0 },
+      reason: { type: ['string', 'null'] },
+      validFrom: { type: ['string', 'null'] },
+      validTo: { type: ['string', 'null'] },
+      isActive: { type: 'boolean' },
     },
   };
 }

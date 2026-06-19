@@ -12,8 +12,10 @@ export type PricingRoundingMode = 'END_99' | 'TENTH' | 'CENT';
 export type PricingSyncMode = 'AUTO' | 'CONFIRM' | 'MANUAL';
 export type PricingWarningCode = 'MISSING_COST' | 'BELOW_COST' | 'BELOW_MIN_PROFIT' | null;
 export type PricingInfoCode = 'ABNORMAL_PROFIT' | null;
-export type PricingPriceSource = 'PRODUCT' | 'GROUP' | 'CATALOG' | 'SHOP' | 'DEFAULT' | 'CEILING_FALLBACK';
+export type PricingPriceSource = 'CLEARANCE' | 'PRODUCT' | 'GROUP' | 'CATALOG' | 'SHOP' | 'DEFAULT' | 'CEILING_FALLBACK';
 export type PricingCostSource = 'DOCUMENT' | 'WHOLESALE' | null;
+export type PricingActionScope = 'SELECTED' | 'FILTERED' | 'GROUP' | 'CATEGORY' | 'SHOP';
+export type ClearanceScope = 'PRODUCT' | 'GROUP';
 
 export interface PricingRuleInput {
   level: PricingRuleLevel;
@@ -46,6 +48,9 @@ export interface PricingProductsInput {
   shopIds?: string[];
   catalogId?: string;
   priceGroupId?: string;
+  scope?: PricingActionScope;
+  filters?: PricingProductsQuery;
+  allowBelowCostSync?: boolean;
   triggeredBy?: PriceSyncTriggeredBy;
 }
 
@@ -95,6 +100,13 @@ export interface PriceGroupMembersInput {
   productIds: string[];
 }
 
+export interface PriceGroupMembersQuery {
+  page?: number | string;
+  limit?: number | string;
+  search?: string;
+  shopId?: string;
+}
+
 export interface PriceGroupPriceInput {
   shopId?: string | null;
   marginPercent?: number | null;
@@ -109,6 +121,28 @@ export interface PriceGroupPriceInput {
 
 export interface RevertProductToGroupInput {
   shopId: string;
+}
+
+export interface ClearanceQuery {
+  scope?: ClearanceScope;
+  warehouseProductId?: string;
+  priceGroupId?: string;
+  shopId?: string;
+  isActive?: boolean | string;
+  page?: number | string;
+  limit?: number | string;
+}
+
+export interface ClearanceInput {
+  scope: ClearanceScope;
+  warehouseProductId?: string | null;
+  priceGroupId?: string | null;
+  shopId?: string | null;
+  clearanceNetPrice: number;
+  reason?: string | null;
+  validFrom?: string | Date | null;
+  validTo?: string | Date | null;
+  isActive?: boolean;
 }
 
 const DEFAULT_PRICING = {
@@ -196,6 +230,13 @@ function normalizeBoolean(value: boolean | string | undefined, fallback = false)
     if (['0', 'false', 'no', 'nie'].includes(normalized)) return false;
   }
   return fallback;
+}
+
+function normalizeOptionalDate(value: string | Date | null | undefined, label: string) {
+  if (value === null || value === undefined || value === '') return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) throw new Error(`${label} ma nieprawidłową datę`);
+  return date;
 }
 
 function toRecord(value: unknown): Record<string, unknown> {
@@ -447,6 +488,7 @@ async function resolveProductsAndShops(tenantId: string, input: PricingProductsI
 type ProductForPricing = Awaited<ReturnType<typeof resolveProductsAndShops>>['products'][number];
 type ShopForPricing = Awaited<ReturnType<typeof resolveProductsAndShops>>['shops'][number];
 type RuleForPricing = Awaited<ReturnType<typeof loadPricingRules>>[number];
+type ClearanceForPricing = Awaited<ReturnType<typeof loadActiveClearances>>[number];
 type SettingsForPricing = Awaited<ReturnType<typeof ensurePricingSettings>>;
 type ProductForPricingList = ProductForPricing & {
   productChannelSnapshots?: Array<{
@@ -464,6 +506,7 @@ interface PriceGroupInfo {
 interface PricingState {
   settings: SettingsForPricing;
   rules: RuleForPricing[];
+  clearances: ClearanceForPricing[];
   groupsByProduct: Map<string, PriceGroupInfo[]>;
 }
 
@@ -475,10 +518,29 @@ async function loadPricingRules(tenantId: string) {
   });
 }
 
+async function loadActiveClearances(tenantId: string) {
+  const now = new Date();
+  return prisma.warehouseClearance.findMany({
+    where: {
+      tenantId,
+      isActive: true,
+      OR: [{ validFrom: null }, { validFrom: { lte: now } }],
+      AND: [{ OR: [{ validTo: null }, { validTo: { gte: now } }] }],
+    },
+    include: {
+      priceGroup: { select: { id: true, name: true, priority: true } },
+      warehouseProduct: { select: { id: true, sku: true, name: true } },
+      shop: { select: { id: true, name: true } },
+    },
+    orderBy: { updatedAt: 'desc' },
+  });
+}
+
 async function loadPricingState(tenantId: string): Promise<PricingState> {
-  const [settings, rules, members] = await Promise.all([
+  const [settings, rules, clearances, members] = await Promise.all([
     ensurePricingSettings(tenantId),
     loadPricingRules(tenantId),
+    loadActiveClearances(tenantId),
     prisma.warehousePriceGroupMember.findMany({
       where: { tenantId, priceGroup: { isActive: true } },
       include: { priceGroup: { select: { id: true, name: true, priority: true } } },
@@ -493,7 +555,7 @@ async function loadPricingState(tenantId: string): Promise<PricingState> {
   for (const groups of groupsByProduct.values()) {
     groups.sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name));
   }
-  return { settings, rules, groupsByProduct };
+  return { settings, rules, clearances, groupsByProduct };
 }
 
 function rulePriority(rule: RuleForPricing, product: ProductForPricing, shopId: string, productGroups: PriceGroupInfo[]) {
@@ -597,6 +659,33 @@ function productMatchesCategories(product: ProductForPricingList, shopId: string
     if (productCategoryIds.has(categoryId)) return true;
   }
   return false;
+}
+
+function clearancePriority(clearance: ClearanceForPricing, product: ProductForPricing, shopId: string, productGroups: PriceGroupInfo[]) {
+  const groupIds = new Set(productGroups.map((group) => group.id));
+  const shopMatches = clearance.shopId === shopId;
+  const globalShop = !clearance.shopId;
+
+  if (clearance.scope === 'PRODUCT' && clearance.warehouseProductId === product.id && shopMatches) return 100;
+  if (clearance.scope === 'PRODUCT' && clearance.warehouseProductId === product.id && globalShop) return 98;
+  if (clearance.scope === 'GROUP' && clearance.priceGroupId && groupIds.has(clearance.priceGroupId) && shopMatches) return 96;
+  if (clearance.scope === 'GROUP' && clearance.priceGroupId && groupIds.has(clearance.priceGroupId) && globalShop) return 94;
+  return 0;
+}
+
+function pickActiveClearance(product: ProductForPricing, shopId: string, state: PricingState, productGroups: PriceGroupInfo[]) {
+  return (state.clearances ?? [])
+    .map((clearance) => ({
+      clearance,
+      priority: clearancePriority(clearance, product, shopId, productGroups),
+      groupPriority: clearance.scope === 'GROUP' ? clearance.priceGroup?.priority ?? 0 : 0,
+    }))
+    .filter((item) => item.priority > 0)
+    .sort((a, b) =>
+      b.priority - a.priority ||
+      b.groupPriority - a.groupPriority ||
+      b.clearance.updatedAt.getTime() - a.clearance.updatedAt.getTime(),
+    )[0]?.clearance ?? null;
 }
 
 type PricingCategoryShop = {
@@ -755,6 +844,60 @@ function calculatePrice(product: ProductForPricing, shop: ShopForPricing, state:
   const costCeilingEnabled = rule?.costCeilingEnabled ?? state.settings.costCeilingEnabledDefault ?? DEFAULT_PRICING.costCeilingEnabledDefault;
   const baseSource = sourceFromRule(rule);
   const overridesGroup = baseSource === 'PRODUCT' && productGroups.length > 0;
+  const clearance = pickActiveClearance(product, shop.id, state, productGroups);
+
+  if (clearance) {
+    const clearanceGroup = clearance.priceGroup ?? visibleGroup;
+    const netPrice = toMoney(decimal(clearance.clearanceNetPrice)!);
+    const grossPrice = toMoney(netPrice.mul(new Prisma.Decimal(1).plus(vatRate.div(100))));
+    const profitAmount = costBasis ? toMoney(netPrice.minus(costBasis)) : null;
+    const realizedMarginPercent = costBasis && profitAmount ? Number(profitAmount.div(costBasis).mul(100).toFixed(3)) : null;
+    let warningCode: PricingWarningCode = null;
+    let warningMessage: string | null = null;
+
+    if (!costBasis) {
+      warningCode = 'MISSING_COST';
+      warningMessage = 'Brak kosztu bazowego produktu';
+    } else if (netPrice.lessThan(costBasis)) {
+      warningCode = 'BELOW_COST';
+      warningMessage = 'Cena wyprzedażowa jest niższa od kosztu bazowego';
+    } else if (profitAmount && profitAmount.lessThan(minProfit)) {
+      warningCode = 'BELOW_MIN_PROFIT';
+      warningMessage = 'Cena wyprzedażowa jest poniżej minimalnego zysku';
+    }
+
+    return {
+      shopId: shop.id,
+      shopName: shop.name,
+      warehouseProductId: product.id,
+      sku: product.sku,
+      name: product.name,
+      catalogName: product.catalog?.name ?? null,
+      primaryEan: product.barcodes.find((barcode) => barcode.isPrimary)?.ean ?? product.barcodes[0]?.ean ?? null,
+      pricingRuleId: null,
+      pricingRuleLevel: null,
+      priceSource: 'CLEARANCE' as PricingPriceSource,
+      priceMode: 'FIXED' as PricingPriceMode,
+      priceGroupId: clearanceGroup?.id ?? null,
+      priceGroupName: clearanceGroup?.name ?? null,
+      clearanceId: clearance.id,
+      clearanceUntil: clearance.validTo ?? null,
+      costBasis: numberOrNull(costBasis),
+      costSource,
+      netPrice: Number(netPrice),
+      grossPrice: Number(grossPrice),
+      marginPercent: realizedMarginPercent ?? Number(marginPercent),
+      configuredMarginPercent: Number(marginPercent),
+      realizedMarginPercent,
+      profitAmount: numberOrNull(profitAmount),
+      warningCode,
+      warningMessage,
+      infoCode: null as PricingInfoCode,
+      overridesGroup,
+      syncMode,
+      ...family,
+    };
+  }
 
   if (!costBasis && !(priceMode === 'FIXED' && fixedNetPrice)) {
     return {
@@ -771,6 +914,8 @@ function calculatePrice(product: ProductForPricing, shop: ShopForPricing, state:
       priceMode,
       priceGroupId: visibleGroup?.id ?? null,
       priceGroupName: visibleGroup?.name ?? null,
+      clearanceId: null,
+      clearanceUntil: null,
       costBasis: null,
       costSource,
       netPrice: null,
@@ -840,6 +985,8 @@ function calculatePrice(product: ProductForPricing, shop: ShopForPricing, state:
     priceMode,
     priceGroupId: visibleGroup?.id ?? null,
     priceGroupName: visibleGroup?.name ?? null,
+    clearanceId: null,
+    clearanceUntil: null,
     costBasis: numberOrNull(costBasis),
     costSource,
     netPrice: Number(netPrice),
@@ -879,8 +1026,9 @@ type PricingItem = BasePricingItem & {
 
 export async function previewPricing(input: PricingProductsInput = {}) {
   const tenantId = requireTenantId();
+  const resolvedInput = await resolveScopedPricingInput(tenantId, input);
   const [{ products, shops }, state] = await Promise.all([
-    resolveProductsAndShops(tenantId, input),
+    resolveProductsAndShops(tenantId, resolvedInput),
     loadPricingState(tenantId),
   ]);
   const shopById = new Map(shops.map((shop) => [shop.id, shop]));
@@ -888,8 +1036,8 @@ export async function previewPricing(input: PricingProductsInput = {}) {
 
   for (const product of products) {
     const mappedShopIds = new Set(product.shopProductMappings.map((mapping) => mapping.shopId));
-    const targetShops = input.shopIds?.length
-      ? input.shopIds.map((shopId) => shopById.get(shopId)).filter(Boolean) as ShopForPricing[]
+    const targetShops = resolvedInput.shopIds?.length
+      ? resolvedInput.shopIds.map((shopId) => shopById.get(shopId)).filter(Boolean) as ShopForPricing[]
       : shops.filter((shop) => mappedShopIds.has(shop.id));
     for (const shop of targetShops) items.push(calculatePrice(product, shop, state));
   }
@@ -919,6 +1067,8 @@ export async function recalculatePricing(input: PricingProductsInput = {}) {
         priceMode: item.priceMode,
         priceGroupId: item.priceGroupId,
         priceGroupName: item.priceGroupName,
+        clearanceId: item.clearanceId,
+        clearanceUntil: item.clearanceUntil,
         costBasis: item.costBasis,
         netPrice: item.netPrice,
         grossPrice: item.grossPrice,
@@ -939,6 +1089,8 @@ export async function recalculatePricing(input: PricingProductsInput = {}) {
         priceMode: item.priceMode,
         priceGroupId: item.priceGroupId,
         priceGroupName: item.priceGroupName,
+        clearanceId: item.clearanceId,
+        clearanceUntil: item.clearanceUntil,
         costBasis: item.costBasis,
         netPrice: item.netPrice,
         grossPrice: item.grossPrice,
@@ -1027,6 +1179,14 @@ export async function syncPricing(input: PricingProductsInput = {}) {
   for (const item of preview.items) {
     if (item.netPrice === null) {
       errors.push({ warehouseProductId: item.warehouseProductId, shopId: item.shopId, message: item.warningMessage ?? 'Brak ceny do synchronizacji' });
+      continue;
+    }
+    if (item.warningCode === 'BELOW_COST' && !input.allowBelowCostSync) {
+      errors.push({
+        warehouseProductId: item.warehouseProductId,
+        shopId: item.shopId,
+        message: 'Cena jest poniżej kosztu. Potwierdź synchronizację poniżej kosztu, aby wysłać ją do sklepu.',
+      });
       continue;
     }
     try {
@@ -1161,6 +1321,114 @@ function decorateFlatVariantPricingItems(items: PricingItem[]) {
   });
 }
 
+function itemMatchesPricingFilters(item: PricingItem, source?: PricingPriceSource | 'ALL', status?: PricingProductsQuery['status']) {
+  const sourceFilter = source && source !== 'ALL' ? source : null;
+  const statusFilter = status && status !== 'ALL' ? status : null;
+  if (sourceFilter && item.priceSource !== sourceFilter) return false;
+  if (!statusFilter) return true;
+  if (statusFilter === 'READY') return item.netPrice !== null && !item.warningCode && !item.infoCode && !item.overridesGroup;
+  if (statusFilter === 'MISSING_PRICE') return item.netPrice === null || item.warningCode === 'MISSING_COST';
+  if (statusFilter === 'WARNING') return Boolean(item.warningCode);
+  if (statusFilter === 'ALERT') return item.infoCode === 'ABNORMAL_PROFIT';
+  if (statusFilter === 'NO_GROUP') return !item.priceGroupId;
+  if (statusFilter === 'OVERRIDES_GROUP') return item.overridesGroup;
+  if (statusFilter === 'BELOW_COST') return item.warningCode === 'BELOW_COST';
+  return true;
+}
+
+async function filteredProductIdsForPricing(tenantId: string, filters: PricingProductsQuery) {
+  if (!filters.shopId) throw new Error('Filtry cennika wymagają sklepu');
+  const search = normalizeSearch(filters.search);
+  const categoryIds = normalizeCategoryIdSet(filters);
+
+  const [shop, state] = await Promise.all([
+    prisma.shop.findFirst({
+      where: { tenantId, status: 'ACTIVE', id: filters.shopId },
+      select: {
+        id: true,
+        tenantId: true,
+        name: true,
+        platform: true,
+        baseUrl: true,
+        apiKey: true,
+        configJson: true,
+      },
+    }),
+    loadPricingState(tenantId),
+  ]);
+  if (!shop) throw new Error('Sklep nie istnieje albo nie jest aktywny');
+
+  const categoryProductIds = categoryIds.size > 0
+    ? await resolveCategoryWarehouseProductIds(tenantId, shop, filters, categoryIds)
+    : null;
+  const productWhere: Prisma.WarehouseProductWhereInput = {
+    tenantId,
+    isActive: true,
+    ...(categoryProductIds ? { id: { in: Array.from(categoryProductIds) } } : {}),
+    ...(search ? {
+      OR: [
+        { sku: { contains: search, mode: 'insensitive' } },
+        { name: { contains: search, mode: 'insensitive' } },
+        { barcodes: { some: { isActive: true, ean: { contains: search, mode: 'insensitive' } } } },
+      ],
+    } : {}),
+    ...(filters.priceGroupId && filters.priceGroupId !== 'ALL'
+      ? filters.priceGroupId === 'NONE'
+        ? { priceGroupMembers: { none: { priceGroup: { isActive: true } } } }
+        : { priceGroupMembers: { some: { priceGroupId: filters.priceGroupId } } }
+      : {}),
+  };
+
+  const products = await prisma.warehouseProduct.findMany({
+    where: productWhere,
+    ...(categoryProductIds ? {} : { take: MAX_PRICING_LIST_PRODUCTS }),
+    include: productPricingInclude,
+    orderBy: { name: 'asc' },
+  });
+  const items = products.map((product) => calculatePrice(product, shop, state));
+  return Array.from(new Set(
+    items
+      .filter((item) => itemMatchesPricingFilters(item, filters.source, filters.status))
+      .map((item) => item.warehouseProductId),
+  ));
+}
+
+async function resolveScopedPricingInput(tenantId: string, input: PricingProductsInput = {}) {
+  const scope = input.scope;
+  if (!scope || scope === 'SELECTED') return input;
+  if (scope === 'SHOP') {
+    return {
+      ...input,
+      productIds: undefined,
+      catalogId: undefined,
+      priceGroupId: undefined,
+    };
+  }
+  if (scope === 'GROUP') {
+    if (!input.priceGroupId) throw new Error('Zakres grupy wymaga priceGroupId');
+    return {
+      ...input,
+      productIds: undefined,
+      catalogId: undefined,
+    };
+  }
+  if (scope === 'CATEGORY' || scope === 'FILTERED') {
+    const filters = input.filters ?? (input.shopIds?.[0]
+      ? { shopId: input.shopIds[0], priceGroupId: input.priceGroupId, categoryId: input.catalogId } as PricingProductsQuery
+      : null);
+    if (!filters) throw new Error('Zakres filtrowany wymaga filtrów cennika');
+    const productIds = await filteredProductIdsForPricing(tenantId, filters);
+    return {
+      ...input,
+      productIds,
+      shopIds: input.shopIds?.length ? input.shopIds : [filters.shopId],
+      catalogId: undefined,
+      priceGroupId: undefined,
+    };
+  }
+  return input;
+}
+
 export async function getPricingProducts(query: PricingProductsQuery) {
   const tenantId = requireTenantId();
   if (!query.shopId) throw new Error('Wybierz sklep dla widoku cennika');
@@ -1222,20 +1490,7 @@ export async function getPricingProducts(query: PricingProductsQuery) {
   });
 
   const baseItems = products.map((product) => calculatePrice(product, shop, state));
-  const sourceFilter = query.source && query.source !== 'ALL' ? query.source : null;
-  const statusFilter = query.status && query.status !== 'ALL' ? query.status : null;
-  const filtered = baseItems.filter((item) => {
-    if (sourceFilter && item.priceSource !== sourceFilter) return false;
-    if (!statusFilter) return true;
-    if (statusFilter === 'READY') return item.netPrice !== null && !item.warningCode && !item.infoCode && !item.overridesGroup;
-    if (statusFilter === 'MISSING_PRICE') return item.netPrice === null || item.warningCode === 'MISSING_COST';
-    if (statusFilter === 'WARNING') return Boolean(item.warningCode);
-    if (statusFilter === 'ALERT') return item.infoCode === 'ABNORMAL_PROFIT';
-    if (statusFilter === 'NO_GROUP') return !item.priceGroupId;
-    if (statusFilter === 'OVERRIDES_GROUP') return item.overridesGroup;
-    if (statusFilter === 'BELOW_COST') return item.warningCode === 'BELOW_COST';
-    return true;
-  });
+  const filtered = baseItems.filter((item) => itemMatchesPricingFilters(item, query.source, query.status));
   const presentationItems = groupVariants ? groupVariantPricingItems(filtered) : decorateFlatVariantPricingItems(filtered);
   const total = presentationItems.length;
   const totalPages = Math.max(1, Math.ceil(total / limit));
@@ -1280,6 +1535,69 @@ export async function listPriceGroups() {
       },
     },
   });
+}
+
+export async function listPriceGroupMembers(id: string, query: PriceGroupMembersQuery = {}) {
+  const tenantId = requireTenantId();
+  const page = normalizePage(query.page, 1);
+  const limit = normalizePage(query.limit, 25, 100);
+  const search = normalizeSearch(query.search);
+  const group = await prisma.warehousePriceGroup.findFirst({ where: { id, tenantId }, select: { id: true } });
+  if (!group) throw new Error('Grupa cenowa nie znaleziona');
+
+  const where: Prisma.WarehousePriceGroupMemberWhereInput = {
+    tenantId,
+    priceGroupId: id,
+    ...(search ? {
+      warehouseProduct: {
+        OR: [
+          { sku: { contains: search, mode: 'insensitive' } },
+          { name: { contains: search, mode: 'insensitive' } },
+          { barcodes: { some: { isActive: true, ean: { contains: search, mode: 'insensitive' } } } },
+        ],
+      },
+    } : {}),
+  };
+
+  const [total, members, state, shop] = await Promise.all([
+    prisma.warehousePriceGroupMember.count({ where }),
+    prisma.warehousePriceGroupMember.findMany({
+      where,
+      include: {
+        warehouseProduct: {
+          include: productPricingInclude,
+        },
+      },
+      orderBy: { warehouseProduct: { name: 'asc' } },
+      skip: (page - 1) * limit,
+      take: limit,
+    }),
+    query.shopId ? loadPricingState(tenantId) : Promise.resolve(null),
+    query.shopId
+      ? prisma.shop.findFirst({ where: { id: query.shopId, tenantId, status: 'ACTIVE' }, select: { id: true, name: true } })
+      : Promise.resolve(null),
+  ]);
+
+  return {
+    data: members.map((member) => ({
+      id: member.id,
+      priceGroupId: member.priceGroupId,
+      warehouseProductId: member.warehouseProductId,
+      createdAt: member.createdAt,
+      product: {
+        id: member.warehouseProduct.id,
+        sku: member.warehouseProduct.sku,
+        name: member.warehouseProduct.name,
+        primaryEan: member.warehouseProduct.barcodes.find((barcode) => barcode.isPrimary)?.ean ?? member.warehouseProduct.barcodes[0]?.ean ?? null,
+        catalogName: member.warehouseProduct.catalog?.name ?? null,
+      },
+      price: state && shop ? calculatePrice(member.warehouseProduct, shop, state) : null,
+    })),
+    page,
+    limit,
+    total,
+    totalPages: Math.max(1, Math.ceil(total / limit)),
+  };
 }
 
 export async function createPriceGroup(input: PriceGroupInput) {
@@ -1338,6 +1656,115 @@ export async function removePriceGroupMember(id: string, productId: string) {
     where: { tenantId, priceGroupId: id, warehouseProductId: productId },
   });
   return { deleted: true };
+}
+
+function normalizeClearanceInput(input: ClearanceInput) {
+  if (!['PRODUCT', 'GROUP'].includes(input.scope)) throw new Error('Nieprawidłowy zakres wyprzedaży');
+  assertNonNegative(input.clearanceNetPrice, 'Cena wyprzedażowa');
+  if (!input.clearanceNetPrice || input.clearanceNetPrice <= 0) throw new Error('Cena wyprzedażowa musi być większa od zera');
+  if (input.scope === 'PRODUCT' && !input.warehouseProductId) throw new Error('Wyprzedaż produktu wymaga produktu');
+  if (input.scope === 'GROUP' && !input.priceGroupId) throw new Error('Wyprzedaż grupy wymaga grupy cenowej');
+  const validFrom = normalizeOptionalDate(input.validFrom, 'Data początku');
+  const validTo = normalizeOptionalDate(input.validTo, 'Data końca');
+  if (validFrom && validTo && validFrom > validTo) throw new Error('Data początku nie może być późniejsza niż data końca');
+
+  return {
+    scope: input.scope,
+    warehouseProductId: input.scope === 'PRODUCT' ? input.warehouseProductId ?? null : null,
+    priceGroupId: input.scope === 'GROUP' ? input.priceGroupId ?? null : null,
+    shopId: input.shopId ?? null,
+    clearanceNetPrice: input.clearanceNetPrice,
+    reason: input.reason?.trim() || null,
+    validFrom,
+    validTo,
+    isActive: input.isActive ?? true,
+  };
+}
+
+async function assertClearanceTargets(tenantId: string, input: ReturnType<typeof normalizeClearanceInput>) {
+  const checks = [];
+  if (input.shopId) checks.push(prisma.shop.findFirst({ where: { id: input.shopId, tenantId }, select: { id: true } }));
+  if (input.warehouseProductId) checks.push(prisma.warehouseProduct.findFirst({ where: { id: input.warehouseProductId, tenantId }, select: { id: true } }));
+  if (input.priceGroupId) checks.push(prisma.warehousePriceGroup.findFirst({ where: { id: input.priceGroupId, tenantId }, select: { id: true } }));
+  const result = await Promise.all(checks);
+  if (result.some((item) => !item)) throw new Error('Cel wyprzedaży nie istnieje');
+}
+
+export async function listClearances(query: ClearanceQuery = {}) {
+  const tenantId = requireTenantId();
+  const page = normalizePage(query.page, 1);
+  const limit = normalizePage(query.limit, 50, 100);
+  const where: Prisma.WarehouseClearanceWhereInput = {
+    tenantId,
+    ...(query.scope ? { scope: query.scope } : {}),
+    ...(query.warehouseProductId ? { warehouseProductId: query.warehouseProductId } : {}),
+    ...(query.priceGroupId ? { priceGroupId: query.priceGroupId } : {}),
+    ...(query.shopId ? { shopId: query.shopId } : {}),
+    ...(query.isActive === undefined ? {} : { isActive: normalizeBoolean(query.isActive, true) }),
+  };
+  const [total, data] = await Promise.all([
+    prisma.warehouseClearance.count({ where }),
+    prisma.warehouseClearance.findMany({
+      where,
+      include: {
+        shop: { select: { id: true, name: true } },
+        priceGroup: { select: { id: true, name: true, priority: true } },
+        warehouseProduct: { select: { id: true, sku: true, name: true } },
+      },
+      orderBy: [{ isActive: 'desc' }, { updatedAt: 'desc' }],
+      skip: (page - 1) * limit,
+      take: limit,
+    }),
+  ]);
+  return { data, page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) };
+}
+
+export async function createClearance(input: ClearanceInput) {
+  const tenantId = requireTenantId();
+  const data = normalizeClearanceInput(input);
+  await assertClearanceTargets(tenantId, data);
+  return prisma.warehouseClearance.create({
+    data: { tenantId, ...data },
+    include: {
+      shop: { select: { id: true, name: true } },
+      priceGroup: { select: { id: true, name: true, priority: true } },
+      warehouseProduct: { select: { id: true, sku: true, name: true } },
+    },
+  });
+}
+
+export async function updateClearance(id: string, input: Partial<ClearanceInput>) {
+  const tenantId = requireTenantId();
+  const existing = await prisma.warehouseClearance.findFirst({ where: { id, tenantId } });
+  if (!existing) throw new Error('Wyprzedaż nie znaleziona');
+  const data = normalizeClearanceInput({
+    scope: (input.scope ?? existing.scope) as ClearanceScope,
+    warehouseProductId: input.warehouseProductId === undefined ? existing.warehouseProductId : input.warehouseProductId,
+    priceGroupId: input.priceGroupId === undefined ? existing.priceGroupId : input.priceGroupId,
+    shopId: input.shopId === undefined ? existing.shopId : input.shopId,
+    clearanceNetPrice: input.clearanceNetPrice === undefined ? Number(existing.clearanceNetPrice) : input.clearanceNetPrice,
+    reason: input.reason === undefined ? existing.reason : input.reason,
+    validFrom: input.validFrom === undefined ? existing.validFrom : input.validFrom,
+    validTo: input.validTo === undefined ? existing.validTo : input.validTo,
+    isActive: input.isActive ?? existing.isActive,
+  });
+  await assertClearanceTargets(tenantId, data);
+  return prisma.warehouseClearance.update({
+    where: { id },
+    data,
+    include: {
+      shop: { select: { id: true, name: true } },
+      priceGroup: { select: { id: true, name: true, priority: true } },
+      warehouseProduct: { select: { id: true, sku: true, name: true } },
+    },
+  });
+}
+
+export async function deactivateClearance(id: string) {
+  const tenantId = requireTenantId();
+  const existing = await prisma.warehouseClearance.findFirst({ where: { id, tenantId }, select: { id: true } });
+  if (!existing) throw new Error('Wyprzedaż nie znaleziona');
+  return prisma.warehouseClearance.update({ where: { id }, data: { isActive: false } });
 }
 
 export async function setPriceGroupPrice(id: string, input: PriceGroupPriceInput) {
@@ -1409,6 +1836,7 @@ function buildPricingSummary(items: PricingItem[]) {
     inGroups: items.filter((item) => item.priceGroupId).length,
     withoutGroup: items.filter((item) => !item.priceGroupId).length,
     overridesGroup: items.filter((item) => item.overridesGroup).length,
+    clearances: items.filter((item) => item.priceSource === 'CLEARANCE').length,
     missingPrice: items.filter((item) => item.netPrice === null).length,
   };
 }

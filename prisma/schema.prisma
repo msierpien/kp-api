@@ -52,6 +52,7 @@ model Tenant {
   pricingRules          WarehousePricingRule[]
   priceGroups           WarehousePriceGroup[]
   priceGroupMembers     WarehousePriceGroupMember[]
+  clearances            WarehouseClearance[]
   pricingSettings       WarehousePricingSettings?
   productShopPrices     WarehouseProductShopPrice[]
   shopProductImportLogs ShopProductImportLog[]
@@ -119,6 +120,7 @@ model Shop {
   stockSyncLogs        StockSyncLog[]
   priceSyncLogs        PriceSyncLog[]
   pricingRules         WarehousePricingRule[]
+  clearances           WarehouseClearance[]
   productShopPrices    WarehouseProductShopPrice[]
   productImportLogs    ShopProductImportLog[]
   productChannelSnapshots ProductChannelSnapshot[]
@@ -1139,6 +1141,7 @@ model WarehouseProduct {
   priceSyncLogs         PriceSyncLog[]
   pricingRules          WarehousePricingRule[]
   priceGroupMembers     WarehousePriceGroupMember[]
+  clearances            WarehouseClearance[]
   shopPrices            WarehouseProductShopPrice[]
   wholesaleMappings     WholesaleProductMapping[]
   warehouseReservations WarehouseReservation[]
@@ -1301,6 +1304,7 @@ model WarehousePriceGroup {
   tenant  Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   members WarehousePriceGroupMember[]
   rules   WarehousePricingRule[]
+  clearances WarehouseClearance[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -1325,6 +1329,34 @@ model WarehousePriceGroupMember {
   @@index([priceGroupId])
   @@index([warehouseProductId])
   @@map("warehouse_price_group_members")
+}
+
+model WarehouseClearance {
+  id                 String    @id @default(cuid())
+  tenantId           String    @map("tenant_id")
+  scope              String
+  warehouseProductId String?   @map("warehouse_product_id")
+  priceGroupId       String?   @map("price_group_id")
+  shopId             String?   @map("shop_id")
+  clearanceNetPrice  Decimal   @map("clearance_net_price") @db.Decimal(10, 2)
+  reason             String?
+  validFrom          DateTime? @map("valid_from")
+  validTo            DateTime? @map("valid_to")
+  isActive           Boolean   @default(true) @map("is_active")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  tenant           Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  warehouseProduct WarehouseProduct?    @relation(fields: [warehouseProductId], references: [id], onDelete: Cascade)
+  priceGroup       WarehousePriceGroup? @relation(fields: [priceGroupId], references: [id], onDelete: Cascade)
+  shop             Shop?                @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, isActive, validFrom, validTo])
+  @@index([tenantId, scope])
+  @@index([warehouseProductId])
+  @@index([priceGroupId])
+  @@index([shopId])
+  @@map("warehouse_clearances")
 }
 
 model WarehousePricingSettings {
@@ -1357,6 +1389,8 @@ model WarehouseProductShopPrice {
   priceMode          String?  @map("price_mode")
   priceGroupId       String?  @map("price_group_id")
   priceGroupName     String?  @map("price_group_name")
+  clearanceId        String?  @map("clearance_id")
+  clearanceUntil     DateTime? @map("clearance_until")
   costBasis          Decimal? @map("cost_basis") @db.Decimal(10, 2)
   netPrice           Decimal? @map("net_price") @db.Decimal(10, 2)
   grossPrice         Decimal? @map("gross_price") @db.Decimal(10, 2)

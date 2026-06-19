@@ -17,6 +17,7 @@ export const TENANT_MODELS = new Set([
   'WarehouseProduct',
   'WarehouseCatalog',
   'WarehouseLeadTimeGroup',
+  'WarehouseClearance',
   'WarehousePriceGroup',
   'WarehousePriceGroupMember',
   'WarehousePricingRule',

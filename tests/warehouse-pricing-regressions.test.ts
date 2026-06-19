@@ -63,9 +63,32 @@ function state(overrides: { rules?: unknown[]; groups?: Array<{ id: string; name
   return {
     settings: settings(overrides.settings),
     rules: overrides.rules ?? [],
+    clearances: [],
     groupsByProduct: new Map([
       ['product-1', overrides.groups ?? [{ id: 'group-1', name: 'Grupa testowa', priority: 100 }]],
     ]),
+  };
+}
+
+function clearance(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'clearance-1',
+    tenantId: 'tenant-1',
+    scope: 'PRODUCT',
+    warehouseProductId: 'product-1',
+    priceGroupId: null,
+    shopId: null,
+    clearanceNetPrice: new Prisma.Decimal('4.50'),
+    reason: 'Wyprzedaz testowa',
+    validFrom: null,
+    validTo: null,
+    isActive: true,
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+    updatedAt: new Date('2026-01-04T00:00:00Z'),
+    priceGroup: null,
+    warehouseProduct: { id: 'product-1', sku: 'BAL-1', name: 'Balon testowy' },
+    shop: null,
+    ...overrides,
   };
 }
 
@@ -191,6 +214,35 @@ test('fixed price with cheap purchase cost raises abnormal profit info without c
 
   assert.equal(item.netPrice, 7.5);
   assert.equal(item.infoCode, 'ABNORMAL_PROFIT');
+});
+
+test('active clearance wins before rules and keeps exact price below cost', () => {
+  const item = __pricingTest.calculatePrice(
+    product({ averagePurchaseCost: new Prisma.Decimal('5.00') }),
+    shop,
+    {
+      ...state({
+        rules: [rule({ fixedNetPrice: new Prisma.Decimal('7.50'), priceMode: 'FIXED' })],
+      }),
+      clearances: [clearance()],
+    },
+  );
+
+  assert.equal(item.priceSource, 'CLEARANCE');
+  assert.equal(item.priceMode, 'FIXED');
+  assert.equal(item.netPrice, 4.5);
+  assert.equal(item.warningCode, 'BELOW_COST');
+});
+
+test('sync pricing has explicit below-cost confirmation guard', () => {
+  const source = readFileSync(join(process.cwd(), 'src/services/admin/warehouse-pricing.service.ts'), 'utf8');
+  const start = source.indexOf('export async function syncPricing');
+  const end = source.indexOf('function numericValues', start);
+  const body = source.slice(start, end);
+
+  assert.match(body, /warningCode === 'BELOW_COST'/);
+  assert.match(body, /allowBelowCostSync/);
+  assert.match(body, /Potwierdź synchronizację poniżej kosztu/);
 });
 
 test('bulk price update updates existing active product rules instead of blindly creating duplicates', () => {

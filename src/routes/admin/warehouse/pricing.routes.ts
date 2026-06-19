@@ -314,6 +314,7 @@ function pricingSettingsBodySchema() {
       defaultSyncMode: { type: 'string', enum: ['AUTO', 'CONFIRM', 'MANUAL'] },
       costCeilingEnabledDefault: { type: 'boolean' },
       abnormalProfitThreshold: { type: 'number', minimum: 0 },
+      variantGroupingEnabled: { type: 'boolean' },
     },
   };
 }

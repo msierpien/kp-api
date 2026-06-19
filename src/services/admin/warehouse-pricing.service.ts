@@ -81,6 +81,7 @@ export interface PricingSettingsInput {
   defaultSyncMode?: PricingSyncMode;
   costCeilingEnabledDefault?: boolean;
   abnormalProfitThreshold?: number;
+  variantGroupingEnabled?: boolean;
 }
 
 export interface PriceGroupInput {
@@ -118,6 +119,7 @@ const DEFAULT_PRICING = {
   syncMode: 'CONFIRM' as PricingSyncMode,
   costCeilingEnabledDefault: true,
   abnormalProfitThreshold: 200,
+  variantGroupingEnabled: true,
 };
 
 const MAX_PRICING_PRODUCTS = 500;
@@ -307,6 +309,7 @@ async function ensurePricingSettings(tenantId: string) {
       defaultSyncMode: globalRule?.syncMode ?? DEFAULT_PRICING.syncMode,
       costCeilingEnabledDefault: DEFAULT_PRICING.costCeilingEnabledDefault,
       abnormalProfitThreshold: DEFAULT_PRICING.abnormalProfitThreshold,
+      variantGroupingEnabled: DEFAULT_PRICING.variantGroupingEnabled,
     },
   });
 }
@@ -335,6 +338,7 @@ export async function updatePricingSettings(input: PricingSettingsInput) {
       ...(input.defaultSyncMode !== undefined ? { defaultSyncMode: input.defaultSyncMode } : {}),
       ...(input.costCeilingEnabledDefault !== undefined ? { costCeilingEnabledDefault: input.costCeilingEnabledDefault } : {}),
       ...(input.abnormalProfitThreshold !== undefined ? { abnormalProfitThreshold: input.abnormalProfitThreshold } : {}),
+      ...(input.variantGroupingEnabled !== undefined ? { variantGroupingEnabled: input.variantGroupingEnabled } : {}),
     },
   });
 }

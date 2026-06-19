@@ -1337,6 +1337,7 @@ model WarehousePricingSettings {
   defaultSyncMode           String   @default("CONFIRM") @map("default_sync_mode")
   costCeilingEnabledDefault Boolean  @default(true) @map("cost_ceiling_enabled_default")
   abnormalProfitThreshold   Decimal  @default(200) @map("abnormal_profit_threshold") @db.Decimal(7, 3)
+  variantGroupingEnabled    Boolean  @default(true) @map("variant_grouping_enabled")
   createdAt                 DateTime @default(now()) @map("created_at")
   updatedAt                 DateTime @updatedAt @map("updated_at")
 

@@ -11,6 +11,7 @@ export type PricingSyncMode = 'AUTO' | 'CONFIRM' | 'MANUAL';
 export type PricingWarningCode = 'MISSING_COST' | 'BELOW_COST' | 'BELOW_MIN_PROFIT' | null;
 export type PricingInfoCode = 'ABNORMAL_PROFIT' | null;
 export type PricingPriceSource = 'PRODUCT' | 'GROUP' | 'CATALOG' | 'SHOP' | 'DEFAULT' | 'CEILING_FALLBACK';
+export type PricingCostSource = 'DOCUMENT' | 'WHOLESALE' | null;
 
 export interface PricingRuleInput {
   level: PricingRuleLevel;
@@ -116,6 +117,28 @@ const DEFAULT_PRICING = {
 
 const MAX_PRICING_PRODUCTS = 500;
 const MAX_PRICING_LIST_PRODUCTS = 5000;
+
+const productPricingInclude = {
+  catalog: { select: { id: true, name: true } },
+  barcodes: { where: { isActive: true }, select: { ean: true, isPrimary: true } },
+  shopProductMappings: { where: { isActive: true }, select: { shopId: true } },
+  wholesaleMappings: {
+    where: {
+      isActive: true,
+      lastKnownPrice: { gt: 0 },
+      provider: { isActive: true },
+    },
+    orderBy: [
+      { lastKnownPrice: 'asc' },
+      { lastSyncAt: 'desc' },
+    ],
+    take: 1,
+    select: {
+      lastKnownPrice: true,
+      provider: { select: { id: true, name: true } },
+    },
+  },
+} satisfies Prisma.WarehouseProductInclude;
 
 function requireTenantId() {
   const tenantId = getTenantId();
@@ -349,11 +372,7 @@ async function resolveProductsAndShops(tenantId: string, input: PricingProductsI
     prisma.warehouseProduct.findMany({
       where: productWhere,
       take,
-      include: {
-        catalog: { select: { id: true, name: true } },
-        barcodes: { where: { isActive: true }, select: { ean: true, isPrimary: true } },
-        shopProductMappings: { where: { isActive: true }, select: { shopId: true } },
-      },
+      include: productPricingInclude,
       orderBy: { name: 'asc' },
     }),
     prisma.shop.findMany({ where: shopWhere, select: { id: true, name: true } }),
@@ -462,13 +481,23 @@ function sourceFromRule(rule: RuleForPricing | null): PricingPriceSource {
   return 'DEFAULT';
 }
 
+function resolveCostBasis(product: ProductForPricing): { costBasis: Prisma.Decimal | null; costSource: PricingCostSource } {
+  const documentCost = decimal(product.averagePurchaseCost) ?? decimal(product.purchasePrice);
+  if (documentCost) return { costBasis: documentCost, costSource: 'DOCUMENT' };
+
+  const wholesaleCost = decimal(product.wholesaleMappings[0]?.lastKnownPrice);
+  if (wholesaleCost) return { costBasis: wholesaleCost, costSource: 'WHOLESALE' };
+
+  return { costBasis: null, costSource: null };
+}
+
 function calculatePrice(product: ProductForPricing, shop: ShopForPricing, state: PricingState) {
   const rule = resolveRule(product, shop.id, state);
   const productGroups = state.groupsByProduct.get(product.id) ?? [];
   const primaryGroup = productGroups[0] ?? null;
   const ruleGroup = rule?.priceGroup ?? null;
   const visibleGroup = ruleGroup ?? primaryGroup;
-  const costBasis = decimal(product.averagePurchaseCost) ?? decimal(product.purchasePrice);
+  const { costBasis, costSource } = resolveCostBasis(product);
   const marginPercent = decimal(rule?.marginPercent) ?? decimal(state.settings.defaultMarginPercent) ?? new Prisma.Decimal(DEFAULT_PRICING.marginPercent);
   const minProfit = decimal(rule?.minProfit) ?? decimal(state.settings.defaultMinProfit) ?? new Prisma.Decimal(DEFAULT_PRICING.minProfit);
   const vatRate = decimal(rule?.vatRate) ?? decimal(state.settings.defaultVatRate) ?? new Prisma.Decimal(DEFAULT_PRICING.vatRate);
@@ -496,6 +525,7 @@ function calculatePrice(product: ProductForPricing, shop: ShopForPricing, state:
       priceGroupId: visibleGroup?.id ?? null,
       priceGroupName: visibleGroup?.name ?? null,
       costBasis: null,
+      costSource,
       netPrice: null,
       grossPrice: null,
       marginPercent: Number(marginPercent),
@@ -563,6 +593,7 @@ function calculatePrice(product: ProductForPricing, shop: ShopForPricing, state:
     priceGroupId: visibleGroup?.id ?? null,
     priceGroupName: visibleGroup?.name ?? null,
     costBasis: numberOrNull(costBasis),
+    costSource,
     netPrice: Number(netPrice),
     grossPrice: Number(grossPrice),
     marginPercent: realizedMarginPercent ?? Number(marginPercent),
@@ -778,11 +809,7 @@ export async function getPricingProducts(query: PricingProductsQuery) {
       products: await prisma.warehouseProduct.findMany({
         where: productWhere,
         take: MAX_PRICING_LIST_PRODUCTS,
-        include: {
-          catalog: { select: { id: true, name: true } },
-          barcodes: { where: { isActive: true }, select: { ean: true, isPrimary: true } },
-          shopProductMappings: { where: { isActive: true }, select: { shopId: true } },
-        },
+        include: productPricingInclude,
         orderBy: { name: 'asc' },
       }),
     })),
@@ -967,6 +994,8 @@ function buildPricingSummary(items: PricingItem[]) {
     belowCost: items.filter((item) => item.warningCode === 'BELOW_COST').length,
     belowMinProfit: items.filter((item) => item.warningCode === 'BELOW_MIN_PROFIT').length,
     abnormalProfit: items.filter((item) => item.infoCode === 'ABNORMAL_PROFIT').length,
+    documentCost: items.filter((item) => item.costSource === 'DOCUMENT').length,
+    wholesaleCost: items.filter((item) => item.costSource === 'WHOLESALE').length,
     inGroups: items.filter((item) => item.priceGroupId).length,
     withoutGroup: items.filter((item) => !item.priceGroupId).length,
     overridesGroup: items.filter((item) => item.overridesGroup).length,

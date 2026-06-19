@@ -58,6 +58,32 @@ export async function competitorAnalyticsRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.get('/wholesale-missing-system', {
+    schema: {
+      tags: ['competitor-analytics'],
+      summary: 'Produkty z hurtowni pasujące do kategorii konkurencji, ale brakujące w systemie',
+      querystring: {
+        type: 'object',
+        required: ['shopId', 'source', 'categoryId'],
+        properties: {
+          shopId: { type: 'string' },
+          source: { type: 'string' },
+          categoryId: { type: 'string' },
+          availableOnly: { anyOf: [{ type: 'boolean' }, { type: 'string' }] },
+          page: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
+          limit: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: competitorAnalytics.WholesaleMissingSystemQuery }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await competitorAnalytics.listWholesaleMissingSystemProducts(request.query));
+    } catch (error) {
+      fastify.log.error(error);
+      return sendError(reply, error);
+    }
+  });
+
   fastify.get('/match-diagnostics', {
     schema: {
       tags: ['competitor-analytics'],

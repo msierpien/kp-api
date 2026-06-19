@@ -29,6 +29,15 @@ export interface ProductListQuery {
   limit?: number | string;
 }
 
+export interface WholesaleMissingSystemQuery {
+  shopId?: string;
+  source?: string;
+  categoryId?: string;
+  availableOnly?: boolean | string;
+  page?: number | string;
+  limit?: number | string;
+}
+
 export interface MatchDiagnosticsQuery {
   shopId?: string;
   q?: string;
@@ -709,7 +718,7 @@ function payloadString(payload: unknown, keys: Array<string | undefined>) {
   return null;
 }
 
-function wholesaleImageUrl(mapping: ProductForAnalytics['wholesaleMappings'][number]) {
+function wholesaleImageUrl(mapping: { provider: { configJson: Prisma.JsonValue | null }; payloadJson: Prisma.JsonValue | null }) {
   const config = (mapping.provider.configJson || {}) as { fieldMapping?: { image?: string } };
   const value = payloadString(mapping.payloadJson, [
     config.fieldMapping?.image,
@@ -852,6 +861,56 @@ function normalizePriceHistory(value: unknown): CompetitorPriceHistoryItem[] {
 
 function normalizeOfferPrice(row: any) {
   return decimalToNumber(row.price ?? row.current_price ?? row.gross_price ?? row.listing_price);
+}
+
+function storeProductImageUrl(row: any) {
+  const imageUrls: unknown[] = Array.isArray(row.image_urls) ? row.image_urls : [];
+  const fromList = imageUrls
+    .map((value) => normalizedIdentifier(value))
+    .find((value): value is string => Boolean(value));
+  return fromList
+    ?? normalizedIdentifier(row.image_url)
+    ?? normalizedIdentifier(row.image)
+    ?? null;
+}
+
+function storeProductIdentifiers(row: any, baseProduct?: any) {
+  return {
+    eans: unique([
+      row?.store_ean,
+      row?.ean,
+      baseProduct?.ean,
+    ]),
+    skus: unique([
+      row?.store_sku,
+      row?.sku,
+      baseProduct?.sku,
+      baseProduct?.product_number,
+    ]),
+  };
+}
+
+function storeProductTitle(row: any, baseProduct?: any) {
+  return normalizedIdentifier(row?.title)
+    ?? normalizedIdentifier(row?.name)
+    ?? normalizedIdentifier(baseProduct?.title)
+    ?? normalizedIdentifier(baseProduct?.name)
+    ?? null;
+}
+
+function storeProductUrl(row: any) {
+  return normalizedIdentifier(row?.product_url)
+    ?? normalizedIdentifier(row?.url)
+    ?? normalizedIdentifier(row?.page_url)
+    ?? null;
+}
+
+function storeProductScore(row: any, baseProduct?: any) {
+  const identifiers = storeProductIdentifiers(row, baseProduct);
+  return identifiers.eans.length * 3
+    + identifiers.skus.length * 2
+    + (storeProductTitle(row, baseProduct) ? 1 : 0)
+    + (storeProductImageUrl(row) ? 1 : 0);
 }
 
 function normalizeOffer(
@@ -1465,6 +1524,276 @@ export async function listProducts(query: ProductListQuery = {}) {
       complete: scanned >= totalCandidates,
     },
     warnings,
+  };
+}
+
+export async function listWholesaleMissingSystemProducts(query: WholesaleMissingSystemQuery = {}) {
+  const tenantId = requireTenantId();
+  const db = await ensureMongo();
+  const page = pageValue(query.page, 1);
+  const limit = pageValue(query.limit, 50, MAX_LIST_LIMIT);
+  const source = query.source && query.source !== 'ALL' ? query.source : undefined;
+  const categoryId = normalizedIdentifier(query.categoryId);
+  const availableOnly = booleanQuery(query.availableOnly);
+
+  if (!query.shopId) throw new ValidationError('Widok brakow w systemie wymaga sklepu');
+  await requireShop(tenantId, query.shopId);
+  if (!source || !SOURCES.includes(source as any)) throw new ValidationError('Widok brakow w systemie wymaga konkretnego zrodla konkurencji');
+  if (!categoryId) throw new ValidationError('Widok brakow w systemie wymaga kategorii konkurencji');
+
+  const numericCategoryId = Number(categoryId);
+  const categoryIdFilter = Number.isFinite(numericCategoryId)
+    ? { $in: [categoryId, numericCategoryId] }
+    : categoryId;
+  const categoryRows = await db.collection('regular_product_categories')
+    .find({ source, category_id: categoryIdFilter })
+    .project({ source_product_id: 1 })
+    .toArray();
+  const sourceProductIds = unique(categoryRows.map((row) => normalizedIdentifier(row.source_product_id)));
+
+  const empty = (summary: Record<string, number>) => ({
+    data: [],
+    total: 0,
+    page,
+    limit,
+    totalPages: 1,
+    summary: {
+      sourceProducts: sourceProductIds.length,
+      alreadyInSystem: 0,
+      missingInSystem: 0,
+      withStoreProductData: 0,
+      matchedWholesaleMappings: 0,
+      ...summary,
+    },
+    warnings: warningsForSources([source], 'categories'),
+  });
+
+  if (sourceProductIds.length === 0) return empty({});
+
+  const matchedProductIdsBySourceProduct = await matchedWarehouseProductIdsBySourceProduct(
+    db,
+    tenantId,
+    query.shopId,
+    source,
+    sourceProductIds,
+    false,
+  );
+  const alreadyInSystemIds = sourceProductIds.filter((sourceProductId) =>
+    (matchedProductIdsBySourceProduct.get(sourceProductId)?.size ?? 0) > 0
+  );
+  const missingSourceProductIds = sourceProductIds.filter((sourceProductId) =>
+    (matchedProductIdsBySourceProduct.get(sourceProductId)?.size ?? 0) === 0
+  );
+
+  if (missingSourceProductIds.length === 0) {
+    return empty({
+      alreadyInSystem: alreadyInSystemIds.length,
+      missingInSystem: 0,
+    });
+  }
+
+  const missingSourceProductIdSet = new Set(missingSourceProductIds);
+  const storeProductRows = await db.collection('store_products')
+    .find({ source, source_product_id: { $in: missingSourceProductIds.flatMap(valueVariants) } })
+    .project({
+      source_product_id: 1,
+      store_ean: 1,
+      store_sku: 1,
+      ean: 1,
+      sku: 1,
+      product_id: 1,
+      title: 1,
+      name: 1,
+      price: 1,
+      current_price: 1,
+      gross_price: 1,
+      listing_price: 1,
+      currency: 1,
+      availability: 1,
+      product_url: 1,
+      page_url: 1,
+      url: 1,
+      image_urls: 1,
+      image_url: 1,
+      image: 1,
+      updated_at: 1,
+      last_seen_at: 1,
+    })
+    .toArray();
+  const baseProductIds = Array.from(new Set(
+    storeProductRows
+      .map((row) => row.product_id)
+      .filter((value): value is ObjectId => value instanceof ObjectId)
+      .map((value) => String(value))
+  )).map((value) => new ObjectId(value));
+  const baseProducts = baseProductIds.length
+    ? await db.collection('products')
+      .find({ _id: { $in: baseProductIds } })
+      .project({ ean: 1, sku: 1, product_number: 1, title: 1, name: 1 })
+      .toArray()
+    : [];
+  const baseProductById = new Map(baseProducts.map((row) => [String(row._id), row]));
+  const storeProductBySourceProductId = new Map<string, any>();
+
+  for (const row of storeProductRows) {
+    const sourceProductId = normalizedIdentifier(row.source_product_id);
+    if (!sourceProductId || !missingSourceProductIdSet.has(sourceProductId)) continue;
+    const baseProduct = row.product_id instanceof ObjectId ? baseProductById.get(String(row.product_id)) : null;
+    const existing = storeProductBySourceProductId.get(sourceProductId);
+    const existingBaseProduct = existing?.product_id instanceof ObjectId ? baseProductById.get(String(existing.product_id)) : null;
+    if (!existing || storeProductScore(row, baseProduct) > storeProductScore(existing, existingBaseProduct)) {
+      storeProductBySourceProductId.set(sourceProductId, row);
+    }
+  }
+
+  const sourceDetailsById = new Map<string, {
+    sourceProductId: string;
+    sku: string | null;
+    ean: string | null;
+    title: string | null;
+    price: number | null;
+    currency: string | null;
+    availability: string | null;
+    url: string | null;
+    imageUrl: string | null;
+    skus: string[];
+    eans: string[];
+  }>();
+  const sourceIdsBySku = new Map<string, Set<string>>();
+  const sourceIdsByEan = new Map<string, Set<string>>();
+  const allSkus = new Set<string>();
+  const allEans = new Set<string>();
+
+  for (const sourceProductId of missingSourceProductIds) {
+    const row = storeProductBySourceProductId.get(sourceProductId);
+    if (!row) continue;
+    const baseProduct = row.product_id instanceof ObjectId ? baseProductById.get(String(row.product_id)) : null;
+    const identifiers = storeProductIdentifiers(row, baseProduct);
+    for (const sku of identifiers.skus) {
+      allSkus.add(sku);
+      addIdentifierTarget(sourceIdsBySku, sku, sourceProductId);
+    }
+    for (const ean of identifiers.eans) {
+      allEans.add(ean);
+      addIdentifierTarget(sourceIdsByEan, ean, sourceProductId);
+    }
+    sourceDetailsById.set(sourceProductId, {
+      sourceProductId,
+      sku: identifiers.skus[0] ?? null,
+      ean: identifiers.eans[0] ?? null,
+      title: storeProductTitle(row, baseProduct),
+      price: normalizeOfferPrice(row),
+      currency: normalizedIdentifier(row.currency),
+      availability: normalizedIdentifier(row.availability),
+      url: storeProductUrl(row),
+      imageUrl: storeProductImageUrl(row),
+      skus: identifiers.skus,
+      eans: identifiers.eans,
+    });
+  }
+
+  if (allSkus.size === 0 && allEans.size === 0) {
+    return empty({
+      alreadyInSystem: alreadyInSystemIds.length,
+      missingInSystem: missingSourceProductIds.length,
+      withStoreProductData: sourceDetailsById.size,
+    });
+  }
+
+  const mappingOr: Prisma.WholesaleProductMappingWhereInput[] = [];
+  if (allSkus.size > 0) mappingOr.push({ externalSku: { in: Array.from(allSkus) } });
+  if (allEans.size > 0) mappingOr.push({ externalEan: { in: Array.from(allEans) } });
+
+  const mappings = await prisma.wholesaleProductMapping.findMany({
+    where: {
+      tenantId,
+      warehouseProductId: null,
+      isActive: true,
+      provider: { isActive: true },
+      ...(availableOnly ? { lastKnownStock: { gt: 0 } } : {}),
+      OR: mappingOr,
+    },
+    include: { provider: { select: { id: true, name: true, configJson: true } } },
+    orderBy: [
+      { lastKnownStock: 'desc' },
+      { lastKnownPrice: 'asc' },
+      { externalName: 'asc' },
+      { externalSku: 'asc' },
+    ],
+  });
+
+  const rows = [];
+  const seen = new Set<string>();
+  for (const mapping of mappings) {
+    const matchedSourceIds = new Set<string>();
+    const skuKey = identifierKey(mapping.externalSku);
+    const eanKey = identifierKey(mapping.externalEan);
+    for (const sourceProductId of skuKey ? sourceIdsBySku.get(skuKey) ?? [] : []) matchedSourceIds.add(sourceProductId);
+    for (const sourceProductId of eanKey ? sourceIdsByEan.get(eanKey) ?? [] : []) matchedSourceIds.add(sourceProductId);
+
+    for (const sourceProductId of matchedSourceIds) {
+      const sourceDetails = sourceDetailsById.get(sourceProductId);
+      if (!sourceDetails) continue;
+      const rowKey = `${sourceProductId}:${mapping.id}`;
+      if (seen.has(rowKey)) continue;
+      seen.add(rowKey);
+
+      const matchBy = [];
+      if (skuKey && sourceDetails.skus.some((sku) => identifierKey(sku) === skuKey)) matchBy.push('SKU');
+      if (eanKey && sourceDetails.eans.some((ean) => identifierKey(ean) === eanKey)) matchBy.push('EAN');
+      const lastKnownStock = decimalToNumber(mapping.lastKnownStock);
+
+      rows.push({
+        source,
+        sourceProductId,
+        sourceSku: sourceDetails.sku,
+        sourceEan: sourceDetails.ean,
+        sourceTitle: sourceDetails.title,
+        sourcePrice: sourceDetails.price,
+        sourceCurrency: sourceDetails.currency ?? 'PLN',
+        sourceAvailability: sourceDetails.availability,
+        sourceUrl: sourceDetails.url,
+        sourceImageUrl: sourceDetails.imageUrl,
+        mappingId: mapping.id,
+        providerId: mapping.providerId,
+        providerName: mapping.provider.name,
+        externalSku: mapping.externalSku,
+        externalEan: mapping.externalEan,
+        externalName: mapping.externalName,
+        externalCategory: mapping.externalCategory,
+        lastKnownStock,
+        lastKnownPrice: decimalToNumber(mapping.lastKnownPrice),
+        imageUrl: wholesaleImageUrl(mapping),
+        available: Boolean(lastKnownStock !== null && lastKnownStock > 0),
+        matchBy,
+        lastSyncAt: normalizeDateString(mapping.lastSyncAt),
+      });
+    }
+  }
+
+  rows.sort((a, b) => {
+    if (b.available !== a.available) return b.available ? 1 : -1;
+    const providerCompare = a.providerName.localeCompare(b.providerName, 'pl');
+    if (providerCompare !== 0) return providerCompare;
+    return (a.externalName ?? a.externalSku).localeCompare(b.externalName ?? b.externalSku, 'pl');
+  });
+
+  const total = rows.length;
+  const offset = (page - 1) * limit;
+  return {
+    data: rows.slice(offset, offset + limit),
+    total,
+    page,
+    limit,
+    totalPages: Math.max(1, Math.ceil(total / limit)),
+    summary: {
+      sourceProducts: sourceProductIds.length,
+      alreadyInSystem: alreadyInSystemIds.length,
+      missingInSystem: missingSourceProductIds.length,
+      withStoreProductData: sourceDetailsById.size,
+      matchedWholesaleMappings: total,
+    },
+    warnings: warningsForSources([source], 'categories'),
   };
 }
 

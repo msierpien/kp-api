@@ -42,7 +42,7 @@ type ConnectorJson<T> = {
 
 function tenantWhere() {
   const tenantId = getTenantId();
-  return tenantId ? { tenantId } : {};
+  return tenantId ? { shop: { tenantId } } : {};
 }
 
 async function loadOrder(id: string): Promise<ShipmentOrder> {

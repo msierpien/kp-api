@@ -21,6 +21,10 @@ const PRODUCTS_SERVICE = readFileSync(
   join(ROOT, 'src/services/admin/warehouse-products.service.ts'),
   'utf8',
 );
+const SCANNER_SERVICE = readFileSync(
+  join(ROOT, 'src/services/admin/warehouse-scanner.service.ts'),
+  'utf8',
+);
 const STOCK_SERVICE = readFileSync(
   join(ROOT, 'src/services/admin/warehouse-stock.service.ts'),
   'utf8',
@@ -132,6 +136,12 @@ describe('warehouse inventory document (INW): logika serwisu', () => {
       DOCS_SERVICE,
       /type === 'INW'[\s\S]{0,200}Stan policzony produktu[\s\S]{0,80}nie może być ujemny/,
     );
+  });
+
+  it('skaner magazynowy blokuje produkty wykluczone ze śledzenia magazynu', () => {
+    assert.match(SCANNER_SERVICE, /warehouseProduct\.isStockTracked/);
+    assert.match(SCANNER_SERVICE, /Produkt przypisany do tego EAN jest wykluczony z magazynu/);
+    assert.match(SCANNER_SERVICE, /Produkt magazynowy powiązany z ofertą jest wykluczony z magazynu/);
   });
 });
 

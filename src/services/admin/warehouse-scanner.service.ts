@@ -144,6 +144,16 @@ export async function resolveWarehouseScan(input: ResolveWarehouseScanInput) {
       };
     }
 
+    if (!existingBarcode.warehouseProduct.isStockTracked) {
+      return {
+        status: 'BLOCKED' as const,
+        ean,
+        reason: 'Produkt przypisany do tego EAN jest wykluczony z magazynu',
+        barcode: barcodePayload(existingBarcode),
+        product: existingBarcode.warehouseProduct,
+      };
+    }
+
     const source = input.includeWholesalePrice
       ? await findWholesaleSourceForWarehouseMatch({
         tenantId,
@@ -215,6 +225,10 @@ export async function acceptWholesaleScanMapping(mappingId: string, input: Accep
         throw new Error('Ten EAN istnieje w magazynie, ale jest nieaktywny. Aktywuj go ręcznie zamiast tworzyć duplikat.');
       }
 
+      if (!existingBarcode.warehouseProduct.isStockTracked) {
+        throw new Error('Produkt przypisany do tego EAN jest wykluczony z magazynu');
+      }
+
       if (mapping.warehouseProductId && mapping.warehouseProductId !== existingBarcode.warehouseProductId) {
         throw new Error('Ten EAN jest już przypisany do innego produktu magazynowego');
       }
@@ -274,6 +288,7 @@ export async function acceptWholesaleScanMapping(mappingId: string, input: Accep
     }
 
     if (!product.isActive) throw new Error('Produkt magazynowy powiązany z ofertą jest nieaktywny');
+    if (!product.isStockTracked) throw new Error('Produkt magazynowy powiązany z ofertą jest wykluczony z magazynu');
 
     const activeBarcodeCount = await tx.warehouseProductBarcode.count({
       where: { tenantId, warehouseProductId: product.id, isActive: true },

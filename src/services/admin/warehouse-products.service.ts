@@ -22,6 +22,7 @@ export interface CreateProductInput {
   reorderPoint?: number | null;
   reorderQuantity?: number | null;
   leadTimeDaysOverride?: number | null;
+  isStockTracked?: boolean;
 }
 
 export interface UpdateProductInput {
@@ -36,11 +37,13 @@ export interface UpdateProductInput {
   reorderQuantity?: number | null;
   leadTimeDaysOverride?: number | null;
   isActive?: boolean;
+  isStockTracked?: boolean;
 }
 
 export interface BulkUpdateProductsInput {
   productIds: string[];
   isActive?: boolean;
+  isStockTracked?: boolean;
   catalogId?: string | null;
   leadTimeGroupId?: string | null;
   leadTimeDaysOverride?: number | null;
@@ -103,12 +106,16 @@ export interface ProductsQuery {
   hasBarcode?: boolean;
   hasShopMapping?: boolean;
   hasWholesaleOffer?: boolean;
+  isStockTracked?: boolean;
 }
 
 export interface InventorySnapshotQuery {
+  page?: number | string;
+  limit?: number | string;
   search?: string;
   catalogId?: string;
   includeInactive?: boolean | string;
+  includeUntracked?: boolean | string;
 }
 
 const MAX_BULK_PRODUCT_IDS = 500;
@@ -196,12 +203,14 @@ function buildProductsWhere(query: ProductsWhereQuery, tenantId: string | null |
     hasBarcode,
     hasShopMapping,
     hasWholesaleOffer,
+    isStockTracked,
   } = query;
 
   const where: any = {};
   if (tenantId) where.tenantId = tenantId;
   if (catalogId) where.catalogId = catalogId;
   if (isActive !== undefined) where.isActive = isActive;
+  if (isStockTracked !== undefined) where.isStockTracked = isStockTracked;
   if (stockStatus === 'available') where.currentStock = { gt: 0 };
   else if (stockStatus === 'zero') where.currentStock = { equals: 0 };
   else if (stockStatus === 'negative') where.currentStock = { lt: 0 };
@@ -356,14 +365,15 @@ export interface ProductViewCountsQuery {
 }
 
 const PRODUCT_VIEW_QUERIES = {
-  all: {},
-  active: { isActive: true },
-  lowStock: { isActive: true, stockStatus: 'low', stockBelow: 1 },
-  withoutEan: { isActive: true, hasBarcode: false },
-  withoutMapping: { isActive: true, hasShopMapping: false },
-  withoutWholesaleOffer: { isActive: true, hasWholesaleOffer: false },
-  wholesaleUnavailable: { isActive: true, wholesaleStockStatus: 'unavailable' },
-  withoutPrice: { isActive: true, missingPrice: 'retail' },
+  all: { isStockTracked: true },
+  active: { isActive: true, isStockTracked: true },
+  lowStock: { isActive: true, isStockTracked: true, stockStatus: 'low', stockBelow: 1 },
+  withoutEan: { isActive: true, isStockTracked: true, hasBarcode: false },
+  withoutMapping: { isActive: true, isStockTracked: true, hasShopMapping: false },
+  withoutWholesaleOffer: { isActive: true, isStockTracked: true, hasWholesaleOffer: false },
+  wholesaleUnavailable: { isActive: true, isStockTracked: true, wholesaleStockStatus: 'unavailable' },
+  withoutPrice: { isActive: true, isStockTracked: true, missingPrice: 'retail' },
+  stockUntracked: { isStockTracked: false },
 } satisfies Record<string, ProductsWhereQuery>;
 
 export type ProductViewCounts = Record<keyof typeof PRODUCT_VIEW_QUERIES, number>;
@@ -479,7 +489,7 @@ export async function getInventorySnapshot(productId: string) {
 
   const product = await prisma.warehouseProduct.findFirst({
     where,
-    select: { id: true, sku: true, name: true, unit: true, currentStock: true, tenantId: true },
+    select: { id: true, sku: true, name: true, unit: true, currentStock: true, tenantId: true, isStockTracked: true },
   });
   if (!product) return null;
 
@@ -511,6 +521,7 @@ export async function getInventorySnapshot(productId: string) {
     sku: product.sku,
     name: product.name,
     unit: product.unit,
+    isStockTracked: product.isStockTracked,
     currentStock: Number(currentStock),
     physicalStock: Number(physicalStock),
     totalReserved: Number(totalReserved),
@@ -534,15 +545,26 @@ function normalizeBoolean(value: boolean | string | undefined) {
   return undefined;
 }
 
+function normalizePositiveInteger(value: number | string | undefined, fallback: number, max?: number) {
+  const number = Number(value ?? fallback);
+  if (!Number.isInteger(number) || number < 1) return fallback;
+  return max ? Math.min(number, max) : number;
+}
+
 export async function getInventorySnapshotList(query: InventorySnapshotQuery = {}) {
   const tenantId = requireTenantId();
   if (!tenantId) throw new Error('Brak kontekstu tenanta');
 
   const includeInactive = normalizeBoolean(query.includeInactive) === true;
+  const includeUntracked = normalizeBoolean(query.includeUntracked) === true;
+  const page = normalizePositiveInteger(query.page, 1);
+  const limit = normalizePositiveInteger(query.limit, 100, 200);
+  const skip = (page - 1) * limit;
   const search = query.search?.trim();
   const where: Prisma.WarehouseProductWhereInput = {
     tenantId,
     ...(includeInactive ? {} : { isActive: true }),
+    ...(includeUntracked ? {} : { isStockTracked: true }),
     ...(query.catalogId ? { catalogId: query.catalogId } : {}),
     ...(search
       ? {
@@ -555,35 +577,65 @@ export async function getInventorySnapshotList(query: InventorySnapshotQuery = {
       : {}),
   };
 
-  const products = await prisma.warehouseProduct.findMany({
-    where,
-    orderBy: [{ sku: 'asc' }, { name: 'asc' }],
-    select: {
-      id: true,
-      sku: true,
-      name: true,
-      unit: true,
-      catalogId: true,
-      currentStock: true,
-      isActive: true,
-      catalog: { select: { id: true, name: true, code: true } },
-    },
-  });
+  const [products, total, stockAggregate, matchingProductIds] = await Promise.all([
+    prisma.warehouseProduct.findMany({
+      where,
+      skip,
+      take: limit,
+      orderBy: [{ sku: 'asc' }, { name: 'asc' }],
+      select: {
+        id: true,
+        sku: true,
+        name: true,
+        unit: true,
+        catalogId: true,
+        currentStock: true,
+        isActive: true,
+        isStockTracked: true,
+        catalog: { select: { id: true, name: true, code: true } },
+      },
+    }),
+    prisma.warehouseProduct.count({ where }),
+    prisma.warehouseProduct.aggregate({
+      where,
+      _sum: { currentStock: true },
+    }),
+    prisma.warehouseProduct.findMany({
+      where,
+      select: { id: true },
+    }),
+  ]);
 
   const productIds = products.map((product) => product.id);
-  const reservations = productIds.length === 0
-    ? []
-    : await prisma.warehouseReservation.groupBy({
-        by: ['warehouseProductId'],
-        where: {
-          tenantId,
-          warehouseProductId: { in: productIds },
-          status: 'ACTIVE',
-          source: 'LOCAL_STOCK',
-        },
-        _sum: { quantity: true },
-        _count: { _all: true },
-      });
+  const allProductIds = matchingProductIds.map((product) => product.id);
+  const [reservations, allReservations] = await Promise.all([
+    productIds.length === 0
+      ? []
+      : prisma.warehouseReservation.groupBy({
+          by: ['warehouseProductId'],
+          where: {
+            tenantId,
+            warehouseProductId: { in: productIds },
+            status: 'ACTIVE',
+            source: 'LOCAL_STOCK',
+          },
+          _sum: { quantity: true },
+          _count: { _all: true },
+        }),
+    allProductIds.length === 0
+      ? []
+      : prisma.warehouseReservation.groupBy({
+          by: ['warehouseProductId'],
+          where: {
+            tenantId,
+            warehouseProductId: { in: allProductIds },
+            status: 'ACTIVE',
+            source: 'LOCAL_STOCK',
+          },
+          _sum: { quantity: true },
+          _count: { _all: true },
+        }),
+  ]);
 
   const reservedByProductId = new Map(reservations.map((row) => [
     row.warehouseProductId,
@@ -593,19 +645,11 @@ export async function getInventorySnapshotList(query: InventorySnapshotQuery = {
     },
   ]));
 
-  let totalPhysicalStock = new Prisma.Decimal(0);
-  let totalAvailableStock = new Prisma.Decimal(0);
-  let totalReserved = new Prisma.Decimal(0);
-
   const data = products.map((product) => {
     const availableStock = new Prisma.Decimal(product.currentStock);
     const reservation = reservedByProductId.get(product.id);
     const reservedQuantity = reservation?.quantity ?? new Prisma.Decimal(0);
     const physicalStock = availableStock.plus(reservedQuantity);
-
-    totalPhysicalStock = totalPhysicalStock.plus(physicalStock);
-    totalAvailableStock = totalAvailableStock.plus(availableStock);
-    totalReserved = totalReserved.plus(reservedQuantity);
 
     return {
       productId: product.id,
@@ -615,6 +659,7 @@ export async function getInventorySnapshotList(query: InventorySnapshotQuery = {
       catalogId: product.catalogId,
       catalog: product.catalog,
       isActive: product.isActive,
+      isStockTracked: product.isStockTracked,
       currentStock: Number(availableStock),
       availableStock: Number(availableStock),
       physicalStock: Number(physicalStock),
@@ -623,14 +668,24 @@ export async function getInventorySnapshotList(query: InventorySnapshotQuery = {
     };
   });
 
+  const totalAvailableStock = new Prisma.Decimal(stockAggregate._sum.currentStock ?? 0);
+  const totalReserved = allReservations.reduce(
+    (sum, row) => sum.plus(row._sum.quantity ?? 0),
+    new Prisma.Decimal(0),
+  );
+  const totalPhysicalStock = totalAvailableStock.plus(totalReserved);
+
   return {
     data,
-    total: data.length,
+    total,
+    page,
+    limit,
+    totalPages: Math.max(1, Math.ceil(total / limit)),
     summary: {
       totalPhysicalStock: Number(totalPhysicalStock),
       totalAvailableStock: Number(totalAvailableStock),
       totalReserved: Number(totalReserved),
-      productsWithReservations: data.filter((item) => item.activeReservationsCount > 0).length,
+      productsWithReservations: allReservations.length,
     },
   };
 }
@@ -663,6 +718,7 @@ export async function createProduct(input: CreateProductInput) {
       reorderPoint: normalizeOptionalQuantity(input.reorderPoint, 'Minimalny stan'),
       reorderQuantity: normalizeOptionalPositiveQuantity(input.reorderQuantity, 'Partia zamawiania'),
       leadTimeDaysOverride: normalizeOptionalLeadTimeDays(input.leadTimeDaysOverride),
+      isStockTracked: input.isStockTracked ?? true,
     },
   });
 }
@@ -743,6 +799,7 @@ export async function bulkUpdateProducts(input: BulkUpdateProductsInput): Promis
 
   if (
     input.isActive === undefined &&
+    input.isStockTracked === undefined &&
     input.catalogId === undefined &&
     input.leadTimeGroupId === undefined &&
     input.leadTimeDaysOverride === undefined &&
@@ -777,6 +834,7 @@ export async function bulkUpdateProducts(input: BulkUpdateProductsInput): Promis
 
   const data: Prisma.WarehouseProductUncheckedUpdateManyInput = {};
   if (input.isActive !== undefined) data.isActive = input.isActive;
+  if (input.isStockTracked !== undefined) data.isStockTracked = input.isStockTracked;
   if (input.catalogId !== undefined) {
     const productTenantIds = Array.from(new Set(products.map((product) => product.tenantId)));
     if (!tenantId && productTenantIds.length !== 1) {

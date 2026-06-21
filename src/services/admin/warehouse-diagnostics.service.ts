@@ -99,6 +99,9 @@ export async function retryStockSyncLog(id: string) {
   });
 
   if (!log) throw new Error('Log synchronizacji stanu nie znaleziony');
+  if (!log.warehouseProduct?.isStockTracked) {
+    throw new Error('Produkt jest wykluczony z magazynu');
+  }
 
   const mapping = await prisma.shopProductMapping.findFirst({
     where: {
@@ -158,7 +161,7 @@ export async function requeuePendingStockSyncLogs(shopId?: string) {
       ...(shopId ? { shopId } : {}),
     },
     include: {
-      warehouseProduct: { select: { id: true, isActive: true } },
+      warehouseProduct: { select: { id: true, isActive: true, isStockTracked: true } },
     },
     orderBy: { createdAt: 'asc' },
     take: 500,
@@ -177,7 +180,7 @@ export async function requeuePendingStockSyncLogs(shopId?: string) {
 
   for (const log of pendingLogs) {
     try {
-      if (!log.warehouseProduct?.isActive) { skipped++; continue; }
+      if (!log.warehouseProduct?.isActive || !log.warehouseProduct.isStockTracked) { skipped++; continue; }
 
       const mapping = await prisma.shopProductMapping.findFirst({
         where: {
@@ -344,7 +347,7 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
   const failedSinceDays = normalizeFailedSinceDays(query.failedSinceDays);
   const failedSince = new Date(Date.now() - failedSinceDays * 24 * 60 * 60 * 1000);
 
-  const productBaseWhere: Prisma.WarehouseProductWhereInput = { tenantId, isActive: true };
+  const productBaseWhere: Prisma.WarehouseProductWhereInput = { tenantId, isActive: true, isStockTracked: true };
   const lowStockWhere: Prisma.WarehouseProductWhereInput = {
     ...productBaseWhere,
     currentStock: { lt: lowStockThreshold },
@@ -535,7 +538,7 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
 export async function getStockDiscrepancies(query: StockDiscrepanciesQuery = {}) {
   const tenantId = requireTenantId();
   const products = await prisma.warehouseProduct.findMany({
-    where: { tenantId },
+    where: { tenantId, isStockTracked: true },
     include: {
       catalog: true,
       items: {

@@ -21,7 +21,7 @@ export async function getStock(): Promise<StockEntry[]> {
   if (tenantId) productWhere.tenantId = tenantId;
 
   const products = await prisma.warehouseProduct.findMany({
-    where: { ...productWhere, isActive: true },
+    where: { ...productWhere, isActive: true, isStockTracked: true },
     include: {
       items: {
         include: { document: true },

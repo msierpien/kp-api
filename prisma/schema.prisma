@@ -1224,6 +1224,7 @@ model WarehouseProduct {
   leadTimeDaysOverride Int? @map("lead_time_days_override")
   leadTimeGroupId String? @map("lead_time_group_id")
   isActive      Boolean  @default(true) @map("is_active")
+  isStockTracked Boolean @default(true) @map("is_stock_tracked")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
@@ -1253,6 +1254,7 @@ model WarehouseProduct {
   @@index([catalogId])
   @@index([leadTimeGroupId])
   @@index([tenantId, isActive])
+  @@index([tenantId, isActive, isStockTracked])
   @@map("warehouse_products")
 }
 

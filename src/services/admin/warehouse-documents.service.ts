@@ -1193,7 +1193,7 @@ export async function bulkUpsertInventoryItems(documentId: string, input: BulkUp
 
     return tx.warehouseDocument.findUnique({
       where: { id: documentId },
-      include: documentDetailInclude,
+      include: { order: true },
     });
   });
 }
@@ -1412,7 +1412,7 @@ async function assertFullInventoryComplete(
   if (metadata.inventoryScope !== FULL_INVENTORY_SCOPE) return;
 
   const activeProducts = await prisma.warehouseProduct.findMany({
-    where: { tenantId, isActive: true },
+    where: { tenantId, isActive: true, isStockTracked: true },
     select: { id: true, sku: true, name: true },
     orderBy: [{ sku: 'asc' }, { name: 'asc' }],
   });
@@ -1426,7 +1426,7 @@ async function assertFullInventoryComplete(
     .map((product) => `${product.sku} ${product.name}`)
     .join(', ');
   const suffix = missingProducts.length > 5 ? ` i ${missingProducts.length - 5} kolejnych` : '';
-  throw new Error(`Pełna inwentaryzacja wymaga policzenia wszystkich aktywnych produktów. Brakuje ${missingProducts.length}: ${preview}${suffix}`);
+  throw new Error(`Pełna inwentaryzacja wymaga policzenia wszystkich aktywnych produktów śledzonych w magazynie. Brakuje ${missingProducts.length}: ${preview}${suffix}`);
 }
 
 async function getWarehouseSettings(tenantId: string) {

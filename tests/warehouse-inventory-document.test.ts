@@ -9,6 +9,10 @@ const MIGRATION = readFileSync(
   join(ROOT, 'prisma/migrations/20260525100000_add_inventory_document/migration.sql'),
   'utf8',
 );
+const STOCK_TRACKING_MIGRATION = readFileSync(
+  join(ROOT, 'prisma/migrations/20260621133000_add_warehouse_product_stock_tracking/migration.sql'),
+  'utf8',
+);
 const DOCS_SERVICE = readFileSync(
   join(ROOT, 'src/services/admin/warehouse-documents.service.ts'),
   'utf8',
@@ -45,6 +49,12 @@ describe('warehouse inventory document (INW): schema i migracja', () => {
     assert.match(modelBlock, /systemQuantity\s+Decimal\?\s+@map\("system_quantity"\)/);
   });
 
+  it('WarehouseProduct ma osobną flagę śledzenia magazynowego', () => {
+    const modelBlock = SCHEMA.match(/model WarehouseProduct \{[\s\S]*?\}/)?.[0] ?? '';
+    assert.match(modelBlock, /isStockTracked\s+Boolean\s+@default\(true\)\s+@map\("is_stock_tracked"\)/);
+    assert.match(modelBlock, /@@index\(\[tenantId, isActive, isStockTracked\]\)/);
+  });
+
   it('migracja dodaje wartość INW do enum i kolumnę system_quantity', () => {
     assert.match(MIGRATION, /ALTER TYPE "WarehouseDocumentType" ADD VALUE 'INW'/);
     assert.match(MIGRATION, /ADD COLUMN "system_quantity" DECIMAL\(10, 3\)/);
@@ -53,6 +63,11 @@ describe('warehouse inventory document (INW): schema i migracja', () => {
   it('migracja tworzy częściowy unique index pilnujący unique productId per dokument INW', () => {
     assert.match(MIGRATION, /CREATE UNIQUE INDEX "warehouse_document_items_inw_product_uidx"/);
     assert.match(MIGRATION, /WHERE "system_quantity" IS NOT NULL/);
+  });
+
+  it('migracja śledzenia magazynu dodaje is_stock_tracked z domyślnym true', () => {
+    assert.match(STOCK_TRACKING_MIGRATION, /ADD COLUMN "is_stock_tracked" BOOLEAN NOT NULL DEFAULT true/);
+    assert.match(STOCK_TRACKING_MIGRATION, /warehouse_products_tenant_active_stock_tracked_idx/);
   });
 });
 
@@ -90,7 +105,8 @@ describe('warehouse inventory document (INW): logika serwisu', () => {
   it('pełna INW blokuje zatwierdzenie, jeśli brakuje aktywnych produktów', () => {
     assert.match(DOCS_SERVICE, /FULL_INVENTORY_SCOPE = 'ALL_ACTIVE_PRODUCTS'/);
     assert.match(DOCS_SERVICE, /assertFullInventoryComplete\(doc\.tenantId,\s*doc\.type,\s*doc\.metadataJson,\s*doc\.items\)/);
-    assert.match(DOCS_SERVICE, /Pełna inwentaryzacja wymaga policzenia wszystkich aktywnych produktów/);
+    assert.match(DOCS_SERVICE, /isActive: true, isStockTracked: true/);
+    assert.match(DOCS_SERVICE, /Pełna inwentaryzacja wymaga policzenia wszystkich aktywnych produktów śledzonych w magazynie/);
   });
 
   it('WZ z reservationId nie odejmuje stanu drugi raz, a anulowanie zwalnia rezerwacje', () => {
@@ -147,8 +163,12 @@ describe('warehouse inventory document (INW): routes i snapshot', () => {
 
   it('bulk snapshot pełnej inwentaryzacji jest dostępny przez GET /inventory/snapshot', () => {
     assert.match(PRODUCTS_SERVICE, /export async function getInventorySnapshotList\(/);
+    assert.match(PRODUCTS_SERVICE, /normalizePositiveInteger\(query\.page, 1\)/);
+    assert.match(PRODUCTS_SERVICE, /isStockTracked: true/);
+    assert.match(PRODUCTS_SERVICE, /totalPages: Math\.max\(1, Math\.ceil\(total \/ limit\)\)/);
     assert.match(PRODUCTS_SERVICE, /activeReservationsCount/);
     assert.match(PRODUCTS_ROUTES, /fastify\.get\('\/inventory\/snapshot'/);
+    assert.match(PRODUCTS_ROUTES, /limit:\s*\{\s*type: 'integer', minimum: 1, maximum: 200/);
   });
 
   it('pełna INW ma endpoint tworzenia draftu i bulk upsert pozycji', () => {

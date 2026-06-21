@@ -283,6 +283,7 @@ export async function createReservation(input: CreateReservationInput) {
       },
     });
     if (!product) throw new Error('Produkt magazynowy nie znaleziony');
+    if (!product.isStockTracked) throw new Error('Produkt jest wykluczony z magazynu');
 
     const tenantId = input.tenantId ?? product.tenantId;
     if (product.tenantId !== tenantId) {
@@ -395,6 +396,38 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
         continue;
       }
 
+      const existingReservation = await tx.warehouseReservation.findFirst({
+        where: {
+          tenantId: order.shop.tenantId,
+          orderItemId: item.id,
+          status: 'ACTIVE',
+        },
+      });
+
+      if (!warehouseProduct.isStockTracked) {
+        if (existingReservation) {
+          await closeActiveReservationInTx(
+            tx,
+            existingReservation,
+            'RELEASED',
+            'Produkt wykluczony z magazynu',
+          );
+          result.updated++;
+        }
+        result.missingMapping++;
+        result.issues.push({
+          orderItemId: item.id,
+          sku: item.sku,
+          productName: item.productNameSnapshot,
+          requestedQuantity: item.quantity,
+          reservedQuantity: 0,
+          warehouseProductId,
+          status: 'MISSING_MAPPING',
+          message: 'Produkt wykluczony z magazynu',
+        });
+        continue;
+      }
+
       if (!item.warehouseProductId || item.warehouseProductId !== warehouseProductId) {
         await tx.orderItem.update({
           where: { id: item.id },
@@ -412,14 +445,6 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
       const consumedQuantity = consumedReservations
         .filter((reservation) => reservation.warehouseProductId === warehouseProductId)
         .reduce((sum, reservation) => sum.plus(reservation.quantity), new Prisma.Decimal(0));
-
-      const existingReservation = await tx.warehouseReservation.findFirst({
-        where: {
-          tenantId: order.shop.tenantId,
-          orderItemId: item.id,
-          status: 'ACTIVE',
-        },
-      });
 
       if (consumedQuantity.gte(requestedQuantity)) {
         const issue: OrderReservationIssue = {

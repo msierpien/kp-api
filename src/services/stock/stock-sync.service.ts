@@ -39,6 +39,7 @@ type ProductForPublication = {
   id: string;
   tenantId: string;
   currentStock: Prisma.Decimal;
+  isStockTracked?: boolean;
   leadTimeDaysOverride?: number | null;
   leadTimeGroup?: { leadTimeDays: number; isActive: boolean } | null;
 };
@@ -60,6 +61,7 @@ export async function getInventoryPublicationDecision(
       id: true,
       tenantId: true,
       currentStock: true,
+      isStockTracked: true,
       leadTimeDaysOverride: true,
       leadTimeGroup: { select: { leadTimeDays: true, isActive: true } },
     },
@@ -178,6 +180,7 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
           leadTimeDaysOverride: true,
           leadTimeGroup: { select: { leadTimeDays: true, isActive: true } },
           isActive: true,
+          isStockTracked: true,
         },
       },
     },
@@ -185,6 +188,7 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
 
   const productsById = new Map<string, ProductForPublication>();
   let skippedInactiveProducts = 0;
+  let skippedUntrackedProducts = 0;
   let skippedMissingProducts = 0;
 
   for (const mapping of mappings) {
@@ -194,6 +198,10 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
     }
     if (!mapping.warehouseProduct.isActive) {
       skippedInactiveProducts++;
+      continue;
+    }
+    if (!mapping.warehouseProduct.isStockTracked) {
+      skippedUntrackedProducts++;
       continue;
     }
     productsById.set(mapping.warehouseProduct.id, mapping.warehouseProduct);
@@ -217,7 +225,7 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
 
   for (const mapping of mappings) {
     const product = mapping.warehouseProduct;
-    if (!product?.isActive) continue;
+    if (!product?.isActive || !product.isStockTracked) continue;
 
     const decision = decisions.get(product.id);
     if (!decision) continue;
@@ -278,6 +286,7 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
     scannedMappings: mappings.length,
     affectedProducts: productsById.size,
     skippedInactiveProducts,
+    skippedUntrackedProducts,
     skippedMissingProducts,
   };
 }

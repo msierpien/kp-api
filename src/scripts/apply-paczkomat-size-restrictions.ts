@@ -1,7 +1,7 @@
 import { ShopPlatform } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { decrypt } from '../lib/encryption';
-import { PrestaShopClient, type PrestaShopCarrierDetails } from '../services/prestashop/prestashop-client';
+import { buildAdminConnectorControllerUrl } from '../services/shops/prestashop-stock-client';
 
 type Args = {
   shopId?: string;
@@ -15,6 +15,45 @@ type Args = {
 };
 
 type ResultStatus = 'UPDATED' | 'WOULD_UPDATE' | 'UNCHANGED' | 'SKIPPED' | 'FAILED';
+
+type ConnectorConfig = {
+  adminConnectorUrl?: string | null;
+  adminConnectorApiKey?: string | null;
+  bulkStockApiKey?: string | null;
+  productContentApiKey?: string | null;
+  contentModuleApiKey?: string | null;
+  prestashopShopId?: string | number | null;
+  idShopDefault?: string | number | null;
+  prestashopProductDefaults?: { idShopDefault?: string | number | null } | null;
+  productCreate?: { idShopDefault?: string | number | null } | null;
+};
+
+type ConnectorCarrier = {
+  id: number;
+  referenceId: number;
+  name: string;
+  moduleName: string;
+};
+
+type ProductCarrierRestrictionProfile = {
+  productId: number;
+  idShop: number;
+  carrierReferenceIds: number[];
+  carriers: ConnectorCarrier[];
+  dimensions: {
+    width: number;
+    height: number;
+    depth: number;
+    weight: number;
+    maxDimension: number;
+  };
+};
+
+type ConnectorResponse<T> = {
+  success: boolean;
+  data?: T;
+  errors?: string[];
+};
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
@@ -67,22 +106,116 @@ function sameIds(left: string[], right: string[]) {
   return a.length === b.length && a.every((id, index) => id === b[index]);
 }
 
-function isLockerCarrier(carrier: PrestaShopCarrierDetails) {
+function isLockerCarrier(carrier: ConnectorCarrier) {
   const haystack = `${carrier.name} ${carrier.moduleName ?? ''}`.toLowerCase();
   return /paczkomat|locker/.test(haystack);
 }
 
-function buildClient(shop: { baseUrl: string; apiKey: string; configJson: unknown }) {
-  const config = (shop.configJson || {}) as {
-    authType?: string;
-    adminApi?: { clientId: string; clientSecret: string; scopes: string[] };
-  };
+function configObject(value: unknown): ConnectorConfig {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as ConnectorConfig : {};
+}
 
-  return new PrestaShopClient({
-    baseUrl: shop.baseUrl,
-    apiKey: decrypt(shop.apiKey),
-    authType: config.authType === 'ADMIN_API' ? 'ADMIN_API' : 'WEB_SERVICE',
-    adminApiConfig: config.authType === 'ADMIN_API' ? config.adminApi : undefined,
+function normalizeOptionalString(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function secretFromConfig(config: ConnectorConfig) {
+  for (const key of ['adminConnectorApiKey', 'productContentApiKey', 'contentModuleApiKey', 'bulkStockApiKey'] as const) {
+    const encrypted = normalizeOptionalString(config[key]);
+    if (encrypted) return decrypt(encrypted);
+  }
+
+  return null;
+}
+
+function getPrestaShopShopId(config: ConnectorConfig) {
+  if (typeof config.idShopDefault === 'string' || typeof config.idShopDefault === 'number') return config.idShopDefault;
+  if (typeof config.prestashopShopId === 'string' || typeof config.prestashopShopId === 'number') return config.prestashopShopId;
+  if (config.prestashopProductDefaults && typeof config.prestashopProductDefaults.idShopDefault === 'string') return config.prestashopProductDefaults.idShopDefault;
+  if (config.prestashopProductDefaults && typeof config.prestashopProductDefaults.idShopDefault === 'number') return config.prestashopProductDefaults.idShopDefault;
+  if (config.productCreate && typeof config.productCreate.idShopDefault === 'string') return config.productCreate.idShopDefault;
+  if (config.productCreate && typeof config.productCreate.idShopDefault === 'number') return config.productCreate.idShopDefault;
+  return null;
+}
+
+function connectorBaseUrl(shop: { baseUrl: string }, config: ConnectorConfig) {
+  const configured = normalizeOptionalString(config.adminConnectorUrl);
+  if (configured) return configured;
+
+  return `${shop.baseUrl.replace(/\/+$/, '').replace(/\/api$/, '')}/index.php?fc=module&module=kp_adminconnector&controller=capabilities`;
+}
+
+function connectorUrl(
+  shop: { baseUrl: string },
+  config: ConnectorConfig,
+  controller: string,
+  params: Record<string, string | number> = {},
+) {
+  const idShop = getPrestaShopShopId(config);
+  return buildAdminConnectorControllerUrl(connectorBaseUrl(shop, config), controller, {
+    ...params,
+    ...(idShop === null ? {} : { idShop }),
+  });
+}
+
+async function connectorRequest<T>(
+  shop: { baseUrl: string },
+  config: ConnectorConfig,
+  controller: string,
+  params: Record<string, string | number>,
+  init: RequestInit = {},
+): Promise<T> {
+  const apiKey = secretFromConfig(config);
+  if (!apiKey) {
+    throw new Error('Brak adminConnectorApiKey w konfiguracji sklepu');
+  }
+
+  const url = connectorUrl(shop, config, controller, params);
+  if (!url) {
+    throw new Error('Brak URL kp_adminconnector w konfiguracji sklepu');
+  }
+
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      Accept: 'application/json',
+      'X-Api-Key': apiKey,
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(init.headers ?? {}),
+    },
+  });
+  const text = await response.text();
+  const json = text ? JSON.parse(text) as ConnectorResponse<T> : null;
+  if (!response.ok || !json?.success || json.data === undefined) {
+    const message = json?.errors?.join(', ') || text.slice(0, 300) || `HTTP ${response.status}`;
+    throw new Error(`kp_adminconnector ${controller}: ${message}`);
+  }
+
+  return json.data;
+}
+
+async function getProductCarrierRestrictions(
+  shop: { baseUrl: string },
+  config: ConnectorConfig,
+  productId: string,
+) {
+  return connectorRequest<ProductCarrierRestrictionProfile>(shop, config, 'carrierrestrictions', {
+    productId,
+  });
+}
+
+async function setProductCarrierRestrictions(
+  shop: { baseUrl: string },
+  config: ConnectorConfig,
+  productId: string,
+  carrierReferenceIds: string[],
+) {
+  return connectorRequest<ProductCarrierRestrictionProfile>(shop, config, 'carrierrestrictions', {}, {
+    method: 'POST',
+    body: JSON.stringify({
+      productId: Number(productId),
+      carrierReferenceIds: carrierReferenceIds.map(Number),
+    }),
   });
 }
 
@@ -98,10 +231,30 @@ async function main() {
 
   if (!shop) throw new Error('Nie znaleziono aktywnego sklepu PrestaShop');
 
-  const client = buildClient(shop);
-  const carriers = await client.fetchCarriers({ activeOnly: true, deleted: false });
-  const lockerCarrierIds = carriers.filter(isLockerCarrier).map((carrier) => carrier.id);
-  const nonLockerCarrierIds = carriers.filter((carrier) => !lockerCarrierIds.includes(carrier.id)).map((carrier) => carrier.id);
+  const connectorConfig = configObject(shop.configJson);
+  const firstMappingForCarriers = await prisma.shopProductMapping.findFirst({
+    where: {
+      shopId: shop.id,
+      isActive: true,
+      externalProductId: { not: '' },
+      ...(args.sku
+        ? {
+          OR: [
+            { externalSku: args.sku },
+            { warehouseProduct: { sku: args.sku } },
+          ],
+        }
+        : {}),
+      ...(args.externalProductId ? { externalProductId: args.externalProductId } : {}),
+    },
+    orderBy: { externalProductId: 'asc' },
+  });
+  if (!firstMappingForCarriers) throw new Error('Nie znaleziono mapowania produktu do sprawdzenia carrierow');
+
+  const carrierProfile = await getProductCarrierRestrictions(shop, connectorConfig, firstMappingForCarriers.externalProductId);
+  const carriers = carrierProfile.carriers;
+  const lockerCarrierIds = carriers.filter(isLockerCarrier).map((carrier) => String(carrier.referenceId));
+  const nonLockerCarrierIds = carriers.filter((carrier) => !lockerCarrierIds.includes(String(carrier.referenceId))).map((carrier) => String(carrier.referenceId));
 
   if (lockerCarrierIds.length === 0) throw new Error('Nie znaleziono aktywnego carriera Paczkomatu');
   if (nonLockerCarrierIds.length === 0) throw new Error('Nie znaleziono aktywnego carriera alternatywnego dla produktów ponadgabarytowych');
@@ -135,31 +288,31 @@ async function main() {
 
   console.log(`Sklep: ${shop.name} (${shop.id})`);
   console.log(`Prog Paczkomatu: > ${args.thresholdCm} cm`);
-  console.log(`Paczkomat carrierIds: ${lockerCarrierIds.join(', ')}`);
-  console.log(`Dozwolone carrierIds po wykluczeniu: ${nonLockerCarrierIds.join(', ')}`);
+  console.log(`Paczkomat carrierReferenceIds: ${lockerCarrierIds.join(', ')}`);
+  console.log(`Dozwolone carrierReferenceIds po wykluczeniu: ${nonLockerCarrierIds.join(', ')}`);
   console.log(`Tryb: ${args.apply ? 'APPLY' : 'DRY-RUN'}`);
   console.log(`Mapowania do sprawdzenia: ${mappings.length}`);
 
   for (const mapping of mappings) {
     const sku = mapping.warehouseProduct?.sku ?? mapping.externalSku;
     try {
-      const profile = await client.getProductShippingProfile(mapping.externalProductId);
-      if (profile.maxDimension === null) {
+      const profile = await getProductCarrierRestrictions(shop, connectorConfig, mapping.externalProductId);
+      if (!Number.isFinite(profile.dimensions.maxDimension)) {
         counts.SKIPPED += 1;
         console.log(`SKIPPED ${sku} remote=${mapping.externalProductId}: brak wymiarow`);
         continue;
       }
 
-      if (profile.maxDimension <= args.thresholdCm) {
+      if (profile.dimensions.maxDimension <= args.thresholdCm) {
         counts.UNCHANGED += 1;
         continue;
       }
 
-      const currentIds = profile.carrierIds;
+      const currentIds = profile.carrierReferenceIds.map(String);
       const currentAllowsLocker = currentIds.length === 0 || currentIds.some((id) => lockerCarrierIds.includes(id));
       if (!currentAllowsLocker) {
         counts.UNCHANGED += 1;
-        console.log(`UNCHANGED ${sku} remote=${mapping.externalProductId}: max=${profile.maxDimension} cm, Paczkomat juz wykluczony`);
+        console.log(`UNCHANGED ${sku} remote=${mapping.externalProductId}: max=${profile.dimensions.maxDimension} cm, Paczkomat juz wykluczony`);
         continue;
       }
 
@@ -180,10 +333,10 @@ async function main() {
 
       const status: ResultStatus = args.apply ? 'UPDATED' : 'WOULD_UPDATE';
       if (args.apply) {
-        await client.setProductCarrierRestrictions(mapping.externalProductId, desiredIds);
+        await setProductCarrierRestrictions(shop, connectorConfig, mapping.externalProductId, desiredIds);
       }
       counts[status] += 1;
-      console.log(`${status} ${sku} remote=${mapping.externalProductId}: max=${profile.maxDimension} cm, carriers ${currentIds.length ? currentIds.join(',') : 'ALL'} -> ${desiredIds.join(',')}`);
+      console.log(`${status} ${sku} remote=${mapping.externalProductId}: max=${profile.dimensions.maxDimension} cm, carrierRefs ${currentIds.length ? currentIds.join(',') : 'ALL'} -> ${desiredIds.join(',')}`);
     } catch (error) {
       counts.FAILED += 1;
       console.log(`FAILED ${sku} remote=${mapping.externalProductId}: ${error instanceof Error ? error.message : 'Nieznany blad'}`);

@@ -550,7 +550,7 @@ function buildModuleControllerUrl(
 }
 
 function stripKnownModuleController(url: string) {
-  return url.replace(/\/(?:bulkupdate|snapshot|stocksnapshot|capabilities|patch|mediaimport|mediaorder|mediaupdate|mediadelete)$/i, '');
+  return url.replace(/\/(?:bulkupdate|snapshot|stocksnapshot|capabilities|patch|mediaimport|mediaorder|mediaupdate|mediadelete|carrierrestrictions)$/i, '');
 }
 
 function withQueryParams(url: string, params: Record<string, string | number | null | undefined>) {

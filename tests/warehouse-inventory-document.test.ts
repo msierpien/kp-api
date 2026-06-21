@@ -66,8 +66,11 @@ describe('warehouse inventory document (INW): logika serwisu', () => {
     assert.match(DOCS_SERVICE, /W dokumencie INW każdy produkt może wystąpić tylko raz/);
   });
 
-  it('prepareDocumentItems robi snapshot currentStock gdy systemQuantity nie podano', () => {
-    assert.match(DOCS_SERVICE, /isInventory[\s\S]{0,400}currentStock/);
+  it('prepareDocumentItems robi fizyczny snapshot currentStock + aktywne lokalne rezerwacje gdy systemQuantity nie podano', () => {
+    assert.match(DOCS_SERVICE, /warehouseReservation\.groupBy\(/);
+    assert.match(DOCS_SERVICE, /status:\s*'ACTIVE'/);
+    assert.match(DOCS_SERVICE, /source:\s*'LOCAL_STOCK'/);
+    assert.match(DOCS_SERVICE, /availableStock\.plus\(reservedQuantity\)/);
   });
 
   it('applyStockDeltas dla INW liczy delta = counted - system', () => {
@@ -82,6 +85,18 @@ describe('warehouse inventory document (INW): logika serwisu', () => {
       DOCS_SERVICE,
       /type === 'INW'[\s\S]{0,400}reverse \? system\.minus\(counted\) : counted\.minus\(system\)/,
     );
+  });
+
+  it('pełna INW blokuje zatwierdzenie, jeśli brakuje aktywnych produktów', () => {
+    assert.match(DOCS_SERVICE, /FULL_INVENTORY_SCOPE = 'ALL_ACTIVE_PRODUCTS'/);
+    assert.match(DOCS_SERVICE, /assertFullInventoryComplete\(doc\.tenantId,\s*doc\.type,\s*doc\.metadataJson,\s*doc\.items\)/);
+    assert.match(DOCS_SERVICE, /Pełna inwentaryzacja wymaga policzenia wszystkich aktywnych produktów/);
+  });
+
+  it('WZ z reservationId nie odejmuje stanu drugi raz, a anulowanie zwalnia rezerwacje', () => {
+    assert.match(DOCS_SERVICE, /if \(type === 'WZ' && item\.reservationId\) continue/);
+    assert.match(DOCS_SERVICE, /consumeDocumentReservations\(tx,\s*doc\.items\)/);
+    assert.match(DOCS_SERVICE, /releaseDocumentReservations\(tx,\s*doc\.items\)/);
   });
 
   it('recalculateStockCache uwzględnia ZW, INW i tylko lokalne aktywne rezerwacje', () => {
@@ -122,11 +137,25 @@ describe('warehouse inventory document (INW): routes i snapshot', () => {
     assert.match(PRODUCTS_SERVICE, /export async function getInventorySnapshot\(/);
   });
 
-  it('snapshot zwraca currentStock, totalReserved, availableStock i aktywne rezerwacje', () => {
+  it('snapshot produktu zwraca currentStock, physicalStock, totalReserved, availableStock i aktywne rezerwacje', () => {
     assert.match(PRODUCTS_SERVICE, /currentStock: Number\(currentStock\)/);
+    assert.match(PRODUCTS_SERVICE, /physicalStock: Number\(physicalStock\)/);
     assert.match(PRODUCTS_SERVICE, /totalReserved: Number\(totalReserved\)/);
     assert.match(PRODUCTS_SERVICE, /availableStock: Number\(availableStock\)/);
     assert.match(PRODUCTS_SERVICE, /activeReservations: activeReservations\.map/);
+  });
+
+  it('bulk snapshot pełnej inwentaryzacji jest dostępny przez GET /inventory/snapshot', () => {
+    assert.match(PRODUCTS_SERVICE, /export async function getInventorySnapshotList\(/);
+    assert.match(PRODUCTS_SERVICE, /activeReservationsCount/);
+    assert.match(PRODUCTS_ROUTES, /fastify\.get\('\/inventory\/snapshot'/);
+  });
+
+  it('pełna INW ma endpoint tworzenia draftu i bulk upsert pozycji', () => {
+    assert.match(DOCS_SERVICE, /export async function createFullInventoryDocument\(/);
+    assert.match(DOCS_SERVICE, /export async function bulkUpsertInventoryItems\(/);
+    assert.match(DOCS_ROUTES, /fastify\.post\('\/documents\/inventory\/full'/);
+    assert.match(DOCS_ROUTES, /fastify\.post\('\/documents\/:id\/inventory\/items\/bulk-upsert'/);
   });
 
   it('GET /products/:id/inventory-snapshot jest zarejestrowany', () => {

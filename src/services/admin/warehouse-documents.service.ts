@@ -57,6 +57,15 @@ export interface CancelDocumentInput {
   reason?: string;
 }
 
+export interface CreateFullInventoryDocumentInput {
+  date?: string;
+  description?: string;
+}
+
+export interface BulkUpsertInventoryItemsInput {
+  items: DocumentItemInput[];
+}
+
 export interface CreateWzForOrderResult {
   document: Awaited<ReturnType<typeof getDocumentById>>;
   created: boolean;
@@ -115,6 +124,8 @@ interface PreparedDocumentItem {
   notes?: string;
   reservationId?: string | null;
 }
+
+const FULL_INVENTORY_SCOPE = 'ALL_ACTIVE_PRODUCTS';
 
 const documentDetailInclude = {
   items: {
@@ -394,6 +405,39 @@ export async function createDocument(input: CreateDocumentInput) {
       include: documentDetailInclude,
     });
   });
+}
+
+export async function createFullInventoryDocument(input: CreateFullInventoryDocumentInput = {}) {
+  const tenantId = getTenantId();
+  if (!tenantId) throw new Error('Brak kontekstu tenanta');
+
+  const context = getTenantContext();
+  const documentDate = input.date ? parseDateInput(input.date) : new Date();
+  const description = input.description?.trim() || 'Pełna inwentaryzacja magazynu';
+
+  const document = await prisma.$transaction(async (tx) => {
+    const number = await generateDocumentNumber(tx, tenantId, 'INW', documentDate);
+
+    return tx.warehouseDocument.create({
+      data: {
+        tenantId,
+        number,
+        type: 'INW',
+        status: 'DRAFT',
+        date: documentDate,
+        description,
+        createdByUserId: context?.userId,
+        metadataJson: {
+          inventoryScope: FULL_INVENTORY_SCOPE,
+          source: 'FULL_INVENTORY_SESSION',
+          startedAt: new Date().toISOString(),
+        },
+      },
+      include: documentDetailInclude,
+    });
+  });
+
+  return withAuditUsers(document);
 }
 
 function metadataRecord(value: Prisma.JsonValue | null | undefined) {
@@ -1091,6 +1135,69 @@ export async function mergeDocumentItem(documentId: string, input: DocumentItemI
   return updatedDocument;
 }
 
+export async function bulkUpsertInventoryItems(documentId: string, input: BulkUpsertInventoryItemsInput) {
+  const tenantId = getTenantId();
+  const documentWhere: any = { id: documentId };
+  if (tenantId) documentWhere.tenantId = tenantId;
+
+  const doc = await prisma.warehouseDocument.findFirst({ where: documentWhere });
+  if (!doc) throw new Error('Dokument nie znaleziony');
+  if (doc.status !== 'DRAFT') throw new Error('Można edytować tylko dokumenty w statusie DRAFT');
+  if (doc.type !== 'INW') throw new Error('Bulk zapis pozycji jest dostępny tylko dla dokumentu INW');
+  if (!Array.isArray(input.items) || input.items.length === 0) throw new Error('Brak pozycji do zapisania');
+
+  const preparedItems = await prepareDocumentItems(tenantId ?? doc.tenantId, input.items, true, 'INW');
+
+  return prisma.$transaction(async (tx) => {
+    const existingItems = await tx.warehouseDocumentItem.findMany({
+      where: {
+        documentId,
+        productId: { in: preparedItems.map((item) => item.productId) },
+      },
+      select: { id: true, productId: true },
+    });
+    const existingByProductId = new Map(existingItems.map((item) => [item.productId, item.id]));
+    const createItems: Prisma.WarehouseDocumentItemCreateManyInput[] = [];
+
+    for (const item of preparedItems) {
+      const data = {
+        quantity: item.quantity,
+        systemQuantity: item.systemQuantity ?? null,
+        notes: item.notes,
+        scannedEan: item.scannedEan,
+      };
+      const existingId = existingByProductId.get(item.productId);
+
+      if (existingId) {
+        await tx.warehouseDocumentItem.update({
+          where: { id: existingId },
+          data,
+        });
+      } else {
+        createItems.push({
+          documentId,
+          productId: item.productId,
+          barcodeId: item.barcodeId,
+          baseQuantity: item.baseQuantity,
+          quantityMultiplier: item.quantityMultiplier,
+          unitPrice: item.unitPrice,
+          reservationId: item.reservationId,
+          ...data,
+        });
+      }
+    }
+
+    if (createItems.length > 0) {
+      await tx.warehouseDocumentItem.createMany({ data: createItems });
+    }
+
+    return tx.warehouseDocument.findUnique({
+      where: { id: documentId },
+      include: documentDetailInclude,
+    });
+  });
+}
+
 export async function updateDocumentItem(documentId: string, itemId: string, input: UpdateDocumentItemInput) {
   const tenantId = getTenantId();
   const documentWhere: any = { id: documentId };
@@ -1179,6 +1286,7 @@ export async function confirmDocument(id: string) {
 
   if (doc.items.length === 0) throw new Error('Dokument nie ma żadnych pozycji');
 
+  await assertFullInventoryComplete(doc.tenantId, doc.type, doc.metadataJson, doc.items);
   await assertCanConfirmWithoutNegativeStock(doc.tenantId, doc.type, doc.items);
 
   const confirmedDocument = await prisma.$transaction(async (tx) => {
@@ -1293,6 +1401,34 @@ async function assertCanConfirmWithoutNegativeStock(
   }
 }
 
+async function assertFullInventoryComplete(
+  tenantId: string,
+  type: string,
+  metadataJson: Prisma.JsonValue | null,
+  items: Array<{ productId: string }>,
+) {
+  if (type !== 'INW') return;
+  const metadata = metadataRecord(metadataJson);
+  if (metadata.inventoryScope !== FULL_INVENTORY_SCOPE) return;
+
+  const activeProducts = await prisma.warehouseProduct.findMany({
+    where: { tenantId, isActive: true },
+    select: { id: true, sku: true, name: true },
+    orderBy: [{ sku: 'asc' }, { name: 'asc' }],
+  });
+
+  const itemProductIds = new Set(items.map((item) => item.productId));
+  const missingProducts = activeProducts.filter((product) => !itemProductIds.has(product.id));
+  if (missingProducts.length === 0) return;
+
+  const preview = missingProducts
+    .slice(0, 5)
+    .map((product) => `${product.sku} ${product.name}`)
+    .join(', ');
+  const suffix = missingProducts.length > 5 ? ` i ${missingProducts.length - 5} kolejnych` : '';
+  throw new Error(`Pełna inwentaryzacja wymaga policzenia wszystkich aktywnych produktów. Brakuje ${missingProducts.length}: ${preview}${suffix}`);
+}
+
 async function getWarehouseSettings(tenantId: string) {
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
@@ -1391,7 +1527,20 @@ async function prepareDocumentItems(
     ? { id: true, name: true, isActive: true, currentStock: true }
     : { id: true, name: true, isActive: true };
 
-  const [products, barcodes] = await Promise.all([
+  const reservationsPromise = isInventory && productIds.length > 0
+    ? prisma.warehouseReservation.groupBy({
+        by: ['warehouseProductId'],
+        where: {
+          tenantId,
+          warehouseProductId: { in: productIds },
+          status: 'ACTIVE',
+          source: 'LOCAL_STOCK',
+        },
+        _sum: { quantity: true },
+      })
+    : Promise.resolve([]);
+
+  const [products, barcodes, reservationGroups] = await Promise.all([
     prisma.warehouseProduct.findMany({
       where: { id: { in: productIds }, tenantId },
       select: productSelect,
@@ -1408,10 +1557,14 @@ async function prepareDocumentItems(
           },
         })
       : Promise.resolve([]),
+    reservationsPromise,
   ]);
 
   const productById = new Map(products.map((product) => [product.id, product as typeof product & { currentStock?: Prisma.Decimal }]));
   const barcodeById = new Map(barcodes.map((barcode) => [barcode.id, barcode]));
+  const reservedByProductId = new Map(
+    reservationGroups.map((row) => [row.warehouseProductId, new Prisma.Decimal(row._sum.quantity ?? 0)]),
+  );
 
   for (const item of items) {
     const product = productById.get(item.productId);
@@ -1452,7 +1605,9 @@ async function prepareDocumentItems(
     let systemQuantity: number | null | undefined;
     if (isInventory) {
       if (item.systemQuantity === null || item.systemQuantity === undefined) {
-        systemQuantity = Number(product.currentStock ?? 0);
+        const availableStock = new Prisma.Decimal(product.currentStock ?? 0);
+        const reservedQuantity = reservedByProductId.get(item.productId) ?? new Prisma.Decimal(0);
+        systemQuantity = Number(availableStock.plus(reservedQuantity));
       } else {
         systemQuantity = Number(item.systemQuantity);
         if (!Number.isFinite(systemQuantity)) {

@@ -105,6 +105,12 @@ export interface ProductsQuery {
   hasWholesaleOffer?: boolean;
 }
 
+export interface InventorySnapshotQuery {
+  search?: string;
+  catalogId?: string;
+  includeInactive?: boolean | string;
+}
+
 const MAX_BULK_PRODUCT_IDS = 500;
 
 function productListInclude(shopId?: string) {
@@ -519,6 +525,113 @@ export async function getInventorySnapshot(productId: string) {
       quantity: Number(reservation.quantity),
       createdAt: reservation.createdAt,
     })),
+  };
+}
+
+function normalizeBoolean(value: boolean | string | undefined) {
+  if (value === true || value === 'true') return true;
+  if (value === false || value === 'false') return false;
+  return undefined;
+}
+
+export async function getInventorySnapshotList(query: InventorySnapshotQuery = {}) {
+  const tenantId = requireTenantId();
+  if (!tenantId) throw new Error('Brak kontekstu tenanta');
+
+  const includeInactive = normalizeBoolean(query.includeInactive) === true;
+  const search = query.search?.trim();
+  const where: Prisma.WarehouseProductWhereInput = {
+    tenantId,
+    ...(includeInactive ? {} : { isActive: true }),
+    ...(query.catalogId ? { catalogId: query.catalogId } : {}),
+    ...(search
+      ? {
+          OR: [
+            { sku: { contains: search, mode: 'insensitive' } },
+            { name: { contains: search, mode: 'insensitive' } },
+            { barcodes: { some: { isActive: true, ean: { contains: search, mode: 'insensitive' } } } },
+          ],
+        }
+      : {}),
+  };
+
+  const products = await prisma.warehouseProduct.findMany({
+    where,
+    orderBy: [{ sku: 'asc' }, { name: 'asc' }],
+    select: {
+      id: true,
+      sku: true,
+      name: true,
+      unit: true,
+      catalogId: true,
+      currentStock: true,
+      isActive: true,
+      catalog: { select: { id: true, name: true, code: true } },
+    },
+  });
+
+  const productIds = products.map((product) => product.id);
+  const reservations = productIds.length === 0
+    ? []
+    : await prisma.warehouseReservation.groupBy({
+        by: ['warehouseProductId'],
+        where: {
+          tenantId,
+          warehouseProductId: { in: productIds },
+          status: 'ACTIVE',
+          source: 'LOCAL_STOCK',
+        },
+        _sum: { quantity: true },
+        _count: { _all: true },
+      });
+
+  const reservedByProductId = new Map(reservations.map((row) => [
+    row.warehouseProductId,
+    {
+      quantity: new Prisma.Decimal(row._sum.quantity ?? 0),
+      count: row._count._all,
+    },
+  ]));
+
+  let totalPhysicalStock = new Prisma.Decimal(0);
+  let totalAvailableStock = new Prisma.Decimal(0);
+  let totalReserved = new Prisma.Decimal(0);
+
+  const data = products.map((product) => {
+    const availableStock = new Prisma.Decimal(product.currentStock);
+    const reservation = reservedByProductId.get(product.id);
+    const reservedQuantity = reservation?.quantity ?? new Prisma.Decimal(0);
+    const physicalStock = availableStock.plus(reservedQuantity);
+
+    totalPhysicalStock = totalPhysicalStock.plus(physicalStock);
+    totalAvailableStock = totalAvailableStock.plus(availableStock);
+    totalReserved = totalReserved.plus(reservedQuantity);
+
+    return {
+      productId: product.id,
+      sku: product.sku,
+      name: product.name,
+      unit: product.unit,
+      catalogId: product.catalogId,
+      catalog: product.catalog,
+      isActive: product.isActive,
+      currentStock: Number(availableStock),
+      availableStock: Number(availableStock),
+      physicalStock: Number(physicalStock),
+      totalReserved: Number(reservedQuantity),
+      activeReservationsCount: reservation?.count ?? 0,
+    };
+  });
+
+  return {
+    data,
+    total: data.length,
+    summary: {
+      totalPhysicalStock: Number(totalPhysicalStock),
+      totalAvailableStock: Number(totalAvailableStock),
+      totalReserved: Number(totalReserved),
+      productsWithReservations: data.filter((item) => item.activeReservationsCount > 0).length,
+    },
   };
 }
 

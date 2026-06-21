@@ -80,6 +80,28 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
     }
   });
 
+  fastify.post('/documents/inventory/full', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Utwórz roboczą pełną inwentaryzację magazynu',
+      body: {
+        type: 'object',
+        properties: {
+          date: { type: 'string' },
+          description: { type: 'string' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: warehouseDocumentService.CreateFullInventoryDocumentInput }>, reply: FastifyReply) => {
+    try {
+      const doc = await warehouseDocumentService.createFullInventoryDocument(request.body ?? {});
+      return reply.status(201).send(doc);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd tworzenia pełnej inwentaryzacji';
+      return reply.status(400).send({ error: 'Bad Request', message });
+    }
+  });
+
   // GET /admin/warehouse/documents/:id
   fastify.get('/documents/:id', {
     schema: { tags: ['warehouse'], summary: 'Szczegóły dokumentu' },
@@ -194,6 +216,51 @@ export async function registerWarehouseDocumentRoutes(fastify: FastifyInstance) 
       return reply.send(doc);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd dodawania pozycji dokumentu';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/documents/:id/inventory/items/bulk-upsert', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Masowo zapisz policzone pozycje dokumentu INW',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      body: {
+        type: 'object',
+        required: ['items'],
+        properties: {
+          items: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 10000,
+            items: {
+              type: 'object',
+              required: ['productId', 'quantity'],
+              properties: {
+                productId: { type: 'string' },
+                quantity: { type: 'number', minimum: 0 },
+                systemQuantity: { type: ['number', 'null'], minimum: 0 },
+                notes: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: warehouseDocumentService.BulkUpsertInventoryItemsInput;
+  }>, reply: FastifyReply) => {
+    try {
+      const doc = await warehouseDocumentService.bulkUpsertInventoryItems(request.params.id, request.body);
+      return reply.send(doc);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd zapisu pozycji inwentaryzacji';
       const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
     }

@@ -15,6 +15,31 @@ import { pricingProductsBodySchema } from './pricing.routes';
 import { getProductStock } from '../../../services/admin/warehouse-stock.service';
 
 export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
+  fastify.get('/inventory/snapshot', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Snapshot pełnej inwentaryzacji produktów magazynowych',
+      querystring: {
+        type: 'object',
+        properties: {
+          search: { type: 'string' },
+          catalogId: { type: 'string' },
+          includeInactive: { type: 'boolean' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: warehouseProductService.InventorySnapshotQuery }>, reply: FastifyReply) => {
+    try {
+      const result = await warehouseProductService.getInventorySnapshotList(request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się pobrać snapshotu inwentaryzacji';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      fastify.log.error(error);
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   // GET /admin/warehouse/products
   fastify.get('/products', {
     schema: {

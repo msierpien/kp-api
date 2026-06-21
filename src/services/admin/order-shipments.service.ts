@@ -165,14 +165,12 @@ function connectorUrl(
 ) {
   const config = normalizeConfig(order.shop.configJson);
   const prestashopShopId = prestashopShopIdFromConfig(config);
-  if (prestashopShopId === null) {
-    throw new Error('Brak prestashopShopId w konfiguracji sklepu. Ustaw ID sklepu PrestaShop dla multishop.');
-  }
 
   const baseUrl = connectorBaseUrl(order.shop.baseUrl, config);
-  const filteredParams: Record<string, string | number> = {
-    idShop: prestashopShopId,
-  };
+  const filteredParams: Record<string, string | number> = {};
+  if (prestashopShopId !== null) {
+    filteredParams.idShop = prestashopShopId;
+  }
   Object.entries(params).forEach(([key, value]) => {
     if (value === undefined || value === null || value === '') return;
     filteredParams[key] = value;

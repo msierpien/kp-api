@@ -9,6 +9,7 @@ import {
 import * as reservationService from '../../services/admin/warehouse-reservations.service';
 import { createWzForOrder } from '../../services/admin/warehouse-documents.service';
 import * as invoicesService from '../../services/admin/invoices.service';
+import * as orderShipmentsService from '../../services/admin/order-shipments.service';
 import * as orderReturnsService from '../../services/admin/order-returns.service';
 import * as shopOrderStatusesService from '../../services/admin/shop-order-statuses.service';
 import { extractOrderShippingInfo } from '../../services/orders/order-shipping-info.service';
@@ -409,6 +410,99 @@ export async function ordersRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const result = await invoicesService.cancelOrderInvoice(request.params.id);
       return reply.send(result);
+    },
+  );
+
+  fastify.get<{ Params: OrderParams }>(
+    '/:id/shipment',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Status przesyłki InPost dla zamówienia przez PrestaShop connector',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const result = await orderShipmentsService.getOrderShipment(request.params.id);
+        return reply.send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Nie udało się pobrać statusu przesyłki';
+        return reply.status(400).send({ error: 'Shipment Error', message });
+      }
+    },
+  );
+
+  fastify.post<{ Params: OrderParams; Body: unknown }>(
+    '/:id/shipment',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Utwórz przesyłkę InPost dla zamówienia przez PrestaShop connector',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        body: { type: 'object', additionalProperties: true },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const body = request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+          ? request.body as orderShipmentsService.CreateOrderShipmentInput
+          : {};
+        const result = await orderShipmentsService.createOrderShipment(request.params.id, body);
+        return reply.send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Nie udało się utworzyć przesyłki';
+        return reply.status(400).send({ error: 'Shipment Error', message });
+      }
+    },
+  );
+
+  fastify.get<{ Params: OrderParams; Querystring: orderShipmentsService.OrderShipmentLabelQuery }>(
+    '/:id/shipment/label',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Pobierz etykietę InPost PDF dla zamówienia',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const file = await orderShipmentsService.downloadOrderShipmentLabel(request.params.id, request.query);
+        reply.header('Content-Type', file.contentType);
+        reply.header('Content-Disposition', `inline; filename="${file.filename.replace(/"/g, '')}"`);
+        return reply.send(file.buffer);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Nie udało się pobrać etykiety';
+        return reply.status(400).send({ error: 'Shipment Error', message });
+      }
+    },
+  );
+
+  fastify.post<{ Params: OrderParams; Body: unknown }>(
+    '/:id/shipment/refresh',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Odśwież status przesyłki InPost przez PrestaShop connector',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        body: { type: 'object', additionalProperties: true },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const body = request.body && typeof request.body === 'object' && !Array.isArray(request.body)
+          ? request.body as orderShipmentsService.RefreshOrderShipmentInput
+          : {};
+        const result = await orderShipmentsService.refreshOrderShipment(request.params.id, body);
+        return reply.send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Nie udało się odświeżyć statusu przesyłki';
+        return reply.status(400).send({ error: 'Shipment Error', message });
+      }
     },
   );
 

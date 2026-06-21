@@ -43,6 +43,8 @@ export const TENANT_MODELS = new Set([
   'ProductChannelSyncConfig',
   'ProductCardOperationLog',
   'CompetitorCategoryMapping',
+  'CustomerReturnRequest',
+  'ReturnShippingPayment',
 ]);
 
 const DEBUG_TENANT_CONTEXT = process.env.DEBUG_TENANT_CONTEXT === 'true';

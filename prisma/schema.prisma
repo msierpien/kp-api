@@ -65,6 +65,8 @@ model Tenant {
   salesDocuments        SalesDocument[]
   orderReturns          OrderReturn[]
   orderReturnItems      OrderReturnItem[]
+  customerReturnRequests CustomerReturnRequest[]
+  returnShippingPayments ReturnShippingPayment[]
   invoiceEmailLogs      InvoiceEmailLog[]
   productChannelSnapshots ProductChannelSnapshot[]
   productChannelSyncConfigs ProductChannelSyncConfig[]
@@ -131,6 +133,8 @@ model Shop {
   ifirmaSettings       IfirmaSettings?
   salesDocuments       SalesDocument[]
   orderReturns         OrderReturn[]
+  customerReturnRequests CustomerReturnRequest[]
+  returnShippingPayments ReturnShippingPayment[]
   competitorCategoryMappings CompetitorCategoryMapping[]
 
   @@index([tenantId])
@@ -206,6 +210,7 @@ model Order {
   warehouseReservations WarehouseReservation[]
   salesDocuments        SalesDocument[]
   returns               OrderReturn[]
+  customerReturnRequests CustomerReturnRequest[]
 
   @@unique([shopId, externalOrderId])
   @@index([shopId, orderReference])
@@ -439,6 +444,97 @@ enum OrderReturnStatus {
   COMPLETED
   FAILED
   CANCELLED
+}
+
+enum CustomerReturnRequestStatus {
+  NEW
+  SHIPPING_SELECTED
+  PAYMENT_PENDING
+  PAYMENT_COMPLETED
+  CLOSED
+  CANCELLED
+}
+
+enum CustomerReturnShippingChoice {
+  UNDECIDED
+  MANUAL
+  INPOST_PAYU
+  INPOST_CUSTOMER_PAID
+}
+
+enum ReturnShippingPaymentStatus {
+  NEW
+  PENDING
+  COMPLETED
+  CANCELED
+  FAILED
+}
+
+model CustomerReturnRequest {
+  id                    String                       @id @default(cuid())
+  tenantId              String                       @map("tenant_id")
+  shopId                String                       @map("shop_id")
+  orderId               String?                      @map("order_id")
+  externalOrderId       String                       @map("external_order_id")
+  prestashopRequestId   String                       @map("prestashop_request_id")
+  orderReference        String                       @map("order_reference")
+  customerEmail         String                       @map("customer_email")
+  customerName          String?                      @map("customer_name")
+  returnType            String                       @map("return_type")
+  reason                String?                      @db.Text
+  itemsJson             Json                         @map("items_json")
+  shippingChoice        CustomerReturnShippingChoice @default(UNDECIDED) @map("shipping_choice")
+  packageCount          Int                          @default(0) @map("package_count")
+  shippingAmount        Decimal                      @default(0) @map("shipping_amount") @db.Decimal(10, 2)
+  returnAddress         String?                      @map("return_address") @db.Text
+  status                CustomerReturnRequestStatus  @default(NEW)
+  lastPayloadJson       Json?                        @map("last_payload_json")
+  createdAt             DateTime                     @default(now()) @map("created_at")
+  updatedAt             DateTime                     @updatedAt @map("updated_at")
+
+  tenant   Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shop     Shop                    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  order    Order?                  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  payments ReturnShippingPayment[]
+
+  @@unique([shopId, prestashopRequestId])
+  @@index([tenantId])
+  @@index([shopId])
+  @@index([orderId])
+  @@index([status])
+  @@index([shippingChoice])
+  @@index([createdAt])
+  @@map("customer_return_requests")
+}
+
+model ReturnShippingPayment {
+  id                      String                      @id @default(cuid())
+  tenantId                String                      @map("tenant_id")
+  shopId                  String                      @map("shop_id")
+  customerReturnRequestId String                      @map("customer_return_request_id")
+  provider                String                      @default("PAYU")
+  status                  ReturnShippingPaymentStatus @default(NEW)
+  extOrderId              String?                     @map("ext_order_id")
+  payuOrderId             String?                     @map("payu_order_id")
+  amount                  Decimal                     @default(0) @db.Decimal(10, 2)
+  currency                String                      @default("PLN")
+  packageCount            Int                         @default(0) @map("package_count")
+  payloadJson             Json?                       @map("payload_json")
+  paidAt                  DateTime?                   @map("paid_at")
+  createdAt               DateTime                    @default(now()) @map("created_at")
+  updatedAt               DateTime                    @updatedAt @map("updated_at")
+
+  tenant                Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shop                  Shop                  @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  customerReturnRequest CustomerReturnRequest @relation(fields: [customerReturnRequestId], references: [id], onDelete: Cascade)
+
+  @@unique([extOrderId])
+  @@index([tenantId])
+  @@index([shopId])
+  @@index([customerReturnRequestId])
+  @@index([payuOrderId])
+  @@index([status])
+  @@map("return_shipping_payments")
 }
 
 model OrderReturn {

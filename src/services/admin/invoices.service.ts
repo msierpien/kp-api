@@ -118,7 +118,11 @@ export async function issueOrderInvoice(orderId: string) {
     await sendInvoiceEmail(issued.id).catch(() => undefined);
   }
 
-  return issued;
+  if (issued.status === 'ISSUED' && order.shop.platform === 'PRESTASHOP') {
+    await publishInvoiceToPrestaShop(issued.id).catch(() => undefined);
+  }
+
+  return prisma.salesDocument.findUnique({ where: { id: issued.id } }) ?? issued;
 }
 
 export async function retryInvoice(invoiceId: string) {

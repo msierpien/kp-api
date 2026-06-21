@@ -12,14 +12,14 @@ describe('API version contract', () => {
       getApplicationVersionInfo,
     } = await import('../src/services/ops/version.service');
 
-    assert.equal(API_VERSION, '1.4.1');
+    assert.equal(API_VERSION, '1.4.2');
     assert.equal(API_CONTRACT_VERSION, 3);
     assert.equal(MIN_ADMIN_CONTRACT_VERSION, 2);
     assert.equal(MIN_ADMIN_VERSION, '0.3.0');
     assert.equal(COMPATIBILITY_PROFILE, 'kp-admin-api');
 
     const info = getApplicationVersionInfo('test');
-    assert.equal(info.version, '1.4.1');
+    assert.equal(info.version, '1.4.2');
     assert.equal(info.compatibilityProfile, 'kp-admin-api');
     assert.equal(info.apiContractVersion, 3);
     assert.equal(info.minAdminContractVersion, 2);
@@ -29,6 +29,7 @@ describe('API version contract', () => {
     assert.ok(info.features.includes('order-status-mapping-v1'));
     assert.ok(info.features.includes('product-card-content-v1'));
     assert.ok(info.features.includes('prestashop-admin-connector-bridge-v1'));
+    assert.ok(info.features.includes('prestashop-carrier-size-restrictions-v1'));
     assert.ok(info.features.includes('public-invoice-pdf-v1'));
     assert.ok(info.features.includes('warehouse-full-inventory-v1'));
     assert.ok(info.features.includes('warehouse-inventory-scanner-v1'));

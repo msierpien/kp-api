@@ -1,4 +1,4 @@
-export const API_VERSION = process.env.APP_VERSION || '1.4.1';
+export const API_VERSION = process.env.APP_VERSION || '1.4.2';
 export const API_CONTRACT_VERSION = Number(process.env.API_CONTRACT_VERSION || 3);
 export const MIN_ADMIN_CONTRACT_VERSION = Number(process.env.MIN_ADMIN_CONTRACT_VERSION || 2);
 export const MIN_ADMIN_VERSION = process.env.MIN_ADMIN_VERSION || '0.3.0';
@@ -36,6 +36,7 @@ export function getApplicationVersionInfo(environment: string): ApplicationVersi
       'orders-list-v1',
       'product-card-content-v1',
       'prestashop-admin-connector-bridge-v1',
+      'prestashop-carrier-size-restrictions-v1',
       'public-invoice-pdf-v1',
       'warehouse-full-inventory-v1',
       'warehouse-inventory-scanner-v1',

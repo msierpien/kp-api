@@ -74,6 +74,10 @@ export interface PrestaShopCountry {
 export interface PrestaShopCarrier {
   id: number | string;
   name?: string;
+  active?: string | number | boolean;
+  deleted?: string | number | boolean;
+  id_reference?: number | string;
+  external_module_name?: string;
 }
 
 interface PrestaShopProduct {
@@ -109,6 +113,27 @@ export interface PrestaShopProductDetails {
   name: string;
   price?: number;
   active: boolean;
+}
+
+export interface PrestaShopCarrierDetails {
+  id: string;
+  referenceId: string | null;
+  name: string;
+  active: boolean;
+  deleted: boolean;
+  moduleName: string | null;
+}
+
+export interface PrestaShopProductShippingProfile {
+  id: string;
+  sku: string;
+  name: string;
+  width: number | null;
+  height: number | null;
+  depth: number | null;
+  weight: number | null;
+  maxDimension: number | null;
+  carrierIds: string[];
 }
 
 export interface PrestaShopCategoryDetails {
@@ -172,6 +197,7 @@ export interface CreatePrestaShopProductInput {
   languageId?: string | number;
   idShopDefault?: string | number;
   taxRulesGroupId?: string | number;
+  carrierIds?: Array<string | number>;
 }
 
 export function buildPrestaShopOrdersQuery(params: {
@@ -424,6 +450,60 @@ export class PrestaShopClient {
         price: Number.isFinite(price) ? price : undefined,
         active: product.active === undefined ? true : String(product.active) !== '0',
       };
+    });
+  }
+
+  async fetchCarriers(params: { activeOnly?: boolean; deleted?: boolean } = {}): Promise<PrestaShopCarrierDetails[]> {
+    const queryParams = [
+      'display=[id,name,active,deleted,is_module,external_module_name,id_reference]',
+      'sort=[id_ASC]',
+      'limit=1000',
+    ];
+
+    if (params.activeOnly ?? true) queryParams.push('filter[active]=[1]');
+    if (params.deleted === false) queryParams.push('filter[deleted]=[0]');
+
+    const data = await this.fetchWebService<any>(`carriers?${queryParams.join('&')}`);
+    if (!data.carriers) return [];
+
+    const carriers = Array.isArray(data.carriers) ? data.carriers : [data.carriers];
+    return carriers.map((carrier: PrestaShopCarrier) => ({
+      id: String(carrier.id),
+      referenceId: carrier.id_reference === undefined || carrier.id_reference === null ? null : String(carrier.id_reference),
+      name: String(carrier.name ?? '').trim(),
+      active: carrier.active === undefined ? true : String(carrier.active) !== '0',
+      deleted: carrier.deleted === undefined ? false : String(carrier.deleted) !== '0',
+      moduleName: carrier.external_module_name ? String(carrier.external_module_name) : null,
+    }));
+  }
+
+  async getProductShippingProfile(productId: string): Promise<PrestaShopProductShippingProfile> {
+    const id = productId.trim();
+    if (!id) throw new Error('PrestaShop product id is required');
+
+    const { text: productXml } = await this.fetchWebServiceText(`products/${encodeURIComponent(id)}`, {
+      headers: { Accept: 'application/xml' },
+    });
+
+    return extractProductShippingProfileFromXml(productXml);
+  }
+
+  async setProductCarrierRestrictions(productId: string, carrierIds: Array<string | number>): Promise<void> {
+    const id = productId.trim();
+    if (!id) throw new Error('PrestaShop product id is required');
+
+    const { text: productXml } = await this.fetchWebServiceText(`products/${encodeURIComponent(id)}`, {
+      headers: { Accept: 'application/xml' },
+    });
+    const payload = patchProductCarrierRestrictionsXml(productXml, carrierIds);
+
+    await this.fetchWebServiceText(`products/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/xml',
+        Accept: 'application/xml',
+      },
+      body: payload,
     });
   }
 
@@ -1310,6 +1390,7 @@ function buildProductXml(input: CreatePrestaShopProductInput) {
   const categoryId = input.categoryId.trim();
   const description = input.description?.trim() || '';
   const ean13 = normalizeEan13(input.ean13);
+  const carrierBlock = buildProductCarriersBlock(input.carrierIds ?? []);
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
@@ -1343,9 +1424,100 @@ function buildProductXml(input: CreatePrestaShopProductInput) {
           <id>${escapeXml(categoryId)}</id>
         </category>
       </categories>
+      ${carrierBlock}
     </associations>
   </product>
 </prestashop>`;
+}
+
+function buildProductCarriersBlock(carrierIds: Array<string | number>) {
+  const ids = Array.from(new Set(carrierIds.map((id) => String(id).trim()).filter(Boolean)));
+  if (ids.length === 0) return '';
+
+  const carriers = ids.map((id) => `
+        <carrier>
+          <id>${escapeXml(id)}</id>
+        </carrier>`).join('');
+
+  return `<carriers nodeType="carrier" api="carriers">${carriers}
+      </carriers>`;
+}
+
+function xmlTagText(xml: string, tagName: string) {
+  const match = xml.match(new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`, 'i'));
+  if (!match) return '';
+  return String(match[1] ?? '')
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function xmlNumber(xml: string, tagName: string) {
+  const value = Number(xmlTagText(xml, tagName).replace(',', '.'));
+  return Number.isFinite(value) ? value : null;
+}
+
+function extractProductCarrierIds(xml: string) {
+  const carriersBlock = xml.match(/<carriers\b[^>]*>[\s\S]*?<\/carriers>/i)?.[0];
+  if (!carriersBlock) return [];
+
+  const ids: string[] = [];
+  for (const match of carriersBlock.matchAll(/<carrier\b[^>]*>[\s\S]*?<id\b[^>]*>([\s\S]*?)<\/id>[\s\S]*?<\/carrier>/gi)) {
+    const id = String(match[1] ?? '')
+      .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+      .replace(/<[^>]+>/g, ' ')
+      .trim();
+    if (id) ids.push(id);
+  }
+  return Array.from(new Set(ids));
+}
+
+export function extractProductShippingProfileFromXml(xml: string): PrestaShopProductShippingProfile {
+  const width = xmlNumber(xml, 'width');
+  const height = xmlNumber(xml, 'height');
+  const depth = xmlNumber(xml, 'depth');
+  const dimensions = [width, height, depth].filter((value): value is number => value !== null);
+
+  return {
+    id: xmlTagText(xml, 'id'),
+    sku: xmlTagText(xml, 'reference'),
+    name: xmlTagText(xml, 'name'),
+    width,
+    height,
+    depth,
+    weight: xmlNumber(xml, 'weight'),
+    maxDimension: dimensions.length > 0 ? Math.max(...dimensions) : null,
+    carrierIds: extractProductCarrierIds(xml),
+  };
+}
+
+function stripProductReadonlyFields(xml: string) {
+  return xml
+    .replace(/\s*<manufacturer_name\b[^>]*>[\s\S]*?<\/manufacturer_name>/g, '')
+    .replace(/\s*<quantity\b[^>]*>[\s\S]*?<\/quantity>/g, '')
+    .replace(/\s*<position_in_category\b[^>]*>[\s\S]*?<\/position_in_category>/g, '');
+}
+
+export function patchProductCarrierRestrictionsXml(xml: string, carrierIds: Array<string | number>) {
+  const carriersBlock = buildProductCarriersBlock(carrierIds);
+  if (!carriersBlock) throw new Error('carrierIds cannot be empty when restricting PrestaShop product carriers');
+
+  let payload = stripProductReadonlyFields(xml);
+
+  if (/<carriers\b[^>]*>[\s\S]*?<\/carriers>/i.test(payload)) {
+    return payload.replace(/<carriers\b[^>]*>[\s\S]*?<\/carriers>/i, carriersBlock);
+  }
+
+  if (/<associations\b[^>]*>[\s\S]*?<\/associations>/i.test(payload)) {
+    return payload.replace(/<\/associations>/i, `  ${carriersBlock}\n</associations>`);
+  }
+
+  payload = payload.replace(
+    /<\/product>/i,
+    `  <associations>\n      ${carriersBlock}\n    </associations>\n  </product>`,
+  );
+  return payload;
 }
 
 function extractXmlTagValue(xml: string, tagName: string) {

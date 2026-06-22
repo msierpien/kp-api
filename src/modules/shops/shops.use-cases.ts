@@ -58,6 +58,7 @@ export type UpdateBulkStockConfigInput = {
   bulkStockApiKey?: string | null;
   defaultLeadTimeDays?: number | null;
   bulkStockBatchSize?: number | null;
+  productActivationMode?: stockSyncService.ProductActivationMode | null;
 };
 
 export type ManualSyncInput = {
@@ -252,6 +253,12 @@ export function normalizeOptionalBulkStockBatchSize(value: unknown) {
   return size;
 }
 
+export function normalizeProductActivationMode(value: unknown): stockSyncService.ProductActivationMode {
+  if (value === undefined || value === null || value === '') return 'UNCHANGED';
+  if (value === 'UNCHANGED' || value === 'SYNC_WITH_AVAILABILITY') return value;
+  throw new ValidationError('Nieprawidłowy tryb aktywacji produktów');
+}
+
 async function translateShopErrors<T>(operation: () => Promise<T>): Promise<T> {
   try {
     return await operation();
@@ -360,7 +367,11 @@ export const shopsUseCases = {
     const nextBulkStockBatchSize = input.bulkStockBatchSize === undefined
       ? normalizeOptionalBulkStockBatchSize(existing.bulkStockBatchSize) ?? DEFAULT_BULK_STOCK_BATCH_SIZE
       : normalizeOptionalBulkStockBatchSize(input.bulkStockBatchSize) ?? DEFAULT_BULK_STOCK_BATCH_SIZE;
+    const nextProductActivationMode = input.productActivationMode === undefined || input.productActivationMode === null
+      ? stockSyncService.getProductActivationMode(existing)
+      : normalizeProductActivationMode(input.productActivationMode);
     const defaultLeadTimeChanged = nextDefaultLeadTimeDays !== normalizeOptionalLeadTimeDays(existing.defaultLeadTimeDays);
+    const productActivationModeChanged = nextProductActivationMode !== stockSyncService.getProductActivationMode(existing);
 
     const updated = {
       ...existing,
@@ -368,12 +379,13 @@ export const shopsUseCases = {
       bulkStockApiKey: nextBulkStockApiKey,
       defaultLeadTimeDays: nextDefaultLeadTimeDays,
       bulkStockBatchSize: nextBulkStockBatchSize,
+      productActivationMode: nextProductActivationMode,
     };
 
     await prisma.shop.update({ where: { id }, data: { configJson: updated } });
-    if (defaultLeadTimeChanged) {
+    if (defaultLeadTimeChanged || productActivationModeChanged) {
       stockSyncService.syncStockForShop(id, 'LEAD_TIME_UPDATE').catch((error) => {
-        logger.error({ err: error, shopId: id }, 'Failed to enqueue lead time sync after bulk stock config change');
+        logger.error({ err: error, shopId: id }, 'Failed to enqueue stock sync after bulk stock config change');
       });
     }
 

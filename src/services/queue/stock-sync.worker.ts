@@ -146,6 +146,7 @@ async function processBulkBatch(
       warehouseAvailableAt: item.warehouseAvailableAt,
       outOfStockBehavior: item.outOfStockBehavior,
       availabilityPolicy: item.availabilityPolicy,
+      active: item.active,
       ...(item.idProductAttribute === undefined ? {} : { idProductAttribute: item.idProductAttribute }),
     })));
 
@@ -216,6 +217,7 @@ async function processWebserviceBatch(
         leadTimeDays: item.leadTimeDays,
         warehouseAvailableAt: item.warehouseAvailableAt,
         availabilityPolicy: item.availabilityPolicy,
+        active: item.active,
       });
       const remote = await confirmRemoteStock({
         client,

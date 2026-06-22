@@ -14,6 +14,7 @@ import {
   requireTenantId,
   validateWholesaleSyncInterval,
   type FieldMapping,
+  type WholesaleAvailabilityRule,
   type WholesalePreset,
 } from './wholesale/shared';
 
@@ -44,6 +45,7 @@ export interface CreateWholesaleProviderInput {
   preset?: WholesalePreset;
   delimiter?: string;
   fieldMapping?: FieldMapping;
+  availabilityRule?: WholesaleAvailabilityRule;
   syncEnabled?: boolean;
   syncInterval?: number;
   leadTimeDays?: number | null;
@@ -57,6 +59,7 @@ export interface UpdateWholesaleProviderInput {
   preset?: WholesalePreset;
   delimiter?: string;
   fieldMapping?: FieldMapping;
+  availabilityRule?: WholesaleAvailabilityRule;
   syncEnabled?: boolean;
   syncInterval?: number;
   leadTimeDays?: number | null;
@@ -403,12 +406,18 @@ export async function updateWholesaleProvider(id: string, input: UpdateWholesale
   if (input.isActive !== undefined) data.isActive = input.isActive;
   const shouldSyncLeadTime = input.leadTimeDays !== undefined && input.leadTimeDays !== provider.leadTimeDays;
 
-  if (input.preset !== undefined || input.delimiter !== undefined || input.fieldMapping !== undefined) {
+  if (
+    input.preset !== undefined ||
+    input.delimiter !== undefined ||
+    input.fieldMapping !== undefined ||
+    input.availabilityRule !== undefined
+  ) {
     const currentConfig = parseProviderConfig(provider.configJson);
     const nextConfig = buildProviderConfig({
       preset: input.preset ?? currentConfig.preset ?? 'CUSTOM',
       delimiter: input.delimiter ?? currentConfig.delimiter,
       fieldMapping: input.fieldMapping ?? currentConfig.fieldMapping,
+      availabilityRule: input.availabilityRule ?? currentConfig.availabilityRule,
       name: provider.name,
       feedUrl: provider.feedUrl,
     });

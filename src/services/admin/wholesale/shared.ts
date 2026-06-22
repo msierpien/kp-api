@@ -5,6 +5,7 @@ import prisma from '../../../lib/prisma';
 import { getTenantId } from '../../../lib/tenant-context';
 
 export type WholesalePreset = 'GODAN' | 'PARTYDECO' | 'CUSTOM';
+export type WholesaleAvailabilityRule = 'STOCK_ONLY' | 'STOCK_OR_FUTURE_DELIVERY';
 
 export interface FieldMapping {
   sku: string;
@@ -21,6 +22,7 @@ export interface FieldMapping {
 export interface WholesaleProviderConfig {
   preset?: WholesalePreset;
   delimiter?: string;
+  availabilityRule?: WholesaleAvailabilityRule;
   fieldMapping: FieldMapping;
 }
 
@@ -28,6 +30,7 @@ const PRESET_CONFIGS: Record<Exclude<WholesalePreset, 'CUSTOM'>, WholesaleProvid
   GODAN: {
     preset: 'GODAN',
     delimiter: ';',
+    availabilityRule: 'STOCK_ONLY',
     fieldMapping: {
       sku: 'Kod produktu',
       ean: 'Kod EAN',
@@ -41,6 +44,7 @@ const PRESET_CONFIGS: Record<Exclude<WholesalePreset, 'CUSTOM'>, WholesaleProvid
   PARTYDECO: {
     preset: 'PARTYDECO',
     delimiter: ';',
+    availabilityRule: 'STOCK_OR_FUTURE_DELIVERY',
     fieldMapping: {
       sku: 'code',
       ean: 'ean',
@@ -50,6 +54,7 @@ const PRESET_CONFIGS: Record<Exclude<WholesalePreset, 'CUSTOM'>, WholesaleProvid
       description: 'description',
       image: 'photos',
       category: 'category_path',
+      warehouseAvailableAt: 'availability_date',
     },
   },
 };
@@ -72,12 +77,14 @@ export function buildProviderConfig(input: {
   preset?: WholesalePreset;
   delimiter?: string;
   fieldMapping?: FieldMapping;
+  availabilityRule?: WholesaleAvailabilityRule;
   feedUrl: string;
   name: string;
 }): WholesaleProviderConfig {
   const preset = input.preset ?? detectPreset(input.feedUrl, input.name);
   const presetConfig = preset !== 'CUSTOM' ? PRESET_CONFIGS[preset] : undefined;
   const delimiter = normalizeDelimiter(input.delimiter ?? presetConfig?.delimiter);
+  const availabilityRule = normalizeAvailabilityRule(input.availabilityRule ?? presetConfig?.availabilityRule, preset);
   const inputFieldMapping = compactFieldMapping(input.fieldMapping);
   const fieldMapping = presetConfig
     ? { ...presetConfig.fieldMapping, ...inputFieldMapping }
@@ -87,20 +94,33 @@ export function buildProviderConfig(input: {
     throw new Error('Konfiguracja hurtowni wymaga mapowania pól sku i name');
   }
 
-  return { preset, delimiter, fieldMapping: fieldMapping as FieldMapping };
+  return { preset, delimiter, availabilityRule, fieldMapping: fieldMapping as FieldMapping };
 }
 
 export function parseProviderConfig(configJson: unknown): WholesaleProviderConfig {
   const config = (configJson || {}) as Partial<WholesaleProviderConfig>;
-  if (!config.fieldMapping?.sku || !config.fieldMapping?.name) {
+  const preset = config.preset ?? 'CUSTOM';
+  const presetConfig = preset !== 'CUSTOM' ? PRESET_CONFIGS[preset] : undefined;
+  const fieldMapping = presetConfig
+    ? { ...presetConfig.fieldMapping, ...compactFieldMapping(config.fieldMapping) }
+    : config.fieldMapping;
+
+  if (!fieldMapping?.sku || !fieldMapping?.name) {
     throw new Error('Provider hurtowni nie ma poprawnej konfiguracji CSV');
   }
 
   return {
-    preset: config.preset ?? 'CUSTOM',
-    delimiter: normalizeDelimiter(config.delimiter),
-    fieldMapping: config.fieldMapping,
+    preset,
+    delimiter: normalizeDelimiter(config.delimiter ?? presetConfig?.delimiter),
+    availabilityRule: resolveWholesaleAvailabilityRule(configJson),
+    fieldMapping,
   };
+}
+
+export function resolveWholesaleAvailabilityRule(configJson: unknown): WholesaleAvailabilityRule {
+  const config = (configJson || {}) as Partial<WholesaleProviderConfig>;
+  const preset = config.preset ?? 'CUSTOM';
+  return normalizeAvailabilityRule(config.availabilityRule, preset);
 }
 
 export async function fetchFeed(feedUrl: string) {
@@ -206,6 +226,12 @@ function detectPreset(feedUrl: string, name: string): WholesalePreset {
   if (value.includes('godan')) return 'GODAN';
   if (value.includes('partydeco') || value.includes('party deco')) return 'PARTYDECO';
   return 'CUSTOM';
+}
+
+function normalizeAvailabilityRule(value: unknown, preset: WholesalePreset): WholesaleAvailabilityRule {
+  if (value === 'STOCK_ONLY' || value === 'STOCK_OR_FUTURE_DELIVERY') return value;
+  if (preset === 'PARTYDECO') return 'STOCK_OR_FUTURE_DELIVERY';
+  return 'STOCK_ONLY';
 }
 
 function dateOnlyString(value?: Date | null) {

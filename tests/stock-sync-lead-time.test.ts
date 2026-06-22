@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resolveInventoryPublishedLeadTime } from '../src/services/stock/stock-sync.service';
+import {
+  getProductActivationMode,
+  resolveInventoryPublishedLeadTime,
+  resolvePublishedProductActive,
+} from '../src/services/stock/stock-sync.service';
 
 test('local stock lead time stays zero even when shop has a default lead time', () => {
   const result = resolveInventoryPublishedLeadTime(
@@ -39,4 +43,11 @@ test('out of stock product does not publish a lead time', () => {
   );
 
   assert.deepEqual(result, { leadTimeDays: null, source: 'NONE' });
+});
+
+test('product activation sync follows availability only when enabled for shop', () => {
+  assert.equal(getProductActivationMode({ productActivationMode: 'SYNC_WITH_AVAILABILITY' }), 'SYNC_WITH_AVAILABILITY');
+  assert.equal(resolvePublishedProductActive({ availabilityPolicy: 'IN_STOCK' }, { productActivationMode: 'UNCHANGED' }), undefined);
+  assert.equal(resolvePublishedProductActive({ availabilityPolicy: 'BACKORDER_FROM_WHOLESALE' }, { productActivationMode: 'SYNC_WITH_AVAILABILITY' }), true);
+  assert.equal(resolvePublishedProductActive({ availabilityPolicy: 'OUT_OF_STOCK' }, { productActivationMode: 'SYNC_WITH_AVAILABILITY' }), false);
 });

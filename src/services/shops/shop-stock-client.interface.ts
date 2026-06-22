@@ -13,6 +13,7 @@ export interface ShopStockUpdateOptions {
   leadTimeDays?: number | null;
   warehouseAvailableAt?: string | null;
   availabilityPolicy?: 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
+  active?: boolean;
 }
 
 export interface ShopProductInventorySnapshot {

@@ -45,8 +45,10 @@ test('PrestaShop product update disables ordering when product is out of stock e
   const xml = replaceProductOrderAvailabilityXml(PRODUCT_XML, {
     availabilityPolicy: 'OUT_OF_STOCK',
     leadTimeDays: 2,
+    active: false,
   });
 
+  assert.match(xml, /<active>0<\/active>/);
   assert.match(xml, /<available_for_order>0<\/available_for_order>/);
   assert.match(xml, /<show_price>1<\/show_price>/);
   assert.match(xml, /<language id="1"><!\[CDATA\[\]\]><\/language>/);

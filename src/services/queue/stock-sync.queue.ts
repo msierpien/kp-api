@@ -36,6 +36,7 @@ export interface StockSyncBatchItem {
   warehouseAvailableAt?: string | null;
   outOfStockBehavior?: 0 | 1;
   availabilityPolicy?: StockSyncAvailabilityPolicy;
+  active?: boolean;
   idProductAttribute?: number;
 }
 

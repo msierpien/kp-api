@@ -830,6 +830,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
       bulkStockApiKey?: string | null;
       defaultLeadTimeDays?: number | null;
       bulkStockBatchSize?: number | null;
+      productActivationMode?: 'UNCHANGED' | 'SYNC_WITH_AVAILABILITY' | null;
     };
   }>(
     '/:id/bulk-stock-config',
@@ -845,6 +846,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
             bulkStockApiKey: { type: 'string', nullable: true },
             defaultLeadTimeDays: { type: ['integer', 'null'], minimum: 0, maximum: 365 },
             bulkStockBatchSize: { type: ['integer', 'null'], minimum: 1, maximum: 500 },
+            productActivationMode: { type: ['string', 'null'], enum: ['UNCHANGED', 'SYNC_WITH_AVAILABILITY', null] },
           },
         },
       },

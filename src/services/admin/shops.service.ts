@@ -20,6 +20,7 @@ import { removeShopFromScheduler } from '../scheduler/scheduler.service';
 import { getTenantContext } from '../../lib/tenant-context';
 import { PrestaShopClient } from '../prestashop/prestashop-client';
 import { normalizeBulkStockBatchSize } from '../shops/prestashop-stock-client';
+import { getProductActivationMode } from '../stock/stock-sync.service';
 import { assertValidOrderSyncDate, normalizeOrderSyncDate } from '../sync/order-sync-date';
 import * as productCardService from './product-card.service';
 
@@ -278,6 +279,7 @@ const mapShop = (shop: any): ShopItem => {
     bulkStockUrl: typeof configJson.bulkStockUrl === 'string' ? configJson.bulkStockUrl : null,
     defaultLeadTimeDays: normalizeLeadTimeDays(configJson.defaultLeadTimeDays),
     bulkStockBatchSize: normalizeBulkStockBatchSize(configJson.bulkStockBatchSize),
+    productActivationMode: getProductActivationMode(configJson),
     prestashopShopId: resolvePrestaShopShopId(configJson),
     health: isManual ? 'manual' : hasError ? 'error' : shop.status === 'ACTIVE' ? 'connected' : 'inactive',
     healthMessage: isManual

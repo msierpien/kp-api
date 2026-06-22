@@ -13,6 +13,7 @@ export interface BulkStockItem {
   warehouseAvailableAt?: string | null;
   outOfStockBehavior?: 0 | 1;
   availabilityPolicy?: 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
+  active?: boolean;
   idProductAttribute?: number;
 }
 
@@ -26,6 +27,7 @@ export interface BulkStockResult {
     warehouseAvailableAt?: string | null;
     outOfStockBehavior?: 0 | 1;
     availabilityPolicy?: 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
+    active?: boolean;
     idProductAttribute?: number;
     status: 'ok' | 'error';
     message?: string;
@@ -96,6 +98,7 @@ export class PrestaShopStockClient implements ShopStockClient {
         ...(item.warehouseAvailableAt === undefined ? {} : { warehouseAvailableAt: normalizeWarehouseAvailableAt(item.warehouseAvailableAt) }),
         ...(item.outOfStockBehavior === undefined ? {} : { outOfStockBehavior: normalizeOutOfStockBehavior(item.outOfStockBehavior) }),
         ...(item.availabilityPolicy === undefined ? {} : { availabilityPolicy: normalizeAvailabilityPolicy(item.availabilityPolicy) }),
+        ...(item.active === undefined ? {} : { active: normalizeOptionalBoolean(item.active) }),
         ...(item.idProductAttribute === undefined ? {} : { idProductAttribute: item.idProductAttribute }),
       }));
       for (const item of payloadItems) {
@@ -209,7 +212,7 @@ export class PrestaShopStockClient implements ShopStockClient {
 
   async updateProductOrderAvailability(
     externalProductId: string,
-    options: Pick<ShopStockUpdateOptions, 'availabilityPolicy' | 'leadTimeDays' | 'warehouseAvailableAt'>,
+    options: Pick<ShopStockUpdateOptions, 'availabilityPolicy' | 'leadTimeDays' | 'warehouseAvailableAt' | 'active'>,
   ): Promise<void> {
     const productXml = await this.fetchWebServiceText(`products/${encodeURIComponent(externalProductId)}`, {
       headers: { Accept: 'application/xml' },
@@ -493,6 +496,13 @@ function normalizeAvailabilityPolicy(value: unknown) {
   throw new Error('availabilityPolicy must be IN_STOCK, BACKORDER_FROM_WHOLESALE or OUT_OF_STOCK');
 }
 
+function normalizeOptionalBoolean(value: unknown) {
+  if (typeof value === 'boolean') return value;
+  if (value === 1 || value === '1' || value === 'true') return true;
+  if (value === 0 || value === '0' || value === 'false') return false;
+  throw new Error('active must be boolean');
+}
+
 export function buildBulkStockUrl(baseUrl: string, prestashopShopId?: string | null) {
   return withQueryParams(`${baseUrl}/index.php?fc=module&module=kp_bulkstock&controller=bulkupdate`, {
     idShop: prestashopShopId,
@@ -619,13 +629,16 @@ export function replaceProductPriceXml(xml: string, price: number) {
 
 export function replaceProductOrderAvailabilityXml(
   xml: string,
-  options: Pick<ShopStockUpdateOptions, 'availabilityPolicy' | 'leadTimeDays' | 'warehouseAvailableAt'>,
+  options: Pick<ShopStockUpdateOptions, 'availabilityPolicy' | 'leadTimeDays' | 'warehouseAvailableAt' | 'active'>,
 ) {
   const availableForOrder = options.availabilityPolicy === 'OUT_OF_STOCK' ? 0 : 1;
   const showPrice = 1;
   const messages = buildAvailabilityMessages(options);
 
   let nextXml = stripProductReadonlyFields(xml);
+  if (options.active !== undefined) {
+    nextXml = replaceSimpleProductField(nextXml, 'active', options.active ? '1' : '0');
+  }
   nextXml = replaceSimpleProductField(nextXml, 'available_for_order', String(availableForOrder));
   nextXml = replaceSimpleProductField(nextXml, 'show_price', String(showPrice));
   nextXml = replaceLocalizedTextField(nextXml, 'available_now', messages.availableNow);

@@ -2,9 +2,11 @@ import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
 import { addStockSyncBatchJobs, type StockSyncBatchItem, type StockSyncTriggeredBy } from '../queue/stock-sync.queue';
+import { resolveWholesaleAvailabilityRule } from '../admin/wholesale/shared';
 
 export type InventoryAvailabilityPolicy = 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
 export type PrestaShopOutOfStockBehavior = 0 | 1;
+export type ProductActivationMode = 'UNCHANGED' | 'SYNC_WITH_AVAILABILITY';
 export type InventoryLeadTimeSource =
   | 'LOCAL_STOCK'
   | 'PRODUCT_OVERRIDE'
@@ -50,6 +52,10 @@ type ProductLeadTimeResolution = {
 };
 
 const ZERO = new Prisma.Decimal(0);
+const TODAY_DATE_ONLY = () => {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+};
 
 export async function getInventoryPublicationDecision(
   warehouseProductId: string,
@@ -86,26 +92,39 @@ export async function getInventoryPublicationDecisions(
         where: {
           warehouseProductId: { in: productIdsWithoutOwnStock },
           isActive: true,
-          lastKnownStock: { gt: ZERO },
           provider: { isActive: true },
         },
         orderBy: [
           { lastKnownPrice: 'asc' },
           { lastSyncAt: 'desc' },
         ],
-        include: { provider: { select: { name: true, leadTimeDays: true } } },
+        include: { provider: { select: { name: true, leadTimeDays: true, configJson: true } } },
       });
 
   const wholesaleByProductId = new Map<string, typeof wholesaleMappings[number]>();
+  const futureWholesaleByProductId = new Map<string, typeof wholesaleMappings[number]>();
   for (const mapping of wholesaleMappings) {
-    if (!mapping.warehouseProductId || wholesaleByProductId.has(mapping.warehouseProductId)) continue;
-    wholesaleByProductId.set(mapping.warehouseProductId, mapping);
+    if (!mapping.warehouseProductId) continue;
+    if (isPositiveDecimal(mapping.lastKnownStock)) {
+      if (!wholesaleByProductId.has(mapping.warehouseProductId)) {
+        wholesaleByProductId.set(mapping.warehouseProductId, mapping);
+      }
+      continue;
+    }
+
+    if (
+      !futureWholesaleByProductId.has(mapping.warehouseProductId) &&
+      resolveWholesaleAvailabilityRule(mapping.provider.configJson) === 'STOCK_OR_FUTURE_DELIVERY' &&
+      isFutureAvailabilityDate(mapping.warehouseAvailableAt)
+    ) {
+      futureWholesaleByProductId.set(mapping.warehouseProductId, mapping);
+    }
   }
 
   const decisions = new Map<string, InventoryPublicationDecision>();
   for (const product of products) {
     const hasOwnStock = product.currentStock.gt(0);
-    const wholesale = wholesaleByProductId.get(product.id);
+    const wholesale = wholesaleByProductId.get(product.id) ?? futureWholesaleByProductId.get(product.id);
     const productLeadTime = resolveProductLeadTime(product);
 
     if (hasOwnStock) {
@@ -231,6 +250,7 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
     if (!decision) continue;
     const publishedLeadTime = resolveInventoryPublishedLeadTime(decision, mapping.shop.configJson);
     const publishedLeadTimeDays = publishedLeadTime.leadTimeDays;
+    const publishActive = resolvePublishedProductActive(decision, mapping.shop.configJson);
 
     const log = await prisma.stockSyncLog.create({
       data: {
@@ -267,6 +287,7 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
       warehouseAvailableAt: formatWarehouseAvailableAt(decision.warehouseAvailableAt),
       outOfStockBehavior: decision.outOfStockBehavior,
       availabilityPolicy: decision.availabilityPolicy,
+      active: publishActive,
     });
     batchItemsByShop.set(mapping.shopId, batch);
 
@@ -390,6 +411,20 @@ export function resolveInventoryPublishedLeadTime(
   return { leadTimeDays: 0, source: 'NONE' };
 }
 
+export function resolvePublishedProductActive(
+  decision: { availabilityPolicy?: string | null },
+  shopConfigJson: unknown,
+): boolean | undefined {
+  if (getProductActivationMode(shopConfigJson) !== 'SYNC_WITH_AVAILABILITY') return undefined;
+  return decision.availabilityPolicy !== 'OUT_OF_STOCK';
+}
+
+export function getProductActivationMode(configJson: unknown): ProductActivationMode {
+  if (!configJson || typeof configJson !== 'object' || Array.isArray(configJson)) return 'UNCHANGED';
+  const value = (configJson as Record<string, unknown>).productActivationMode;
+  return value === 'SYNC_WITH_AVAILABILITY' ? 'SYNC_WITH_AVAILABILITY' : 'UNCHANGED';
+}
+
 function formatWarehouseAvailableAt(value?: Date | null) {
   return value ? value.toISOString().slice(0, 10) : null;
 }
@@ -404,4 +439,14 @@ function normalizeOptionalLeadTimeDays(value: unknown) {
   const days = Number(value);
   if (!Number.isInteger(days) || days < 0 || days > 365) return null;
   return days;
+}
+
+function isPositiveDecimal(value: Prisma.Decimal | number | string | null | undefined) {
+  if (value === undefined || value === null) return false;
+  return new Prisma.Decimal(value).gt(ZERO);
+}
+
+function isFutureAvailabilityDate(value?: Date | null) {
+  if (!value) return false;
+  return value >= TODAY_DATE_ONLY();
 }

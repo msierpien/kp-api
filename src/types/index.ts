@@ -153,6 +153,7 @@ export interface ShopItem {
   bulkStockUrl?: string | null;
   defaultLeadTimeDays?: number | null;
   bulkStockBatchSize?: number | null;
+  productActivationMode?: 'UNCHANGED' | 'SYNC_WITH_AVAILABILITY';
   prestashopShopId?: string | null;
   health?: 'connected' | 'error' | 'manual' | 'inactive';
   healthMessage?: string;

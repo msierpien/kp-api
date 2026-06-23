@@ -334,6 +334,31 @@ export async function createReservation(input: CreateReservationInput) {
 export async function reserveOrder(orderId: string): Promise<OrderReservationResult> {
   const contextTenantId = getTenantId();
 
+  // Read the order header, warehouse settings and the (potentially very large)
+  // shop product mapping catalog OUTSIDE the interactive transaction. Doing this
+  // inside the transaction held the advisory lock while reading thousands of
+  // rows and could exceed the 5s transaction timeout.
+  const orderHeader = await prisma.order.findFirst({
+    where: {
+      id: orderId,
+      ...(contextTenantId ? { shop: { tenantId: contextTenantId } } : {}),
+    },
+    include: { shop: true },
+  });
+  if (!orderHeader) throw new Error('Zamówienie nie znalezione');
+
+  const settings = await getWarehouseSettings(prisma, orderHeader.shop.tenantId);
+  const mappings = await prisma.shopProductMapping.findMany({
+    where: {
+      tenantId: orderHeader.shop.tenantId,
+      shopId: orderHeader.shopId,
+      isActive: true,
+      warehouseProductId: { not: null },
+    },
+    include: { warehouseProduct: true },
+  });
+  const mappingBySku = new Map(mappings.map((mapping) => [normalizeSku(mapping.externalSku), mapping]));
+
   const result = await prisma.$transaction(async (tx) => {
     await lockOrderForReservation(tx, orderId);
 
@@ -352,18 +377,6 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
       },
     });
     if (!order) throw new Error('Zamówienie nie znalezione');
-
-    const settings = await getWarehouseSettings(tx, order.shop.tenantId);
-    const mappings = await tx.shopProductMapping.findMany({
-      where: {
-        tenantId: order.shop.tenantId,
-        shopId: order.shopId,
-        isActive: true,
-        warehouseProductId: { not: null },
-      },
-      include: { warehouseProduct: true },
-    });
-    const mappingBySku = new Map(mappings.map((mapping) => [normalizeSku(mapping.externalSku), mapping]));
 
     const result: OrderReservationResult = {
       orderId: order.id,
@@ -684,7 +697,7 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
     }
 
     return result;
-  });
+  }, { timeout: 20000, maxWait: 15000 });
 
   const affectedProductIds = result.issues
     .filter((issue) => issue.warehouseProductId && ['RESERVED', 'UPDATED', 'PARTIAL'].includes(issue.status))

@@ -1753,6 +1753,7 @@ model StockSyncLog {
   stockBefore        Decimal?  @map("stock_before") @db.Decimal(10, 3)
   stockAfter         Decimal   @map("stock_after") @db.Decimal(10, 3)
   publishedQuantity  Decimal?  @map("published_quantity") @db.Decimal(10, 3)
+  inStockQuantity    Decimal?  @map("in_stock_quantity") @db.Decimal(10, 3)
   publishedLeadTimeDays Int?   @map("published_lead_time_days")
   publishedWarehouseAvailableAt DateTime? @map("published_warehouse_available_at")
   availabilityPolicy String?   @map("availability_policy")

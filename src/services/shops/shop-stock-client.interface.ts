@@ -12,7 +12,7 @@ export interface ShopStockUpdateOptions {
   outOfStockBehavior?: 0 | 1 | 2;
   leadTimeDays?: number | null;
   warehouseAvailableAt?: string | null;
-  availabilityPolicy?: 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
+  availabilityPolicy?: 'IN_STOCK' | 'IN_STOCK_WITH_BACKORDER' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
   active?: boolean;
 }
 
@@ -30,6 +30,6 @@ export interface ShopProductInventorySnapshot {
   nativeAvailableNow?: string | null;
   nativeAvailableLater?: string | null;
   etaLabel?: string | null;
-  availabilityPolicy?: 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK' | null;
+  availabilityPolicy?: 'IN_STOCK' | 'IN_STOCK_WITH_BACKORDER' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK' | null;
   etaDiagnosticsAvailable?: boolean;
 }

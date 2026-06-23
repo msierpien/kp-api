@@ -3,7 +3,7 @@ import { getBullMqConnection } from './render.queue';
 
 export const STOCK_SYNC_QUEUE_NAME = 'stock-sync';
 
-export type StockSyncAvailabilityPolicy = 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
+export type StockSyncAvailabilityPolicy = 'IN_STOCK' | 'IN_STOCK_WITH_BACKORDER' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
 
 export type StockSyncTriggeredBy =
   | 'DOCUMENT_CONFIRM'
@@ -32,6 +32,7 @@ export interface StockSyncBatchItem {
   warehouseProductId: string;
   externalProductId: string;
   quantity: number;
+  inStockQuantity?: number | null;
   leadTimeDays?: number | null;
   warehouseAvailableAt?: string | null;
   outOfStockBehavior?: 0 | 1;

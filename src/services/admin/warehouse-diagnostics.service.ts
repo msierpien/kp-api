@@ -248,7 +248,7 @@ function formatWarehouseAvailableAt(value?: Date | null) {
 }
 
 function isStockSyncAvailabilityPolicy(value: unknown): value is import('../queue/stock-sync.queue').StockSyncAvailabilityPolicy {
-  return value === 'IN_STOCK' || value === 'BACKORDER_FROM_WHOLESALE' || value === 'OUT_OF_STOCK';
+  return value === 'IN_STOCK' || value === 'IN_STOCK_WITH_BACKORDER' || value === 'BACKORDER_FROM_WHOLESALE' || value === 'OUT_OF_STOCK';
 }
 
 function getShopDefaultLeadTimeDays(configJson: unknown) {

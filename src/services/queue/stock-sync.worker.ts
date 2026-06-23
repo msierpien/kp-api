@@ -3,7 +3,7 @@ import prisma from '../../lib/prisma';
 import { createShopStockClient } from '../shops/shop-client.factory';
 import { PrestaShopStockClient } from '../shops/prestashop-stock-client';
 import type { ShopProductInventorySnapshot } from '../shops/shop-stock-client.interface';
-import { getInventoryPublicationDecision } from '../stock/stock-sync.service';
+import { getInventoryPublicationDecision, inStockQuantityForQueue } from '../stock/stock-sync.service';
 import { getBullMqConnection } from './render.queue';
 import { STOCK_SYNC_QUEUE_NAME, type StockSyncBatchJobData, type StockSyncJobData, type StockSyncLegacyJobData } from './stock-sync.queue';
 
@@ -53,6 +53,7 @@ async function processLegacyStockSyncJob(data: StockSyncLegacyJobData) {
     data: {
       stockAfter: product.currentStock,
       publishedQuantity: decision.publishedQuantity,
+      inStockQuantity: decision.inStockQuantity ?? null,
       publishedLeadTimeDays,
       availabilityPolicy: decision.availabilityPolicy,
       outOfStockBehavior: decision.outOfStockBehavior,
@@ -70,6 +71,7 @@ async function processLegacyStockSyncJob(data: StockSyncLegacyJobData) {
       warehouseProductId,
       externalProductId,
       quantity: Math.max(0, Math.floor(Number(decision.publishedQuantity))),
+      inStockQuantity: inStockQuantityForQueue(decision.inStockQuantity),
       leadTimeDays: publishedLeadTimeDays,
       warehouseAvailableAt: formatWarehouseAvailableAt(decision.warehouseAvailableAt),
       outOfStockBehavior: decision.outOfStockBehavior,
@@ -142,6 +144,7 @@ async function processBulkBatch(
     const result = await client.bulkUpdateStock(items.map((item) => ({
       productId: Number(item.externalProductId),
       quantity: item.quantity,
+      inStockQty: item.inStockQuantity,
       leadTimeDays: item.leadTimeDays,
       warehouseAvailableAt: item.warehouseAvailableAt,
       outOfStockBehavior: item.outOfStockBehavior,

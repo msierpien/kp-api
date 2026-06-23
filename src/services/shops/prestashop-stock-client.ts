@@ -9,10 +9,11 @@ export const MAX_BULK_STOCK_BATCH_SIZE = 500;
 export interface BulkStockItem {
   productId: number;
   quantity?: number;
+  inStockQty?: number | null;
   leadTimeDays?: number | null;
   warehouseAvailableAt?: string | null;
   outOfStockBehavior?: 0 | 1;
-  availabilityPolicy?: 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
+  availabilityPolicy?: 'IN_STOCK' | 'IN_STOCK_WITH_BACKORDER' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
   active?: boolean;
   idProductAttribute?: number;
 }
@@ -23,10 +24,11 @@ export interface BulkStockResult {
   results: Array<{
     productId: number;
     quantity?: number;
+    inStockQty?: number | null;
     leadTimeDays?: number | null;
     warehouseAvailableAt?: string | null;
     outOfStockBehavior?: 0 | 1;
-    availabilityPolicy?: 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
+    availabilityPolicy?: 'IN_STOCK' | 'IN_STOCK_WITH_BACKORDER' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
     active?: boolean;
     idProductAttribute?: number;
     status: 'ok' | 'error';
@@ -94,6 +96,7 @@ export class PrestaShopStockClient implements ShopStockClient {
       const payloadItems = batch.map((item) => ({
         productId: item.productId,
         ...(item.quantity === undefined ? {} : { quantity: item.quantity }),
+        ...(item.inStockQty === undefined ? {} : { inStockQty: normalizeInStockQty(item.inStockQty) }),
         ...(item.leadTimeDays === undefined ? {} : { leadTimeDays: normalizeLeadTimeDays(item.leadTimeDays) }),
         ...(item.warehouseAvailableAt === undefined ? {} : { warehouseAvailableAt: normalizeWarehouseAvailableAt(item.warehouseAvailableAt) }),
         ...(item.outOfStockBehavior === undefined ? {} : { outOfStockBehavior: normalizeOutOfStockBehavior(item.outOfStockBehavior) }),
@@ -462,6 +465,15 @@ function normalizeLeadTimeDays(value: unknown) {
   return days;
 }
 
+function normalizeInStockQty(value: unknown) {
+  if (value === null) return null;
+  const qty = Number(value);
+  if (!Number.isInteger(qty) || qty < 0) {
+    throw new Error('inStockQty must be a non-negative integer or null');
+  }
+  return qty;
+}
+
 function normalizeWarehouseAvailableAt(value: unknown) {
   if (value === undefined || value === null || value === '') return null;
   if (typeof value !== 'string') {
@@ -490,10 +502,15 @@ function normalizeOutOfStockBehavior(value: unknown) {
 }
 
 function normalizeAvailabilityPolicy(value: unknown) {
-  if (value === 'IN_STOCK' || value === 'BACKORDER_FROM_WHOLESALE' || value === 'OUT_OF_STOCK') {
+  if (
+    value === 'IN_STOCK' ||
+    value === 'IN_STOCK_WITH_BACKORDER' ||
+    value === 'BACKORDER_FROM_WHOLESALE' ||
+    value === 'OUT_OF_STOCK'
+  ) {
     return value;
   }
-  throw new Error('availabilityPolicy must be IN_STOCK, BACKORDER_FROM_WHOLESALE or OUT_OF_STOCK');
+  throw new Error('availabilityPolicy must be IN_STOCK, IN_STOCK_WITH_BACKORDER, BACKORDER_FROM_WHOLESALE or OUT_OF_STOCK');
 }
 
 function normalizeOptionalBoolean(value: unknown) {

@@ -557,7 +557,7 @@ async function createOrderFromDetails(
   const shippingPromisesByItemId = new Map<string, ShippingPromise>();
   for (const item of importItems) {
     const shopMapping: any = getShopMapping(item);
-    const shippingPromise = await buildItemShippingPromise(context, details, shopMapping);
+    const shippingPromise = await buildItemShippingPromise(context, details, shopMapping, item.quantity);
     if (shippingPromise) {
       shippingPromisesByItemId.set(item.id, shippingPromise);
     }
@@ -812,6 +812,7 @@ async function buildItemShippingPromise(
   context: ShopSyncContext,
   details: PrestaShopOrderDetails,
   shopMapping: any,
+  requestedQuantity?: number,
 ): Promise<ShippingPromise | null> {
   if (!shopMapping?.warehouseProductId) return null;
 
@@ -820,22 +821,36 @@ async function buildItemShippingPromise(
     return null;
   }
 
+  // Mixed availability (local stock + wholesale backorder): the ordered quantity
+  // decides the promise. Up to the in-stock quantity it ships immediately;
+  // above it the whole line waits for the wholesale lead time.
+  const inStockQty = decision.inStockQuantity != null ? Number(decision.inStockQuantity) : null;
+  const shipsFromStock = inStockQty !== null
+    && requestedQuantity !== undefined
+    && requestedQuantity <= inStockQty;
+
   const cutoff = normalizeCutoff(context.config);
   const publishedLeadTime = resolveInventoryPublishedLeadTime(decision, context.config);
   const promise = calculateShippingPromise({
     baseDate: new Date(details.order.date_add),
-    leadTimeDays: publishedLeadTime.leadTimeDays,
+    leadTimeDays: shipsFromStock ? 0 : publishedLeadTime.leadTimeDays,
     cutoffHour: cutoff.hour,
     cutoffMinute: cutoff.minute,
     timeZone: context.config.timeZone ?? 'Europe/Warsaw',
-    notBefore: decision.warehouseAvailableAt ?? null,
+    notBefore: shipsFromStock ? null : (decision.warehouseAvailableAt ?? null),
   });
+
+  const isBackorder = !shipsFromStock
+    && (decision.availabilityPolicy === 'BACKORDER_FROM_WHOLESALE'
+      || decision.availabilityPolicy === 'IN_STOCK_WITH_BACKORDER');
 
   return {
     ...promise,
-    shippingSource: decision.availabilityPolicy === 'BACKORDER_FROM_WHOLESALE'
-      ? 'WHOLESALE_BACKORDER'
-      : publishedLeadTime.source,
+    shippingSource: shipsFromStock
+      ? 'LOCAL_STOCK'
+      : isBackorder
+        ? 'WHOLESALE_BACKORDER'
+        : publishedLeadTime.source,
   };
 }
 

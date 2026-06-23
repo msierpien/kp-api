@@ -4,7 +4,7 @@ import { getTenantId } from '../../lib/tenant-context';
 import { addStockSyncBatchJobs, type StockSyncBatchItem, type StockSyncTriggeredBy } from '../queue/stock-sync.queue';
 import { resolveWholesaleAvailabilityRule } from '../admin/wholesale/shared';
 
-export type InventoryAvailabilityPolicy = 'IN_STOCK' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
+export type InventoryAvailabilityPolicy = 'IN_STOCK' | 'IN_STOCK_WITH_BACKORDER' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
 export type PrestaShopOutOfStockBehavior = 0 | 1;
 export type ProductActivationMode = 'UNCHANGED' | 'SYNC_WITH_AVAILABILITY';
 export type InventoryLeadTimeSource =
@@ -18,6 +18,13 @@ export type InventoryLeadTimeSource =
 export interface InventoryPublicationDecision {
   stockAfter: Prisma.Decimal;
   publishedQuantity: Prisma.Decimal;
+  /**
+   * Quantity that ships immediately from local stock. Set only for the mixed
+   * IN_STOCK_WITH_BACKORDER policy, where publishedQuantity is the combined cap
+   * (local + wholesale) and inStockQuantity is the local part. Quantities above
+   * this threshold use leadTimeDays (wholesale lead).
+   */
+  inStockQuantity?: Prisma.Decimal;
   leadTimeDays?: number | null;
   leadTimeSource?: InventoryLeadTimeSource;
   warehouseAvailableAt?: Date | null;
@@ -82,15 +89,16 @@ export async function getInventoryPublicationDecisions(
   products: ProductForPublication[],
   options: { warningMessage?: string } = {},
 ): Promise<Map<string, InventoryPublicationDecision>> {
-  const productIdsWithoutOwnStock = products
-    .filter((product) => product.currentStock.lte(0))
-    .map((product) => product.id);
+  // Mappings are needed both for products without own stock (pure backorder)
+  // and for products with own stock (mixed IN_STOCK_WITH_BACKORDER), so fetch
+  // for every product that has a mapping.
+  const allProductIds = products.map((product) => product.id);
 
-  const wholesaleMappings = productIdsWithoutOwnStock.length === 0
+  const wholesaleMappings = allProductIds.length === 0
     ? []
     : await prisma.wholesaleProductMapping.findMany({
         where: {
-          warehouseProductId: { in: productIdsWithoutOwnStock },
+          warehouseProductId: { in: allProductIds },
           isActive: true,
           provider: { isActive: true },
         },
@@ -123,56 +131,112 @@ export async function getInventoryPublicationDecisions(
 
   const decisions = new Map<string, InventoryPublicationDecision>();
   for (const product of products) {
-    const hasOwnStock = product.currentStock.gt(0);
-    const wholesale = wholesaleByProductId.get(product.id) ?? futureWholesaleByProductId.get(product.id);
-    const productLeadTime = resolveProductLeadTime(product);
-
-    if (hasOwnStock) {
-      decisions.set(product.id, {
-        stockAfter: product.currentStock,
-        publishedQuantity: product.currentStock,
-        leadTimeDays: 0,
-        leadTimeSource: 'LOCAL_STOCK',
-        availabilityPolicy: 'IN_STOCK',
-        outOfStockBehavior: 0,
-        warningMessage: options.warningMessage,
-      });
-      continue;
-    }
-
-    if (wholesale) {
-      const wholesaleLeadTime = normalizeOptionalLeadTimeDays(wholesale.provider.leadTimeDays);
-      decisions.set(product.id, {
-        stockAfter: product.currentStock,
-        publishedQuantity: ZERO,
-        leadTimeDays: productLeadTime.days ?? wholesaleLeadTime,
-        leadTimeSource: productLeadTime.days !== null
-          ? productLeadTime.source
-          : wholesaleLeadTime !== null
-            ? 'WHOLESALE_PROVIDER'
-            : 'NONE',
-        warehouseAvailableAt: wholesale.warehouseAvailableAt,
-        availabilityPolicy: 'BACKORDER_FROM_WHOLESALE',
-        outOfStockBehavior: 1,
-        warningMessage: options.warningMessage,
-        wholesaleMappingId: wholesale.id,
-        wholesaleProviderName: wholesale.provider.name,
-      });
-      continue;
-    }
-
-    decisions.set(product.id, {
-      stockAfter: product.currentStock,
-      publishedQuantity: ZERO,
-      leadTimeDays: null,
-      leadTimeSource: 'NONE',
-      availabilityPolicy: 'OUT_OF_STOCK',
-      outOfStockBehavior: 0,
+    decisions.set(product.id, resolvePublicationDecision(product, {
+      wholesaleWithStock: wholesaleByProductId.get(product.id),
+      futureWholesale: futureWholesaleByProductId.get(product.id),
       warningMessage: options.warningMessage,
-    });
+    }));
   }
 
   return decisions;
+}
+
+export type WholesaleMappingForDecision = {
+  id: string;
+  lastKnownStock: Prisma.Decimal | null;
+  warehouseAvailableAt: Date | null;
+  provider: { name: string; leadTimeDays: number | null };
+};
+
+/**
+ * Pure per-product publication decision. Inputs are the already-resolved
+ * wholesale mappings (one with numeric stock, one with a future delivery date),
+ * so this can be unit tested without touching the database.
+ */
+export function resolvePublicationDecision(
+  product: ProductForPublication,
+  input: {
+    wholesaleWithStock?: WholesaleMappingForDecision | null;
+    futureWholesale?: WholesaleMappingForDecision | null;
+    warningMessage?: string;
+  } = {},
+): InventoryPublicationDecision {
+  const hasOwnStock = product.currentStock.gt(0);
+  const wholesaleWithStock = input.wholesaleWithStock ?? undefined;
+  const wholesale = wholesaleWithStock ?? input.futureWholesale ?? undefined;
+  const productLeadTime = resolveProductLeadTime(product);
+
+  const backorderLeadTime = (mapping: WholesaleMappingForDecision) => {
+    const wholesaleLeadTime = normalizeOptionalLeadTimeDays(mapping.provider.leadTimeDays);
+    return {
+      leadTimeDays: productLeadTime.days ?? wholesaleLeadTime,
+      leadTimeSource: productLeadTime.days !== null
+        ? productLeadTime.source
+        : wholesaleLeadTime !== null
+          ? 'WHOLESALE_PROVIDER' as const
+          : 'NONE' as const,
+    };
+  };
+
+  if (hasOwnStock) {
+    // Mixed: local stock + wholesale with numeric stock. Publish the combined
+    // cap (so the customer can order beyond local stock up to the wholesale
+    // limit) and keep inStockQuantity = local stock so the ETA stays fast for
+    // the in-stock portion and switches to the wholesale lead above it.
+    if (wholesaleWithStock) {
+      const wholesaleStock = wholesaleWithStock.lastKnownStock ?? ZERO;
+      const lead = backorderLeadTime(wholesaleWithStock);
+      return {
+        stockAfter: product.currentStock,
+        publishedQuantity: product.currentStock.plus(wholesaleStock),
+        inStockQuantity: product.currentStock,
+        leadTimeDays: lead.leadTimeDays,
+        leadTimeSource: lead.leadTimeSource,
+        warehouseAvailableAt: wholesaleWithStock.warehouseAvailableAt,
+        availabilityPolicy: 'IN_STOCK_WITH_BACKORDER',
+        outOfStockBehavior: 0,
+        warningMessage: input.warningMessage,
+        wholesaleMappingId: wholesaleWithStock.id,
+        wholesaleProviderName: wholesaleWithStock.provider.name,
+      };
+    }
+
+    return {
+      stockAfter: product.currentStock,
+      publishedQuantity: product.currentStock,
+      leadTimeDays: 0,
+      leadTimeSource: 'LOCAL_STOCK',
+      availabilityPolicy: 'IN_STOCK',
+      outOfStockBehavior: 0,
+      warningMessage: input.warningMessage,
+    };
+  }
+
+  if (wholesale) {
+    const lead = backorderLeadTime(wholesale);
+    return {
+      stockAfter: product.currentStock,
+      publishedQuantity: ZERO,
+      leadTimeDays: lead.leadTimeDays,
+      leadTimeSource: lead.leadTimeSource,
+      warehouseAvailableAt: wholesale.warehouseAvailableAt,
+      availabilityPolicy: 'BACKORDER_FROM_WHOLESALE',
+      outOfStockBehavior: 1,
+      warningMessage: input.warningMessage,
+      wholesaleMappingId: wholesale.id,
+      wholesaleProviderName: wholesale.provider.name,
+    };
+  }
+
+  return {
+    stockAfter: product.currentStock,
+    publishedQuantity: ZERO,
+    leadTimeDays: null,
+    leadTimeSource: 'NONE',
+    availabilityPolicy: 'OUT_OF_STOCK',
+    outOfStockBehavior: 0,
+    warningMessage: input.warningMessage,
+  };
 }
 
 export async function publishInventoryToShops(options: PublishInventoryOptions) {
@@ -262,6 +326,7 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
         stockBefore: null,
         stockAfter: decision.stockAfter,
         publishedQuantity: decision.publishedQuantity,
+        inStockQuantity: decision.inStockQuantity ?? null,
         publishedLeadTimeDays,
         publishedWarehouseAvailableAt: decision.warehouseAvailableAt ?? null,
         availabilityPolicy: decision.availabilityPolicy,
@@ -283,6 +348,7 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
       warehouseProductId: product.id,
       externalProductId: mapping.externalProductId,
       quantity: publishedQuantityForQueue(decision.publishedQuantity),
+      inStockQuantity: inStockQuantityForQueue(decision.inStockQuantity),
       leadTimeDays: publishedLeadTimeDays,
       warehouseAvailableAt: formatWarehouseAvailableAt(decision.warehouseAvailableAt),
       outOfStockBehavior: decision.outOfStockBehavior,
@@ -376,6 +442,11 @@ function normalizeProductIds(productIds?: string[]) {
 export function publishedQuantityForQueue(quantity: Prisma.Decimal) {
   const normalized = Prisma.Decimal.max(quantity, ZERO);
   return Number(normalized.toDecimalPlaces(3).toString());
+}
+
+export function inStockQuantityForQueue(quantity?: Prisma.Decimal | null): number | undefined {
+  if (quantity === undefined || quantity === null) return undefined;
+  return Math.max(0, Math.floor(Number(quantity)));
 }
 
 function resolveProductLeadTime(product: ProductForPublication): ProductLeadTimeResolution {

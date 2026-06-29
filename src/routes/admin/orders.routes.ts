@@ -34,9 +34,71 @@ const looseObjectResponse = {
   additionalProperties: true,
 } as const;
 
-function withOrderComputedFields<T extends { payloadJson: unknown; currency?: string }>(order: T) {
+function toRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function stringValue(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return null;
+}
+
+function snapshotImageUrl(payload: unknown) {
+  const root = toRecord(payload);
+  const media = toRecord(root.media);
+  const images = Array.isArray(media.images) ? media.images : [];
+  const cover = images.find((item) => {
+    const image = toRecord(item);
+    return (image.isCover === true || image.cover === true) && stringValue(image.url);
+  }) ?? images[0];
+  const image = toRecord(cover);
+  return stringValue(image.url ?? image.src ?? image.thumbnailUrl ?? image.mediumUrl);
+}
+
+type ProductSnapshotForImage = {
+  shopId: string;
+  payloadJson: unknown;
+};
+
+type WarehouseProductForOrder = {
+  productChannelSnapshots?: ProductSnapshotForImage[];
+  imageUrl?: string | null;
+};
+
+function productImageUrl(product: WarehouseProductForOrder, shopId?: string | null) {
+  if (product.imageUrl) return product.imageUrl;
+  const snapshots = product.productChannelSnapshots ?? [];
+  const snapshot = shopId
+    ? snapshots.find((item) => item.shopId === shopId) ?? snapshots[0]
+    : snapshots[0];
+  return snapshot ? snapshotImageUrl(snapshot.payloadJson) : null;
+}
+
+function withOrderComputedFields<T extends { payloadJson: unknown; currency?: string; shopId?: string; items?: unknown }>(order: T) {
+  const items = Array.isArray(order.items)
+    ? order.items.map((item) => {
+      const itemRecord = toRecord(item);
+      const warehouseProduct = toRecord(itemRecord.warehouseProduct);
+      if (!warehouseProduct.id) return item;
+      const { productChannelSnapshots: _snapshots, ...productWithoutSnapshots } = warehouseProduct;
+      return {
+        ...itemRecord,
+        warehouseProduct: {
+          ...productWithoutSnapshots,
+          imageUrl: productImageUrl(warehouseProduct as WarehouseProductForOrder, order.shopId),
+        },
+      };
+    })
+    : order.items;
+
   return {
     ...order,
+    ...(Array.isArray(order.items) ? { items } : {}),
     shippingInfo: extractOrderShippingInfo(order.payloadJson, order.currency),
   };
 }
@@ -275,6 +337,14 @@ export async function ordersRoutes(fastify: FastifyInstance) {
                     name: true,
                     unit: true,
                     currentStock: true,
+                    productChannelSnapshots: {
+                      select: {
+                        shopId: true,
+                        payloadJson: true,
+                      },
+                      orderBy: { fetchedAt: 'desc' },
+                      take: 5,
+                    },
                     wholesaleMappings: {
                       where: {
                         isActive: true,

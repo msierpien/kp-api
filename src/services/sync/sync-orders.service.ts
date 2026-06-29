@@ -11,7 +11,11 @@ import { generateAccessToken } from '../../lib/token';
 import { createWzForOrder, shouldAutoCreateWzForTenant } from '../admin/warehouse-documents.service';
 import { releaseOrderReservations, reserveOrder } from '../admin/warehouse-reservations.service';
 import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
-import { getInventoryPublicationDecision, resolveInventoryPublishedLeadTime } from '../stock/stock-sync.service';
+import {
+  getInventoryPublicationDecision,
+  resolveInventoryPublishedLeadTime,
+  resolvePublishedWarehouseAvailableAt,
+} from '../stock/stock-sync.service';
 import {
   calculateShippingPromise,
   maxShippingPromise,
@@ -831,13 +835,14 @@ async function buildItemShippingPromise(
 
   const cutoff = normalizeCutoff(context.config);
   const publishedLeadTime = resolveInventoryPublishedLeadTime(decision, context.config);
+  const publishedWarehouseAvailableAt = resolvePublishedWarehouseAvailableAt(decision, publishedLeadTime.leadTimeDays);
   const promise = calculateShippingPromise({
     baseDate: new Date(details.order.date_add),
     leadTimeDays: shipsFromStock ? 0 : publishedLeadTime.leadTimeDays,
     cutoffHour: cutoff.hour,
     cutoffMinute: cutoff.minute,
     timeZone: context.config.timeZone ?? 'Europe/Warsaw',
-    notBefore: shipsFromStock ? null : (decision.warehouseAvailableAt ?? null),
+    notBefore: shipsFromStock ? null : publishedWarehouseAvailableAt,
   });
 
   const isBackorder = !shipsFromStock

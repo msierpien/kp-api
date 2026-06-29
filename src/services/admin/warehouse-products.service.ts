@@ -5,6 +5,7 @@ import { syncProductPrice } from '../price/price-sync.service';
 import {
   getInventoryPublicationDecision,
   resolveInventoryPublishedLeadTime,
+  resolvePublishedWarehouseAvailableAt,
   syncStockForProducts,
   type InventoryLeadTimeSource,
 } from '../stock/stock-sync.service';
@@ -439,6 +440,7 @@ async function getProductShippingPreview(productId: string, tenantId: string | n
 
   const primaryShopConfig = activeShopMappings[0]?.shop.configJson;
   const publishedLeadTime = resolveInventoryPublishedLeadTime(decision, primaryShopConfig);
+  const publishedWarehouseAvailableAt = resolvePublishedWarehouseAvailableAt(decision, publishedLeadTime.leadTimeDays);
   const latestLogByShopId = new Map<string, typeof latestLogs[number]>();
   for (const log of latestLogs) {
     if (!latestLogByShopId.has(log.shopId)) latestLogByShopId.set(log.shopId, log);
@@ -477,7 +479,7 @@ async function getProductShippingPreview(productId: string, tenantId: string | n
     publishedQuantity: decision.publishedQuantity,
     publishedLeadTimeDays: publishedLeadTime.leadTimeDays,
     leadTimeSource: publishedLeadTime.source,
-    warehouseAvailableAt: decision.warehouseAvailableAt ?? null,
+    warehouseAvailableAt: publishedWarehouseAvailableAt,
     latestShopSyncs,
   };
 }

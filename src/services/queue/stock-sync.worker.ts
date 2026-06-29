@@ -3,7 +3,11 @@ import prisma from '../../lib/prisma';
 import { createShopStockClient } from '../shops/shop-client.factory';
 import { PrestaShopStockClient } from '../shops/prestashop-stock-client';
 import type { ShopProductInventorySnapshot } from '../shops/shop-stock-client.interface';
-import { getInventoryPublicationDecision, inStockQuantityForQueue } from '../stock/stock-sync.service';
+import {
+  getInventoryPublicationDecision,
+  inStockQuantityForQueue,
+  resolvePublishedWarehouseAvailableAt,
+} from '../stock/stock-sync.service';
 import { getBullMqConnection } from './render.queue';
 import { STOCK_SYNC_QUEUE_NAME, type StockSyncBatchJobData, type StockSyncJobData, type StockSyncLegacyJobData } from './stock-sync.queue';
 
@@ -47,6 +51,7 @@ async function processLegacyStockSyncJob(data: StockSyncLegacyJobData) {
     warningMessage: log.warningMessage ?? undefined,
   });
   const publishedLeadTimeDays = resolvePublishedLeadTimeDays(decision, shop.configJson);
+  const publishedWarehouseAvailableAt = resolvePublishedWarehouseAvailableAt(decision, publishedLeadTimeDays);
 
   await prisma.stockSyncLog.update({
     where: { id: logId },
@@ -55,6 +60,7 @@ async function processLegacyStockSyncJob(data: StockSyncLegacyJobData) {
       publishedQuantity: decision.publishedQuantity,
       inStockQuantity: decision.inStockQuantity ?? null,
       publishedLeadTimeDays,
+      publishedWarehouseAvailableAt,
       availabilityPolicy: decision.availabilityPolicy,
       outOfStockBehavior: decision.outOfStockBehavior,
       warningMessage: decision.warningMessage,
@@ -73,7 +79,7 @@ async function processLegacyStockSyncJob(data: StockSyncLegacyJobData) {
       quantity: Math.max(0, Math.floor(Number(decision.publishedQuantity))),
       inStockQuantity: inStockQuantityForQueue(decision.inStockQuantity),
       leadTimeDays: publishedLeadTimeDays,
-      warehouseAvailableAt: formatWarehouseAvailableAt(decision.warehouseAvailableAt),
+      warehouseAvailableAt: formatWarehouseAvailableAt(publishedWarehouseAvailableAt),
       outOfStockBehavior: decision.outOfStockBehavior,
       availabilityPolicy: decision.availabilityPolicy,
     }],

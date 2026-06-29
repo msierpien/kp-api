@@ -314,6 +314,7 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
     if (!decision) continue;
     const publishedLeadTime = resolveInventoryPublishedLeadTime(decision, mapping.shop.configJson);
     const publishedLeadTimeDays = publishedLeadTime.leadTimeDays;
+    const publishedWarehouseAvailableAt = resolvePublishedWarehouseAvailableAt(decision, publishedLeadTimeDays);
     const publishActive = resolvePublishedProductActive(decision, mapping.shop.configJson);
 
     const log = await prisma.stockSyncLog.create({
@@ -328,7 +329,7 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
         publishedQuantity: decision.publishedQuantity,
         inStockQuantity: decision.inStockQuantity ?? null,
         publishedLeadTimeDays,
-        publishedWarehouseAvailableAt: decision.warehouseAvailableAt ?? null,
+        publishedWarehouseAvailableAt,
         availabilityPolicy: decision.availabilityPolicy,
         outOfStockBehavior: decision.outOfStockBehavior,
         warningMessage: decision.warningMessage,
@@ -350,7 +351,7 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
       quantity: publishedQuantityForQueue(decision.publishedQuantity),
       inStockQuantity: inStockQuantityForQueue(decision.inStockQuantity),
       leadTimeDays: publishedLeadTimeDays,
-      warehouseAvailableAt: formatWarehouseAvailableAt(decision.warehouseAvailableAt),
+      warehouseAvailableAt: formatWarehouseAvailableAt(publishedWarehouseAvailableAt),
       outOfStockBehavior: decision.outOfStockBehavior,
       availabilityPolicy: decision.availabilityPolicy,
       active: publishActive,
@@ -482,6 +483,19 @@ export function resolveInventoryPublishedLeadTime(
   return { leadTimeDays: 0, source: 'NONE' };
 }
 
+export function resolvePublishedWarehouseAvailableAt(
+  decision: { warehouseAvailableAt?: Date | null; availabilityPolicy?: string | null },
+  leadTimeDays?: number | null,
+): Date | null {
+  if (!decision.warehouseAvailableAt) return null;
+
+  const availabilityDate = businessDateOnly(decision.warehouseAvailableAt);
+  if (!isBackorderPolicy(decision.availabilityPolicy)) return availabilityDate;
+
+  const days = normalizeOptionalLeadTimeDays(leadTimeDays) ?? 0;
+  return addBusinessDays(availabilityDate, days);
+}
+
 export function resolvePublishedProductActive(
   decision: { availabilityPolicy?: string | null },
   shopConfigJson: unknown,
@@ -498,6 +512,42 @@ export function getProductActivationMode(configJson: unknown): ProductActivation
 
 function formatWarehouseAvailableAt(value?: Date | null) {
   return value ? value.toISOString().slice(0, 10) : null;
+}
+
+function isBackorderPolicy(value?: string | null) {
+  return value === 'BACKORDER_FROM_WHOLESALE' || value === 'IN_STOCK_WITH_BACKORDER';
+}
+
+function businessDateOnly(value: Date) {
+  const date = new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+  return isBusinessDate(date) ? date : nextBusinessDate(date);
+}
+
+function addBusinessDays(date: Date, days: number) {
+  let next = date;
+  let remaining = days;
+  while (remaining > 0) {
+    next = addCalendarDays(next, 1);
+    if (isBusinessDate(next)) remaining--;
+  }
+  return next;
+}
+
+function addCalendarDays(date: Date, days: number) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + days));
+}
+
+function isBusinessDate(date: Date) {
+  const day = date.getUTCDay();
+  return day !== 0 && day !== 6;
+}
+
+function nextBusinessDate(date: Date) {
+  let next = date;
+  while (!isBusinessDate(next)) {
+    next = addCalendarDays(next, 1);
+  }
+  return next;
 }
 
 function getShopDefaultLeadTimeDays(configJson: unknown) {

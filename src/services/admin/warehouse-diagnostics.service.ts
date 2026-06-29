@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
 import { addStockSyncBatchJobs, addStockSyncJob, getStockSyncQueue, type StockSyncBatchItem } from '../queue/stock-sync.queue';
-import { getInventoryPublicationDecision } from '../stock/stock-sync.service';
+import { getInventoryPublicationDecision, resolvePublishedWarehouseAvailableAt } from '../stock/stock-sync.service';
 
 type StockSyncStatus = 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'FAILED';
 type DocumentType = 'PZ' | 'ZH' | 'PW' | 'WZ' | 'ZW' | 'RW' | 'INW';
@@ -119,6 +119,7 @@ export async function retryStockSyncLog(id: string) {
 
   const decision = await getInventoryPublicationDecision(log.warehouseProductId);
   const publishedLeadTimeDays = resolvePublishedLeadTimeDays(decision, log.shop.configJson);
+  const publishedWarehouseAvailableAt = resolvePublishedWarehouseAvailableAt(decision, publishedLeadTimeDays);
   const retryLog = await prisma.stockSyncLog.create({
     data: {
       tenantId,
@@ -130,7 +131,7 @@ export async function retryStockSyncLog(id: string) {
       stockAfter: log.warehouseProduct.currentStock,
       publishedQuantity: decision.publishedQuantity,
       publishedLeadTimeDays,
-      publishedWarehouseAvailableAt: decision.warehouseAvailableAt ?? null,
+      publishedWarehouseAvailableAt,
       availabilityPolicy: decision.availabilityPolicy,
       outOfStockBehavior: decision.outOfStockBehavior,
       warningMessage: decision.warningMessage,

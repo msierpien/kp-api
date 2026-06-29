@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   getProductActivationMode,
   resolveInventoryPublishedLeadTime,
+  resolvePublishedWarehouseAvailableAt,
   resolvePublishedProductActive,
 } from '../src/services/stock/stock-sync.service';
 
@@ -43,6 +44,42 @@ test('out of stock product does not publish a lead time', () => {
   );
 
   assert.deepEqual(result, { leadTimeDays: null, source: 'NONE' });
+});
+
+test('backorder warehouse availability date includes wholesale lead time', () => {
+  const result = resolvePublishedWarehouseAvailableAt(
+    {
+      availabilityPolicy: 'BACKORDER_FROM_WHOLESALE',
+      warehouseAvailableAt: new Date(Date.UTC(2026, 5, 30)),
+    },
+    3,
+  );
+
+  assert.equal(result?.toISOString().slice(0, 10), '2026-07-03');
+});
+
+test('backorder warehouse availability date skips weekends when lead time crosses them', () => {
+  const result = resolvePublishedWarehouseAvailableAt(
+    {
+      availabilityPolicy: 'BACKORDER_FROM_WHOLESALE',
+      warehouseAvailableAt: new Date(Date.UTC(2026, 9, 28)),
+    },
+    3,
+  );
+
+  assert.equal(result?.toISOString().slice(0, 10), '2026-11-02');
+});
+
+test('non-backorder warehouse availability date is not shifted by lead time', () => {
+  const result = resolvePublishedWarehouseAvailableAt(
+    {
+      availabilityPolicy: 'IN_STOCK',
+      warehouseAvailableAt: new Date(Date.UTC(2026, 5, 30)),
+    },
+    3,
+  );
+
+  assert.equal(result?.toISOString().slice(0, 10), '2026-06-30');
 });
 
 test('product activation sync follows availability only when enabled for shop', () => {

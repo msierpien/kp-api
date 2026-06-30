@@ -597,7 +597,7 @@ async function buildPreviewRow(
 ): Promise<ShopProductPublicationPreviewItem> {
   const messages: string[] = [];
   const calculatedShopPrice = product.shopPrices[0]?.netPrice;
-  const price = normalizePrice(item.price) ?? decimalToNumber(calculatedShopPrice) ?? decimalToNumber(product.retailPrice);
+  const price = normalizePrice(item.price) ?? decimalToNumber(calculatedShopPrice);
   const activeSources = product.wholesaleMappings as WholesaleMappingWithProvider[];
   const selectedSource = resolveSelectedSource(activeSources, item.sourceWholesaleMappingId);
   const duplicateRemoteProduct = await client.findProductByReference(product.sku);

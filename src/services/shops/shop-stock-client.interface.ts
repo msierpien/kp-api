@@ -4,8 +4,12 @@ export interface ShopStockClient {
     quantity: number,
     options?: ShopStockUpdateOptions,
   ): Promise<void>;
-  updateProductPrice?(externalProductId: string, price: number): Promise<void>;
+  updateProductPrice?(externalProductId: string, price: number, options?: ShopPriceUpdateOptions): Promise<void>;
   getProductInventorySnapshot?(externalProductId: string): Promise<ShopProductInventorySnapshot>;
+}
+
+export interface ShopPriceUpdateOptions {
+  wholesalePrice?: number | null;
 }
 
 export interface ShopStockUpdateOptions {

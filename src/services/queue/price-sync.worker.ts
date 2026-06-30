@@ -46,7 +46,17 @@ async function processPriceSyncJob(job: Job<PriceSyncJobData>) {
     throw new Error(`Price sync is not implemented for platform ${shop.platform}`);
   }
 
-  await client.updateProductPrice(externalProductId, targetPrice);
+  const costBasis = product.averagePurchaseCost ?? product.purchasePrice;
+  const wholesalePrice = costBasis === null ? null : Number(costBasis);
+  const priceUpdateOptions = wholesalePrice !== null && Number.isFinite(wholesalePrice) && wholesalePrice >= 0
+    ? { wholesalePrice }
+    : undefined;
+
+  await client.updateProductPrice(
+    externalProductId,
+    targetPrice,
+    priceUpdateOptions,
+  );
 
   await prisma.$transaction([
     prisma.priceSyncLog.update({

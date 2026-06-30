@@ -605,7 +605,6 @@ async function createWarehouseProductFromMappingInTx(
       sku: mapping.externalSku,
       name: mapping.externalName || mapping.externalSku,
       unit: 'szt',
-      retailPrice: mapping.externalPrice,
     },
   });
 

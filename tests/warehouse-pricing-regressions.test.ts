@@ -245,6 +245,46 @@ test('sync pricing has explicit below-cost confirmation guard', () => {
   assert.match(body, /Potwierdź synchronizację poniżej kosztu/);
 });
 
+test('low-level price sync requires pricing engine target price', () => {
+  const source = readFileSync(join(process.cwd(), 'src/services/price/price-sync.service.ts'), 'utf8');
+  const start = source.indexOf('export async function syncProductPrice');
+  const end = source.indexOf('export interface BulkSyncProductPricesResult', start);
+  const body = source.slice(start, end);
+
+  assert.match(body, /Brak ceny docelowej z cennika do synchronizacji/);
+  assert.doesNotMatch(body, /product\.retailPrice/);
+});
+
+test('warehouse product retail price update does not enqueue shop price sync', () => {
+  const source = readFileSync(join(process.cwd(), 'src/services/admin/warehouse-products.service.ts'), 'utf8');
+  const start = source.indexOf('export async function updateProduct');
+  const end = source.indexOf('export async function deleteProduct', start);
+  const body = source.slice(start, end);
+
+  assert.doesNotMatch(body, /syncProductPrice/);
+  assert.doesNotMatch(body, /PRODUCT_PRICE_UPDATE/);
+});
+
+test('legacy product sync-price routes delegate to pricing sync', () => {
+  const source = readFileSync(join(process.cwd(), 'src/routes/admin/warehouse/products.routes.ts'), 'utf8');
+  const start = source.indexOf("fastify.post('/products/bulk/sync-price'");
+  const end = source.indexOf("fastify.post('/products/:id/sync-stock'", start);
+  const body = source.slice(start, end);
+
+  assert.match(body, /pricingService\.syncPricing/);
+  assert.doesNotMatch(body, /priceSyncService/);
+});
+
+test('shop product publication does not fall back to legacy retailPrice', () => {
+  const source = readFileSync(join(process.cwd(), 'src/services/admin/shop-product-publication.service.ts'), 'utf8');
+  const start = source.indexOf('async function buildPreviewRow');
+  const end = source.indexOf('function resolvePreviewStatus', start);
+  const body = source.slice(start, end);
+
+  assert.match(body, /product\.shopPrices\[0\]\?\.netPrice/);
+  assert.doesNotMatch(body, /product\.retailPrice/);
+});
+
 test('bulk price update updates existing active product rules instead of blindly creating duplicates', () => {
   const source = readFileSync(join(process.cwd(), 'src/services/admin/warehouse-pricing.service.ts'), 'utf8');
   const start = source.indexOf('export async function bulkUpdateProductPrices');

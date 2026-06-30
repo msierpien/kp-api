@@ -1,7 +1,6 @@
 import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
-import { syncProductPrice } from '../price/price-sync.service';
 import {
   getInventoryPublicationDecision,
   resolveInventoryPublishedLeadTime,
@@ -732,9 +731,6 @@ export async function updateProduct(id: string, input: UpdateProductInput) {
 
   const product = await prisma.warehouseProduct.findFirst({ where });
   if (!product) throw new Error('Produkt nie znaleziony');
-  const shouldSyncPrice = input.retailPrice !== undefined
-    && input.retailPrice !== null
-    && !pricesEqual(product.retailPrice, input.retailPrice);
   const shouldSyncLeadTime = (input.leadTimeDaysOverride !== undefined && input.leadTimeDaysOverride !== product.leadTimeDaysOverride) ||
     (input.leadTimeGroupId !== undefined && input.leadTimeGroupId !== product.leadTimeGroupId);
 
@@ -767,11 +763,6 @@ export async function updateProduct(id: string, input: UpdateProductInput) {
     include: { catalog: true, leadTimeGroup: true },
   });
 
-  if (shouldSyncPrice && tenantId) {
-    syncProductPrice(id, { triggeredBy: 'PRODUCT_PRICE_UPDATE' }).catch((error) => {
-      console.error('[Warehouse] Failed to enqueue automatic price sync:', error);
-    });
-  }
   if (shouldSyncLeadTime && tenantId) {
     syncStockForProducts([id], 'LEAD_TIME_UPDATE').catch((error) => {
       console.error('[Warehouse] Failed to enqueue automatic lead time sync:', error);

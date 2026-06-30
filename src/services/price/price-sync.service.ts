@@ -79,8 +79,10 @@ export async function syncProductPrice(
     where: { id: warehouseProductId, tenantId },
   });
   if (!product) throw new Error('Produkt magazynowy nie znaleziony');
-  const targetPrice = options.price ?? (product.retailPrice === null ? null : Number(product.retailPrice));
-  if (targetPrice === null) throw new Error('Produkt nie ma ustawionej ceny sprzedaży');
+  if (options.price === undefined || options.price === null) {
+    throw new Error('Brak ceny docelowej z cennika do synchronizacji');
+  }
+  const targetPrice = Number(options.price);
   if (!Number.isFinite(targetPrice) || targetPrice < 0) throw new Error('Cena sprzedaży jest nieprawidłowa');
 
   const where: Prisma.ShopProductMappingWhereInput = {

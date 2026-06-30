@@ -6,6 +6,7 @@ import {
   buildBulkStockUrl,
   normalizeBulkStockBatchSize,
   replaceProductOrderAvailabilityXml,
+  replaceProductPriceXml,
 } from '../src/services/shops/prestashop-stock-client';
 
 const PRODUCT_XML = `<?xml version="1.0" encoding="UTF-8"?>
@@ -17,6 +18,8 @@ const PRODUCT_XML = `<?xml version="1.0" encoding="UTF-8"?>
     <position_in_category>0</position_in_category>
     <available_for_order>0</available_for_order>
     <show_price>0</show_price>
+    <price>1.23</price>
+    <wholesale_price>0.00</wholesale_price>
     <available_later>
       <language id="1"></language>
       <language id="2"></language>
@@ -24,6 +27,16 @@ const PRODUCT_XML = `<?xml version="1.0" encoding="UTF-8"?>
     <visibility>both</visibility>
   </product>
 </prestashop>`;
+
+test('PrestaShop price update writes retail price and purchase cost', () => {
+  const xml = replaceProductPriceXml(PRODUCT_XML, 13.99, 8.77);
+
+  assert.match(xml, /<price>13\.99<\/price>/);
+  assert.match(xml, /<wholesale_price>8\.77<\/wholesale_price>/);
+  assert.doesNotMatch(xml, /<manufacturer_name>/);
+  assert.doesNotMatch(xml, /<quantity>/);
+  assert.doesNotMatch(xml, /<position_in_category>/);
+});
 
 test('PrestaShop product update enables orders and publishes wholesale lead time', () => {
   const xml = replaceProductOrderAvailabilityXml(PRODUCT_XML, {

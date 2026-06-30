@@ -192,16 +192,19 @@ export class PrestaShopStockClient implements ShopStockClient {
     }
   }
 
-  async updateProductPrice(externalProductId: string, price: number): Promise<void> {
+  async updateProductPrice(externalProductId: string, price: number, options: { wholesalePrice?: number | null } = {}): Promise<void> {
     if (!Number.isFinite(price) || price < 0) {
       throw new Error(`Invalid product price for PrestaShop product ${externalProductId}`);
+    }
+    if (options.wholesalePrice !== undefined && options.wholesalePrice !== null && (!Number.isFinite(options.wholesalePrice) || options.wholesalePrice < 0)) {
+      throw new Error(`Invalid wholesale price for PrestaShop product ${externalProductId}`);
     }
 
     const productXml = await this.fetchWebServiceText(`products/${encodeURIComponent(externalProductId)}`, {
       headers: { Accept: 'application/xml' },
     });
 
-    const payload = replaceProductPriceXml(productXml, price);
+    const payload = replaceProductPriceXml(productXml, price, options.wholesalePrice);
 
     await this.fetchWebServiceText(`products/${encodeURIComponent(externalProductId)}`, {
       method: 'PUT',
@@ -630,18 +633,24 @@ function cdata(value: string) {
   return value.replace(/\]\]>/g, ']]]]><![CDATA[>');
 }
 
-export function replaceProductPriceXml(xml: string, price: number) {
+export function replaceProductPriceXml(xml: string, price: number, wholesalePrice?: number | null) {
   const normalizedPrice = price.toFixed(2);
-  const withoutReadonlyFields = stripProductReadonlyFields(xml);
+  let nextXml = stripProductReadonlyFields(xml);
 
-  if (!/<price\b[^>]*>[\s\S]*?<\/price>/.test(withoutReadonlyFields)) {
+  if (!/<price\b[^>]*>[\s\S]*?<\/price>/.test(nextXml)) {
     throw new Error('PrestaShop product XML does not contain a price field');
   }
 
-  return withoutReadonlyFields.replace(
+  nextXml = nextXml.replace(
     /<price\b([^>]*)>[\s\S]*?<\/price>/,
     `<price$1>${normalizedPrice}</price>`,
   );
+
+  if (wholesalePrice !== undefined && wholesalePrice !== null) {
+    nextXml = replaceSimpleProductField(nextXml, 'wholesale_price', wholesalePrice.toFixed(2));
+  }
+
+  return nextXml;
 }
 
 export function replaceProductOrderAvailabilityXml(

@@ -4,7 +4,6 @@ import * as barcodeService from '../../../services/admin/warehouse-barcodes.serv
 import * as diagnosticsService from '../../../services/admin/warehouse-diagnostics.service';
 import * as sourceMappingService from '../../../services/admin/warehouse-product-source-mapping.service';
 import * as reservationService from '../../../services/admin/warehouse-reservations.service';
-import * as priceSyncService from '../../../services/price/price-sync.service';
 import * as stockSyncService from '../../../services/stock/stock-sync.service';
 import * as shopProductPublicationService from '../../../services/admin/shop-product-publication.service';
 import * as pricingService from '../../../services/admin/warehouse-pricing.service';
@@ -417,8 +416,9 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
     },
   }, async (request: FastifyRequest<{ Body: { productIds: string[]; shopId?: string } }>, reply: FastifyReply) => {
     try {
-      const result = await priceSyncService.syncPricesForProducts(request.body.productIds, {
-        shopId: request.body.shopId,
+      const result = await pricingService.syncPricing({
+        productIds: request.body.productIds,
+        shopIds: request.body.shopId ? [request.body.shopId] : undefined,
         triggeredBy: 'MANUAL',
       });
       return reply.status(202).send(result);
@@ -998,10 +998,14 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
     },
   }, async (request: FastifyRequest<{
     Params: { id: string };
-    Body: Pick<priceSyncService.SyncProductPriceOptions, 'shopId'>;
+    Body: { shopId?: string };
   }>, reply: FastifyReply) => {
     try {
-      const result = await priceSyncService.syncProductPrice(request.params.id, request.body ?? {});
+      const result = await pricingService.syncPricing({
+        productIds: [request.params.id],
+        shopIds: request.body?.shopId ? [request.body.shopId] : undefined,
+        triggeredBy: 'MANUAL',
+      });
       return reply.status(202).send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd synchronizacji ceny';

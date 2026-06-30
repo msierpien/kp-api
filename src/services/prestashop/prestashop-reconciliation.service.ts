@@ -100,7 +100,11 @@ export async function reconcilePrestaShopForTenant(
     orderBy: [{ shopId: 'asc' }, { externalSku: 'asc' }],
     include: {
       shop: true,
-      warehouseProduct: true,
+      warehouseProduct: {
+        include: {
+          shopPrices: true,
+        },
+      },
     },
   });
 
@@ -110,6 +114,10 @@ export async function reconcilePrestaShopForTenant(
   for (const mapping of mappings) {
     if (!mapping.warehouseProduct) continue;
 
+    const shopPrice = mapping.warehouseProduct.shopPrices.find((price) => price.shopId === mapping.shopId);
+    const expectedPrice = shopPrice?.netPrice === undefined
+      ? (mapping.warehouseProduct.retailPrice === null ? null : Number(mapping.warehouseProduct.retailPrice))
+      : Number(shopPrice.netPrice);
     const baseEntry = {
       shop: {
         id: mapping.shop.id,
@@ -156,7 +164,7 @@ export async function reconcilePrestaShopForTenant(
       const decision = await getInventoryPublicationDecision(mapping.warehouseProduct.id);
       const expectedLeadTime = resolveInventoryPublishedLeadTime(decision, mapping.shop.configJson).leadTimeDays;
       const expectedAvailabilityPolicy = decision.availabilityPolicy;
-      const priceDifference = comparePrice(baseEntry.warehouseProduct.retailPrice, remote.price);
+      const priceDifference = comparePrice(expectedPrice, remote.price);
       const stockDifference = remote.stock === undefined
         ? null
         : baseEntry.warehouseProduct.currentStock - remote.stock;

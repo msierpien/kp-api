@@ -430,7 +430,7 @@ function buildCompleteness(product: ProductWithMappings, remote: unknown) {
   const media = isRecord(snapshot.media) ? snapshot.media : {};
   const images = Array.isArray(media.images) ? media.images : [];
   const features = Array.isArray(snapshot.features) ? snapshot.features : [];
-  const price = product.retailPrice ?? product.shopPrices[0]?.grossPrice ?? null;
+  const price = product.shopPrices[0]?.grossPrice ?? product.retailPrice ?? null;
 
   const checks = [
     { key: 'description', label: 'Opis', ok: Boolean(content.longDescriptionHtml || content.shortDescriptionHtml) },

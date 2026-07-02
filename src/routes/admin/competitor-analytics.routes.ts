@@ -252,6 +252,32 @@ export async function competitorAnalyticsRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.get('/prices/audit', {
+    schema: {
+      tags: ['competitor-analytics'],
+      summary: 'Szybki audyt anomalii cenowych wzgledem konkurencji',
+      querystring: {
+        type: 'object',
+        required: ['shopId'],
+        properties: {
+          shopId: { type: 'string' },
+          source: { type: 'string' },
+          minMarkupPercent: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+          belowMarketTolerancePercent: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+          aboveMarketTolerancePercent: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+          itemLimit: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: competitorAnalytics.PriceAuditQuery }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await competitorAnalytics.auditPrices(request.query));
+    } catch (error) {
+      fastify.log.error(error);
+      return sendError(reply, error);
+    }
+  });
+
   fastify.post('/prices/preview', {
     schema: {
       tags: ['competitor-analytics'],

@@ -84,6 +84,15 @@ export interface PriceApplyInput extends PricePreviewInput {
   sync?: boolean;
 }
 
+export interface PriceAuditQuery {
+  shopId: string;
+  source?: string;
+  minMarkupPercent?: number | string;
+  belowMarketTolerancePercent?: number | string;
+  aboveMarketTolerancePercent?: number | string;
+  itemLimit?: number | string;
+}
+
 export interface DescriptionAiInput {
   shopId: string;
   productIds: string[];
@@ -107,6 +116,9 @@ const PARTYBOX_WARNING =
   'Partybox jest niekompletny: ceny i opisy sa dostepne, ale kategorie Partybox nie powinny byc traktowane jako pelne drzewo.';
 
 type PricePreviewStatus = 'READY' | 'BELOW_COST' | 'NO_COMPETITOR_PRICE' | 'LOW_SAMPLE' | 'LARGE_CHANGE';
+
+const PRICE_AUDIT_DEFAULT_ITEM_LIMIT = 1000;
+const PRICE_AUDIT_MAX_ITEM_LIMIT = 10000;
 
 const matchedSourceProductCache = new Map<string, {
   expiresAt: number;
@@ -1276,6 +1288,257 @@ function productWhere(tenantId: string, query: { shopId?: string; q?: string }) 
     ];
   }
   return where;
+}
+
+function numericQuery(value: number | string | undefined, fallback: number, min: number, max: number) {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, min), max);
+}
+
+function chunked<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+  return chunks;
+}
+
+function identifierVariantsForMongo(values: string[]) {
+  const variants: Array<string | number> = [];
+  for (const value of values) {
+    variants.push(value);
+    const number = Number(value);
+    if (Number.isFinite(number)) variants.push(number);
+  }
+  return Array.from(new Set(variants));
+}
+
+function addAuditOffer(target: Map<string, Array<{ source: string; price: number }>>, productId: string, offer: { source: string; price: number }) {
+  const offers = target.get(productId) ?? [];
+  offers.push(offer);
+  target.set(productId, offers);
+}
+
+function auditTargetGross(
+  medianGross: number | null,
+  minMarkupGross: number | null,
+  belowMarketTolerancePercent: number,
+) {
+  if (medianGross === null) return minMarkupGross;
+  const lowerBound = medianGross * (1 - belowMarketTolerancePercent / 100);
+  return round2(Math.max(lowerBound, minMarkupGross ?? 0));
+}
+
+export async function auditPrices(query: PriceAuditQuery) {
+  const tenantId = requireTenantId();
+  const db = await ensureMongo();
+  await requireShop(tenantId, query.shopId);
+  const sources = selectedSources(query.source);
+  if (sources.length === 0) throw new ValidationError('Nieprawidlowe zrodlo konkurencji');
+
+  const minMarkupPercent = numericQuery(query.minMarkupPercent, 40, 0, 500);
+  const belowMarketTolerancePercent = numericQuery(query.belowMarketTolerancePercent, 1, 0, 100);
+  const aboveMarketTolerancePercent = numericQuery(query.aboveMarketTolerancePercent, 5, 0, 500);
+  const itemLimit = pageValue(query.itemLimit, PRICE_AUDIT_DEFAULT_ITEM_LIMIT, PRICE_AUDIT_MAX_ITEM_LIMIT);
+  const vatRate = await pricingVatRate(tenantId);
+
+  const products = await prisma.warehouseProduct.findMany({
+    where: productWhere(tenantId, { shopId: query.shopId }),
+    select: {
+      id: true,
+      sku: true,
+      name: true,
+      retailPrice: true,
+      purchasePrice: true,
+      averagePurchaseCost: true,
+      barcodes: { where: { isActive: true }, select: { ean: true } },
+      shopProductMappings: {
+        where: { shopId: query.shopId, isActive: true },
+        select: { externalEan: true, externalSku: true },
+      },
+      shopPrices: { where: { shopId: query.shopId }, select: { grossPrice: true } },
+    },
+    orderBy: { updatedAt: 'desc' },
+  });
+
+  const productIdsByEan = new Map<string, Set<string>>();
+  const productIdsBySku = new Map<string, Set<string>>();
+  const allEans = new Set<string>();
+  const allSkus = new Set<string>();
+
+  for (const product of products) {
+    const identifiers = productIdentifiers(product);
+    for (const ean of identifiers.eans) {
+      allEans.add(ean);
+      addIdentifierTarget(productIdsByEan, ean, product.id);
+    }
+    for (const sku of identifiers.skus) {
+      allSkus.add(sku);
+      addIdentifierTarget(productIdsBySku, sku, product.id);
+    }
+  }
+
+  const sourceFilter = { source: { $in: sources } };
+  const storeRowsById = new Map<string, any>();
+  const baseProductsById = new Map<string, any>();
+  const eanValues = Array.from(allEans);
+  const skuValues = Array.from(allSkus);
+
+  for (const values of chunked(eanValues, 500)) {
+    const variants = identifierVariantsForMongo(values);
+    const rows = await db.collection('store_products')
+      .find({ ...sourceFilter, store_ean: { $in: variants } })
+      .project({ source: 1, source_product_id: 1, store_ean: 1, store_sku: 1, sku: 1, product_id: 1, price: 1, current_price: 1, gross_price: 1, listing_price: 1 })
+      .toArray();
+    for (const row of rows) storeRowsById.set(String(row._id), row);
+  }
+
+  for (const values of chunked(skuValues, 500)) {
+    const variants = identifierVariantsForMongo(values);
+    const rows = await db.collection('store_products')
+      .find({ ...sourceFilter, store_sku: { $in: variants } })
+      .project({ source: 1, source_product_id: 1, store_ean: 1, store_sku: 1, sku: 1, product_id: 1, price: 1, current_price: 1, gross_price: 1, listing_price: 1 })
+      .toArray();
+    for (const row of rows) storeRowsById.set(String(row._id), row);
+  }
+
+  for (const values of chunked(eanValues, 500)) {
+    const variants = identifierVariantsForMongo(values);
+    const rows = await db.collection('products')
+      .find({ ean: { $in: variants } })
+      .project({ _id: 1, ean: 1, sku: 1, product_number: 1 })
+      .toArray();
+    for (const row of rows) baseProductsById.set(String(row._id), row);
+  }
+
+  for (const values of chunked(skuValues, 500)) {
+    const variants = identifierVariantsForMongo(values);
+    const rows = await db.collection('products')
+      .find({ $or: [{ sku: { $in: variants } }, { product_number: { $in: variants } }] })
+      .project({ _id: 1, ean: 1, sku: 1, product_number: 1 })
+      .toArray();
+    for (const row of rows) baseProductsById.set(String(row._id), row);
+  }
+
+  const baseProductIds = Array.from(baseProductsById.keys()).map((id) => new ObjectId(id));
+  for (const ids of chunked(baseProductIds, 500)) {
+    const rows = await db.collection('store_products')
+      .find({ ...sourceFilter, product_id: { $in: ids } })
+      .project({ source: 1, source_product_id: 1, store_ean: 1, store_sku: 1, sku: 1, product_id: 1, price: 1, current_price: 1, gross_price: 1, listing_price: 1 })
+      .toArray();
+    for (const row of rows) storeRowsById.set(String(row._id), row);
+  }
+
+  const missingBaseIds = Array.from(new Set(
+    Array.from(storeRowsById.values())
+      .map((row) => row.product_id)
+      .filter((value): value is ObjectId => value instanceof ObjectId)
+      .map((value) => String(value))
+      .filter((id) => !baseProductsById.has(id))
+  )).map((id) => new ObjectId(id));
+  for (const ids of chunked(missingBaseIds, 500)) {
+    const rows = await db.collection('products')
+      .find({ _id: { $in: ids } })
+      .project({ _id: 1, ean: 1, sku: 1, product_number: 1 })
+      .toArray();
+    for (const row of rows) baseProductsById.set(String(row._id), row);
+  }
+
+  const offersByProductId = new Map<string, Array<{ source: string; price: number }>>();
+  for (const row of storeRowsById.values()) {
+    const price = normalizeOfferPrice(row);
+    if (price === null || price <= 0) continue;
+    const baseProduct = row.product_id instanceof ObjectId ? baseProductsById.get(String(row.product_id)) : null;
+    const productIds = new Set<string>();
+
+    for (const value of [row.store_ean, row.ean, baseProduct?.ean]) {
+      const key = identifierKey(value);
+      if (!key) continue;
+      for (const productId of productIdsByEan.get(key) ?? []) productIds.add(productId);
+    }
+    for (const value of [row.store_sku, row.sku, baseProduct?.sku, baseProduct?.product_number]) {
+      const key = identifierKey(value);
+      if (!key) continue;
+      for (const productId of productIdsBySku.get(key) ?? []) productIds.add(productId);
+    }
+
+    for (const productId of productIds) addAuditOffer(offersByProductId, productId, { source: String(row.source ?? ''), price });
+  }
+
+  const items = products.map((product) => {
+    const currentGross = decimalToNumber(product.shopPrices[0]?.grossPrice) ?? decimalToNumber(product.retailPrice);
+    const productCostNet = decimalToNumber(product.averagePurchaseCost) ?? decimalToNumber(product.purchasePrice);
+    const offers = offersByProductId.get(product.id) ?? [];
+    const stats = priceStats(offers as CompetitorOffer[], currentGross, productCostNet, vatRate);
+    const minMarkupGross = productCostNet === null ? null : round2(productCostNet * (1 + minMarkupPercent / 100) * (1 + vatRate / 100));
+    const targetGross = auditTargetGross(stats.medianGross, minMarkupGross, belowMarketTolerancePercent);
+    const targetNet = targetGross === null ? null : round2(targetGross / (1 + vatRate / 100));
+    const lowerMarketBound = stats.medianGross === null ? null : round2(stats.medianGross * (1 - belowMarketTolerancePercent / 100));
+    const upperMarketBound = stats.medianGross === null ? null : round2(stats.medianGross * (1 + aboveMarketTolerancePercent / 100));
+    const minMarginForcesAboveMarket = Boolean(minMarkupGross !== null && upperMarketBound !== null && minMarkupGross > upperMarketBound);
+    const reasons: string[] = [];
+
+    if (currentGross === null) reasons.push('MISSING_CURRENT_PRICE');
+    if (stats.medianGross === null) reasons.push('NO_COMPETITOR_PRICE');
+    if (productCostNet === null) reasons.push('MISSING_COST');
+    if (currentGross !== null && minMarkupGross !== null && currentGross < minMarkupGross) reasons.push('BELOW_40_MARKUP');
+    if (currentGross !== null && lowerMarketBound !== null && currentGross < lowerMarketBound) reasons.push('BELOW_MARKET');
+    if (currentGross !== null && upperMarketBound !== null && currentGross > upperMarketBound && !minMarginForcesAboveMarket) reasons.push('ABOVE_MARKET_GT_5');
+    if (minMarginForcesAboveMarket) reasons.push('MIN_MARGIN_ABOVE_MARKET');
+
+    const actionable = targetGross !== null
+      && (currentGross === null || Math.abs(currentGross - targetGross) >= 0.01)
+      && reasons.some((reason) => ['MISSING_CURRENT_PRICE', 'BELOW_40_MARKUP', 'BELOW_MARKET', 'ABOVE_MARKET_GT_5'].includes(reason));
+
+    return {
+      warehouseProductId: product.id,
+      sku: product.sku,
+      name: product.name,
+      currentGrossPrice: round2(currentGross),
+      targetGross,
+      targetNet,
+      costNet: round2(productCostNet),
+      minMarkupGross,
+      competitorMinGross: stats.minGross,
+      competitorMedianGross: stats.medianGross,
+      competitorMaxGross: stats.maxGross,
+      offerCount: offers.length,
+      sourceCount: new Set(offers.map((offer) => offer.source)).size,
+      diffCurrentToMedianPercent: priceDiffPercent(currentGross, stats.medianGross),
+      diffTargetToMedianPercent: priceDiffPercent(targetGross, stats.medianGross),
+      minMarginForcesAboveMarket,
+      reasons,
+      actionable,
+    };
+  });
+
+  const counts = items.reduce((acc, item) => {
+    for (const reason of item.reasons) acc[reason] = (acc[reason] ?? 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+  const anomalies = items.filter((item) => item.reasons.length > 0);
+  const actionable = items.filter((item) => item.actionable);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    shopId: query.shopId,
+    sources,
+    rule: {
+      minMarkupPercent,
+      belowMarketTolerancePercent,
+      aboveMarketTolerancePercent,
+      vatRate,
+      matchMode: 'EAN_SKU_BATCH',
+    },
+    totals: {
+      products: products.length,
+      matchedProducts: items.filter((item) => item.offerCount > 0).length,
+      anomalies: anomalies.length,
+      actionable: actionable.length,
+    },
+    counts,
+    warnings: warningsForSources(sources, 'prices'),
+    items: anomalies.slice(0, itemLimit),
+  };
 }
 
 function emptyIssueCounts() {

@@ -280,6 +280,13 @@ interface EnrichedProduct {
   } | null;
 }
 
+interface CompetitorMatchResult {
+  confidence: MatchConfidence;
+  matchedBy: string | null;
+  productId: string | null;
+  offers: CompetitorOffer[];
+}
+
 function requireTenantId() {
   const tenantId = getTenantId() || getTenantContext()?.tenantId;
   if (!tenantId) throw new ValidationError('Brak kontekstu tenanta');
@@ -970,33 +977,38 @@ function offerKey(row: any) {
 async function decorateOffers(db: Db, rows: any[]) {
   const keys = rows
     .map((row) => ({ source: row.source, source_product_id: row.source_product_id }))
-    .filter((row) => row.source && row.source_product_id)
-    .slice(0, 200);
+    .filter((row) => row.source && row.source_product_id);
 
   if (keys.length === 0) return rows.map((row) => normalizeOffer(row));
 
-  const [categoryRows, bundleRows] = await Promise.all([
-    db.collection('regular_product_categories')
-      .find({ $or: keys })
-      .project({
-        source: 1,
-        source_product_id: 1,
-        category_id: 1,
-        category_path: 1,
-        category_url: 1,
-        page_url: 1,
-        price: 1,
-        currency: 1,
-        availability: 1,
-        last_seen_at: 1,
-        updated_at: 1,
-      })
-      .toArray(),
-    db.collection('store_product_bundle_items')
-      .find({ $or: keys })
-      .limit(1000)
-      .toArray(),
-  ]);
+  const categoryRows: any[] = [];
+  const bundleRows: any[] = [];
+  for (const keyChunk of chunked(keys, 200)) {
+    const [categoryChunk, bundleChunk] = await Promise.all([
+      db.collection('regular_product_categories')
+        .find({ $or: keyChunk })
+        .project({
+          source: 1,
+          source_product_id: 1,
+          category_id: 1,
+          category_path: 1,
+          category_url: 1,
+          page_url: 1,
+          price: 1,
+          currency: 1,
+          availability: 1,
+          last_seen_at: 1,
+          updated_at: 1,
+        })
+        .toArray(),
+      db.collection('store_product_bundle_items')
+        .find({ $or: keyChunk })
+        .limit(1000)
+        .toArray(),
+    ]);
+    categoryRows.push(...categoryChunk);
+    bundleRows.push(...bundleChunk);
+  }
   const byOffer = new Map<string, CompetitorCategory[]>();
   const bundlesByOffer = new Map<string, CompetitorBundleItem[]>();
 
@@ -1053,6 +1065,195 @@ async function rowsByBaseProducts(db: Db, productIds: ObjectId[], sources: strin
     .find({ source: { $in: sources }, product_id: { $in: productIds } })
     .limit(80)
     .toArray();
+}
+
+function rowId(row: any) {
+  return String(row._id);
+}
+
+function setBatchMatchMeta(
+  meta: Map<string, { confidence: MatchConfidence; matchedBy: string | null; productId: string | null }>,
+  warehouseProductId: string,
+  next: { confidence: MatchConfidence; matchedBy: string | null; productId: string | null },
+) {
+  const current = meta.get(warehouseProductId);
+  if (!current || (current.confidence !== 'EAN' && next.confidence === 'EAN')) meta.set(warehouseProductId, next);
+}
+
+async function findCompetitorOffersBatch(
+  db: Db,
+  products: ProductForAnalytics[],
+  source?: string,
+  categoryId?: string,
+): Promise<Map<string, CompetitorMatchResult>> {
+  const sources = selectedSources(source);
+  if (products.length === 0 || sources.length === 0) return new Map();
+
+  const productIdsByEan = new Map<string, Set<string>>();
+  const productIdsBySku = new Map<string, Set<string>>();
+  const matchedByEan = new Map<string, string>();
+  const matchedBySku = new Map<string, string>();
+  const allEans = new Set<string>();
+  const allSkus = new Set<string>();
+
+  for (const product of products) {
+    const identifiers = productIdentifiers(product);
+    for (const ean of identifiers.eans) {
+      allEans.add(ean);
+      addIdentifierTarget(productIdsByEan, ean, product.id);
+      matchedByEan.set(product.id, matchedByEan.get(product.id) ?? ean);
+    }
+    for (const sku of identifiers.skus) {
+      allSkus.add(sku);
+      addIdentifierTarget(productIdsBySku, sku, product.id);
+      matchedBySku.set(product.id, matchedBySku.get(product.id) ?? sku);
+    }
+  }
+
+  if (allEans.size === 0 && allSkus.size === 0) return new Map();
+
+  const sourceFilter = { source: { $in: sources } };
+  const storeRowsById = new Map<string, any>();
+  const baseProductsById = new Map<string, any>();
+  const eanValues = Array.from(allEans);
+  const skuValues = Array.from(allSkus);
+
+  for (const values of chunked(eanValues, 500)) {
+    const rows = await db.collection('store_products')
+      .find({ ...sourceFilter, store_ean: { $in: identifierVariantsForMongo(values) } })
+      .toArray();
+    for (const row of rows) storeRowsById.set(rowId(row), row);
+  }
+  for (const values of chunked(skuValues, 500)) {
+    const rows = await db.collection('store_products')
+      .find({ ...sourceFilter, store_sku: { $in: identifierVariantsForMongo(values) } })
+      .toArray();
+    for (const row of rows) storeRowsById.set(rowId(row), row);
+  }
+  for (const values of chunked(eanValues, 500)) {
+    const rows = await db.collection('products')
+      .find({ ean: { $in: identifierVariantsForMongo(values) } })
+      .project({ _id: 1, ean: 1, sku: 1, product_number: 1 })
+      .toArray();
+    for (const row of rows) baseProductsById.set(rowId(row), row);
+  }
+  for (const values of chunked(skuValues, 500)) {
+    const variants = identifierVariantsForMongo(values);
+    const rows = await db.collection('products')
+      .find({ $or: [{ sku: { $in: variants } }, { product_number: { $in: variants } }] })
+      .project({ _id: 1, ean: 1, sku: 1, product_number: 1 })
+      .toArray();
+    for (const row of rows) baseProductsById.set(rowId(row), row);
+  }
+
+  const baseProductIds = Array.from(baseProductsById.keys()).map((id) => new ObjectId(id));
+  for (const ids of chunked(baseProductIds, 500)) {
+    const rows = await db.collection('store_products')
+      .find({ ...sourceFilter, product_id: { $in: ids } })
+      .toArray();
+    for (const row of rows) storeRowsById.set(rowId(row), row);
+  }
+
+  const rowBaseIds = Array.from(new Set(
+    Array.from(storeRowsById.values())
+      .map((row) => row.product_id)
+      .filter((value): value is ObjectId => value instanceof ObjectId)
+      .map((id) => String(id))
+  ));
+  const missingBaseProductIds = rowBaseIds
+    .filter((id) => !baseProductsById.has(id))
+    .map((id) => new ObjectId(id));
+  for (const ids of chunked(missingBaseProductIds, 500)) {
+    const rows = await db.collection('products')
+      .find({ _id: { $in: ids } })
+      .project({ _id: 1, ean: 1, sku: 1, product_number: 1 })
+      .toArray();
+    for (const row of rows) baseProductsById.set(rowId(row), row);
+  }
+
+  const expandedProductIds = Array.from(new Set(
+    Array.from(storeRowsById.values())
+      .map((row) => row.product_id)
+      .filter((value): value is ObjectId => value instanceof ObjectId)
+      .map((id) => String(id))
+  )).map((id) => new ObjectId(id));
+  for (const ids of chunked(expandedProductIds, 500)) {
+    const rows = await db.collection('store_products')
+      .find({ ...sourceFilter, product_id: { $in: ids } })
+      .toArray();
+    for (const row of rows) storeRowsById.set(rowId(row), row);
+  }
+
+  const rawRows = Array.from(storeRowsById.values());
+  const rowWarehouseProductIds = new Map<string, Set<string>>();
+  const meta = new Map<string, { confidence: MatchConfidence; matchedBy: string | null; productId: string | null }>();
+
+  for (const row of rawRows) {
+    const baseProduct = row.product_id instanceof ObjectId ? baseProductsById.get(String(row.product_id)) : null;
+    const eanProductIds = new Set<string>();
+    const skuProductIds = new Set<string>();
+
+    for (const value of [row.store_ean, row.ean, baseProduct?.ean]) {
+      const key = identifierKey(value);
+      if (!key) continue;
+      for (const productId of productIdsByEan.get(key) ?? []) eanProductIds.add(productId);
+    }
+    for (const value of [row.store_sku, row.sku, baseProduct?.sku, baseProduct?.product_number]) {
+      const key = identifierKey(value);
+      if (!key) continue;
+      for (const productId of productIdsBySku.get(key) ?? []) skuProductIds.add(productId);
+    }
+
+    const warehouseProductIds = new Set([...eanProductIds, ...skuProductIds]);
+    if (warehouseProductIds.size === 0) continue;
+    rowWarehouseProductIds.set(rowId(row), warehouseProductIds);
+
+    for (const warehouseProductId of warehouseProductIds) {
+      const confidence: MatchConfidence = eanProductIds.has(warehouseProductId) ? 'EAN' : 'SKU';
+      setBatchMatchMeta(meta, warehouseProductId, {
+        confidence,
+        matchedBy: confidence === 'EAN' ? matchedByEan.get(warehouseProductId) ?? null : matchedBySku.get(warehouseProductId) ?? null,
+        productId: row.product_id instanceof ObjectId ? String(row.product_id) : null,
+      });
+    }
+  }
+
+  if (rowWarehouseProductIds.size === 0) return new Map();
+
+  const decoratedOffers = await decorateOffers(db, rawRows);
+  const offersByProductId = new Map<string, CompetitorOffer[]>();
+  for (let index = 0; index < decoratedOffers.length; index += 1) {
+    const row = rawRows[index];
+    const warehouseProductIds = rowWarehouseProductIds.get(rowId(row));
+    if (!warehouseProductIds?.size) continue;
+    const offer = decoratedOffers[index];
+    if (categoryId && !offer.categories.some((category) => category.id === categoryId)) continue;
+    for (const warehouseProductId of warehouseProductIds) {
+      const offers = offersByProductId.get(warehouseProductId) ?? [];
+      offers.push(offer);
+      offersByProductId.set(warehouseProductId, offers);
+    }
+  }
+
+  const result = new Map<string, CompetitorMatchResult>();
+  for (const product of products) {
+    const offers = offersByProductId.get(product.id) ?? [];
+    if (offers.length === 0) continue;
+    const matchMeta = meta.get(product.id);
+    result.set(product.id, {
+      confidence: matchMeta?.confidence ?? 'NONE',
+      matchedBy: matchMeta?.matchedBy ?? null,
+      productId: matchMeta?.productId ?? null,
+      offers: offers.sort((a, b) => {
+        if (a.price === null && b.price === null) return a.source.localeCompare(b.source);
+        if (a.price === null) return 1;
+        if (b.price === null) return -1;
+        return a.price - b.price;
+      }),
+    });
+  }
+
+  return result;
 }
 
 function exactOr(field: string, values: string[]) {
@@ -1205,9 +1406,10 @@ async function enrichProduct(
     categoryId?: string;
     vatRate?: number;
     mappings?: Map<string, any>;
+    match?: CompetitorMatchResult;
   } = {},
 ): Promise<EnrichedProduct> {
-  const match = await findCompetitorOffers(db, product, options.source, options.categoryId);
+  const match = options.match ?? await findCompetitorOffers(db, product, options.source, options.categoryId);
   const currentPrice = currentGrossPrice(product, options.shopId);
   const productCost = costNet(product);
   const stats = priceStats(match.offers, currentPrice, productCost, options.vatRate);
@@ -1716,8 +1918,16 @@ export async function listProducts(query: ProductListQuery = {}) {
       prisma.warehouseProduct.count({ where }),
     ]);
 
+    const matches = await findCompetitorOffersBatch(db, products, source, query.categoryId);
     const enriched = await Promise.all(products.map((product) =>
-      enrichProduct(db, tenantId, product, { shopId: query.shopId, source, categoryId: query.categoryId, vatRate, mappings })
+      enrichProduct(db, tenantId, product, {
+        shopId: query.shopId,
+        source,
+        categoryId: query.categoryId,
+        vatRate,
+        mappings,
+        match: matches.get(product.id),
+      })
     ));
 
     return {
@@ -1758,8 +1968,16 @@ export async function listProducts(query: ProductListQuery = {}) {
     if (products.length === 0) break;
     scanned += products.length;
 
+    const matches = await findCompetitorOffersBatch(db, products, source, query.categoryId);
     const enriched = await Promise.all(products.map((product) =>
-      enrichProduct(db, tenantId, product, { shopId: query.shopId, source, categoryId: query.categoryId, vatRate, mappings })
+      enrichProduct(db, tenantId, product, {
+        shopId: query.shopId,
+        source,
+        categoryId: query.categoryId,
+        vatRate,
+        mappings,
+        match: matches.get(product.id),
+      })
     ));
     filtered.push(...enriched.filter((product) => product.issues.includes(issueFilter)));
   }

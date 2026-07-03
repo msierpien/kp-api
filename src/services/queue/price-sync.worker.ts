@@ -8,7 +8,8 @@ import { PRICE_SYNC_QUEUE_NAME, type PriceSyncJobData } from './price-sync.queue
 const logger = createLogger('price-sync-worker');
 
 let priceSyncWorker: Worker<PriceSyncJobData> | null = null;
-const PRESTASHOP_SYNC_RATE_LIMIT = { max: 30, duration: 60_000 };
+const PRESTASHOP_SYNC_RATE_LIMIT = { max: 120, duration: 60_000 };
+const PRESTASHOP_SYNC_CONCURRENCY = 2;
 
 async function processPriceSyncJob(job: Job<PriceSyncJobData>) {
   const { logId, warehouseProductId, shopId, shopProductMappingId, externalProductId } = job.data;
@@ -118,7 +119,7 @@ export function startPriceSyncWorker() {
     async (job) => processPriceSyncJob(job),
     {
       connection: getBullMqConnection(),
-      concurrency: 1,
+      concurrency: PRESTASHOP_SYNC_CONCURRENCY,
       limiter: PRESTASHOP_SYNC_RATE_LIMIT,
     },
   );

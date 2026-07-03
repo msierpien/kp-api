@@ -58,25 +58,51 @@ async function processPriceSyncJob(job: Job<PriceSyncJobData>) {
     priceUpdateOptions,
   );
 
-  await prisma.$transaction([
-    prisma.priceSyncLog.update({
+  const syncedAt = new Date();
+  await prisma.$transaction(async (tx) => {
+    await tx.priceSyncLog.update({
       where: { id: logId },
       data: {
         status: 'SUCCESS',
         priceBefore: mapping.externalPrice,
         priceAfter: log.priceAfter,
         errorMessage: null,
-        syncedAt: new Date(),
+        syncedAt,
       },
-    }),
-    prisma.shopProductMapping.update({
+    });
+    await tx.shopProductMapping.update({
       where: { id: shopProductMappingId },
       data: {
         externalPrice: log.priceAfter,
-        lastSyncAt: new Date(),
+        lastSyncAt: syncedAt,
       },
-    }),
-  ]);
+    });
+    await tx.priceChangeHistory.create({
+      data: {
+        tenantId: log.tenantId,
+        warehouseProductId,
+        shopId,
+        shopProductMappingId,
+        priceSyncLogId: logId,
+        triggeredBy: log.triggeredBy,
+        priceBefore: mapping.externalPrice,
+        priceAfter: log.priceAfter,
+        changedAt: syncedAt,
+      },
+    });
+
+    const keep = await tx.priceChangeHistory.findMany({
+      where: { tenantId: log.tenantId, warehouseProductId, shopId, shopProductMappingId },
+      orderBy: { changedAt: 'desc' },
+      skip: 5,
+      select: { id: true },
+    });
+    if (keep.length > 0) {
+      await tx.priceChangeHistory.deleteMany({
+        where: { id: { in: keep.map((item) => item.id) } },
+      });
+    }
+  });
 
   return { success: true, price: targetPrice };
 }

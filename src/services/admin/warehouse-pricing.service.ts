@@ -1642,13 +1642,16 @@ export async function getPricingProducts(query: PricingProductsQuery) {
   });
 
   const baseItems = products.map((product) => calculatePrice(product, shop, state));
-  const filtered = baseItems.filter((item) => itemMatchesPricingFilters(item, query.source, query.status, query.ruleOrigin));
+  const scopeItems = baseItems.filter((item) => itemMatchesPricingFilters(item, query.source, undefined, query.ruleOrigin));
+  const filtered = scopeItems.filter((item) => itemMatchesPricingFilters(item, undefined, query.status, undefined));
   const presentationItems = groupVariants ? groupVariantPricingItems(filtered, expandedFamilyKeys) : decorateFlatVariantPricingItems(filtered);
   const total = presentationItems.length;
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const offset = (Math.min(page, totalPages) - 1) * limit;
   return {
     summary: buildPricingSummary(baseItems),
+    scopeSummary: buildPricingSummary(scopeItems),
+    resultSummary: buildPricingSummary(filtered),
     variantSummary: {
       products: filtered.length,
       families: presentationItems.filter((item) => item.isVariantFamily || (item.variantCount ?? 1) > 1).length,

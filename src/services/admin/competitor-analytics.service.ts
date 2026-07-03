@@ -820,6 +820,11 @@ function priceDiffPercent(currentGross: number | null, suggestedGross: number | 
     : null;
 }
 
+function differsByAtLeastOneCent(left: number | null, right: number | null) {
+  if (left === null || right === null) return true;
+  return Math.round(Math.abs(left - right) * 100) >= 1;
+}
+
 function priceStats(offers: CompetitorOffer[], currentGross: number | null, cost: number | null, vatRate = 23) {
   const prices = offers
     .map((offer) => offer.price)
@@ -1717,7 +1722,7 @@ export async function auditPrices(query: PriceAuditQuery) {
     if (minMarginForcesAboveMarket) reasons.push('MIN_MARGIN_ABOVE_MARKET');
 
     const actionable = targetGross !== null
-      && (currentGross === null || Math.abs(currentGross - targetGross) >= 0.01)
+      && differsByAtLeastOneCent(currentGross, targetGross)
       && reasons.some((reason) => ['MISSING_CURRENT_PRICE', 'BELOW_40_MARKUP', 'BELOW_MARKET', 'ABOVE_MARKET_GT_5'].includes(reason));
 
     return {

@@ -809,7 +809,9 @@ function currentGrossPrice(product: ProductForAnalytics, shopId?: string) {
 }
 
 function costNet(product: ProductForAnalytics) {
-  return decimalToNumber(product.averagePurchaseCost) ?? decimalToNumber(product.purchasePrice);
+  return decimalToNumber(product.averagePurchaseCost)
+    ?? decimalToNumber(product.purchasePrice)
+    ?? decimalToNumber(product.wholesaleMappings[0]?.lastKnownPrice);
 }
 
 function priceDiffPercent(currentGross: number | null, suggestedGross: number | null) {
@@ -1564,6 +1566,19 @@ export async function auditPrices(query: PriceAuditQuery) {
       retailPrice: true,
       purchasePrice: true,
       averagePurchaseCost: true,
+      wholesaleMappings: {
+        where: {
+          isActive: true,
+          lastKnownPrice: { gt: 0 },
+          provider: { isActive: true },
+        },
+        orderBy: [
+          { lastKnownPrice: 'asc' },
+          { lastSyncAt: 'desc' },
+        ],
+        take: 1,
+        select: { lastKnownPrice: true },
+      },
       barcodes: { where: { isActive: true }, select: { ean: true } },
       shopProductMappings: {
         where: { shopId: query.shopId, isActive: true },
@@ -1680,7 +1695,9 @@ export async function auditPrices(query: PriceAuditQuery) {
 
   const items = products.map((product) => {
     const currentGross = decimalToNumber(product.shopPrices[0]?.grossPrice) ?? decimalToNumber(product.retailPrice);
-    const productCostNet = decimalToNumber(product.averagePurchaseCost) ?? decimalToNumber(product.purchasePrice);
+    const productCostNet = decimalToNumber(product.averagePurchaseCost)
+      ?? decimalToNumber(product.purchasePrice)
+      ?? decimalToNumber(product.wholesaleMappings[0]?.lastKnownPrice);
     const offers = offersByProductId.get(product.id) ?? [];
     const stats = priceStats(offers as CompetitorOffer[], currentGross, productCostNet, vatRate);
     const minMarkupGross = productCostNet === null ? null : round2(productCostNet * (1 + minMarkupPercent / 100) * (1 + vatRate / 100));

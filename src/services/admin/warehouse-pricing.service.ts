@@ -577,6 +577,24 @@ interface PricingState {
   rules: RuleForPricing[];
   clearances: ClearanceForPricing[];
   groupsByProduct: Map<string, PriceGroupInfo[]>;
+  rulesByLevel: {
+    global: RuleForPricing[];
+    shopByShopId: Map<string, RuleForPricing[]>;
+    catalogByCatalogId: Map<string, RuleForPricing[]>;
+    groupByGroupId: Map<string, RuleForPricing[]>;
+    productByProductId: Map<string, RuleForPricing[]>;
+  };
+  clearancesByScope: {
+    productByProductId: Map<string, ClearanceForPricing[]>;
+    groupByGroupId: Map<string, ClearanceForPricing[]>;
+  };
+}
+
+function appendToMapList<K, V>(map: Map<K, V[]>, key: K | null | undefined, value: V) {
+  if (!key) return;
+  const list = map.get(key) ?? [];
+  list.push(value);
+  map.set(key, list);
 }
 
 async function loadPricingRules(tenantId: string) {
@@ -624,7 +642,32 @@ async function loadPricingState(tenantId: string): Promise<PricingState> {
   for (const groups of groupsByProduct.values()) {
     groups.sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name));
   }
-  return { settings, rules, clearances, groupsByProduct };
+
+  const rulesByLevel: PricingState['rulesByLevel'] = {
+    global: [],
+    shopByShopId: new Map(),
+    catalogByCatalogId: new Map(),
+    groupByGroupId: new Map(),
+    productByProductId: new Map(),
+  };
+  for (const rule of rules) {
+    if (rule.level === 'GLOBAL') rulesByLevel.global.push(rule);
+    else if (rule.level === 'SHOP') appendToMapList(rulesByLevel.shopByShopId, rule.shopId, rule);
+    else if (rule.level === 'CATALOG') appendToMapList(rulesByLevel.catalogByCatalogId, rule.catalogId, rule);
+    else if (rule.level === 'GROUP') appendToMapList(rulesByLevel.groupByGroupId, rule.priceGroupId, rule);
+    else if (rule.level === 'PRODUCT') appendToMapList(rulesByLevel.productByProductId, rule.warehouseProductId, rule);
+  }
+
+  const clearancesByScope: PricingState['clearancesByScope'] = {
+    productByProductId: new Map(),
+    groupByGroupId: new Map(),
+  };
+  for (const clearance of clearances) {
+    if (clearance.scope === 'PRODUCT') appendToMapList(clearancesByScope.productByProductId, clearance.warehouseProductId, clearance);
+    if (clearance.scope === 'GROUP') appendToMapList(clearancesByScope.groupByGroupId, clearance.priceGroupId, clearance);
+  }
+
+  return { settings, rules, clearances, groupsByProduct, rulesByLevel, clearancesByScope };
 }
 
 function rulePriority(rule: RuleForPricing, product: ProductForPricing, shopId: string, productGroups: PriceGroupInfo[]) {
@@ -642,7 +685,17 @@ function rulePriority(rule: RuleForPricing, product: ProductForPricing, shopId: 
 
 function resolveRule(product: ProductForPricing, shopId: string, state: PricingState) {
   const productGroups = state.groupsByProduct.get(product.id) ?? [];
-  return state.rules
+  const candidates: RuleForPricing[] = [
+    ...state.rulesByLevel.global,
+    ...(state.rulesByLevel.shopByShopId.get(shopId) ?? []),
+    ...(state.rulesByLevel.catalogByCatalogId.get(product.catalogId) ?? []),
+    ...(state.rulesByLevel.productByProductId.get(product.id) ?? []),
+  ];
+  for (const group of productGroups) {
+    candidates.push(...(state.rulesByLevel.groupByGroupId.get(group.id) ?? []));
+  }
+
+  return candidates
     .map((rule) => ({
       rule,
       priority: rulePriority(rule, product, shopId, productGroups),
@@ -743,7 +796,14 @@ function clearancePriority(clearance: ClearanceForPricing, product: ProductForPr
 }
 
 function pickActiveClearance(product: ProductForPricing, shopId: string, state: PricingState, productGroups: PriceGroupInfo[]) {
-  return (state.clearances ?? [])
+  const candidates: ClearanceForPricing[] = [
+    ...(state.clearancesByScope.productByProductId.get(product.id) ?? []),
+  ];
+  for (const group of productGroups) {
+    candidates.push(...(state.clearancesByScope.groupByGroupId.get(group.id) ?? []));
+  }
+
+  return candidates
     .map((clearance) => ({
       clearance,
       priority: clearancePriority(clearance, product, shopId, productGroups),

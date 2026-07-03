@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
 import { addPriceSyncJob, type PriceSyncTriggeredBy } from '../queue/price-sync.queue';
+import { createShopStockClient } from '../shops/shop-client.factory';
 
 type PriceSyncStatus = 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'FAILED';
 
@@ -18,6 +19,13 @@ export interface PriceSyncLogsQuery {
 export interface SyncProductPriceOptions {
   shopId?: string;
   price?: number;
+  triggeredBy?: PriceSyncTriggeredBy;
+}
+
+export interface BulkPriceSyncItem {
+  warehouseProductId: string;
+  shopId: string;
+  price: number;
   triggeredBy?: PriceSyncTriggeredBy;
 }
 
@@ -172,6 +180,270 @@ export async function syncProductPrice(
   }
 
   return { enqueued, logs };
+}
+
+export async function syncProductPricesBulk(items: BulkPriceSyncItem[]) {
+  const tenantId = requireTenantId();
+  const normalizedItems = items.filter((item) => item.warehouseProductId && item.shopId);
+  const productIds = [...new Set(normalizedItems.map((item) => item.warehouseProductId))];
+  const shopIds = [...new Set(normalizedItems.map((item) => item.shopId))];
+
+  let synced = 0;
+  let enqueued = 0;
+  let failed = 0;
+  const errors: Array<{ warehouseProductId: string; shopId: string; message: string }> = [];
+
+  if (normalizedItems.length === 0) return { synced, enqueued, failed, errors };
+
+  const [products, mappings] = await Promise.all([
+    prisma.warehouseProduct.findMany({
+      where: { id: { in: productIds }, tenantId },
+      select: { id: true, averagePurchaseCost: true, purchasePrice: true },
+    }),
+    prisma.shopProductMapping.findMany({
+      where: {
+        tenantId,
+        warehouseProductId: { in: productIds },
+        shopId: { in: shopIds },
+        isActive: true,
+        shop: { status: 'ACTIVE' },
+      },
+      include: { shop: true },
+    }),
+  ]);
+
+  const productById = new Map(products.map((product) => [product.id, product]));
+  const mappingByKey = new Map(mappings.map((mapping) => [`${mapping.warehouseProductId}:${mapping.shopId}`, mapping]));
+  const groups = new Map<string, Array<{
+    item: BulkPriceSyncItem;
+    mapping: typeof mappings[number];
+    product: typeof products[number];
+    targetPrice: number;
+  }>>();
+
+  for (const item of normalizedItems) {
+    const targetPrice = Number(item.price);
+    if (!Number.isFinite(targetPrice) || targetPrice < 0) {
+      failed += 1;
+      errors.push({ warehouseProductId: item.warehouseProductId, shopId: item.shopId, message: 'Cena sprzedaży jest nieprawidłowa' });
+      continue;
+    }
+
+    const product = productById.get(item.warehouseProductId);
+    if (!product) {
+      failed += 1;
+      errors.push({ warehouseProductId: item.warehouseProductId, shopId: item.shopId, message: 'Produkt magazynowy nie znaleziony' });
+      continue;
+    }
+
+    const mapping = mappingByKey.get(`${item.warehouseProductId}:${item.shopId}`);
+    if (!mapping) {
+      failed += 1;
+      errors.push({ warehouseProductId: item.warehouseProductId, shopId: item.shopId, message: 'Brak aktywnego mapowania produktu do wskazanego sklepu' });
+      continue;
+    }
+
+    const group = groups.get(mapping.shopId) ?? [];
+    group.push({ item, mapping, product, targetPrice });
+    groups.set(mapping.shopId, group);
+  }
+
+  for (const entries of groups.values()) {
+    const shop = entries[0]?.mapping.shop;
+    if (!shop) continue;
+
+    const client = createShopStockClient(shop);
+    if (!client.bulkUpdateProductPrices) {
+      for (const entry of entries) {
+        const log = await createPriceSyncLog({
+          tenantId,
+          warehouseProductId: entry.item.warehouseProductId,
+          shopId: entry.item.shopId,
+          shopProductMappingId: entry.mapping.id,
+          triggeredBy: entry.item.triggeredBy ?? 'MANUAL',
+          priceBefore: entry.mapping.externalPrice,
+          priceAfter: entry.targetPrice,
+          status: 'PENDING',
+        });
+        await addPriceSyncJob({
+          logId: log.id,
+          tenantId,
+          warehouseProductId: entry.item.warehouseProductId,
+          shopId: entry.item.shopId,
+          shopProductMappingId: entry.mapping.id,
+          externalProductId: entry.mapping.externalProductId,
+          triggeredBy: entry.item.triggeredBy ?? 'MANUAL',
+        });
+        enqueued += 1;
+      }
+      continue;
+    }
+
+    const logs = new Map<string, Awaited<ReturnType<typeof createPriceSyncLog>>>();
+    for (const entry of entries) {
+      const log = await createPriceSyncLog({
+        tenantId,
+        warehouseProductId: entry.item.warehouseProductId,
+        shopId: entry.item.shopId,
+        shopProductMappingId: entry.mapping.id,
+        triggeredBy: entry.item.triggeredBy ?? 'MANUAL',
+        priceBefore: entry.mapping.externalPrice,
+        priceAfter: entry.targetPrice,
+        status: 'PROCESSING',
+        attemptCount: 1,
+      });
+      logs.set(entry.mapping.externalProductId, log);
+    }
+
+    try {
+      const result = await client.bulkUpdateProductPrices(entries.map((entry) => {
+        const costBasis = entry.product.averagePurchaseCost ?? entry.product.purchasePrice;
+        const wholesalePrice = costBasis === null ? null : Number(costBasis);
+        return {
+          externalProductId: entry.mapping.externalProductId,
+          price: entry.targetPrice,
+          ...(wholesalePrice !== null && Number.isFinite(wholesalePrice) && wholesalePrice >= 0 ? { wholesalePrice } : {}),
+        };
+      }));
+      const resultByExternalId = new Map(result.results.map((item) => [String(item.productId), item]));
+
+      for (const entry of entries) {
+        const log = logs.get(entry.mapping.externalProductId);
+        if (!log) continue;
+        const itemResult = resultByExternalId.get(entry.mapping.externalProductId);
+        if (itemResult?.status === 'ok') {
+          await markPriceSyncSuccess({
+            tenantId,
+            logId: log.id,
+            warehouseProductId: entry.item.warehouseProductId,
+            shopId: entry.item.shopId,
+            shopProductMappingId: entry.mapping.id,
+            triggeredBy: entry.item.triggeredBy ?? 'MANUAL',
+            priceBefore: entry.mapping.externalPrice,
+            priceAfter: entry.targetPrice,
+          });
+          synced += 1;
+        } else {
+          const message = itemResult?.message ?? 'Brak potwierdzenia aktualizacji ceny z modułu kp_adminconnector';
+          await markPriceSyncFailed(log.id, message);
+          failed += 1;
+          errors.push({ warehouseProductId: entry.item.warehouseProductId, shopId: entry.item.shopId, message });
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd bulk synchronizacji ceny';
+      for (const entry of entries) {
+        const log = logs.get(entry.mapping.externalProductId);
+        if (log) await markPriceSyncFailed(log.id, message);
+        failed += 1;
+        errors.push({ warehouseProductId: entry.item.warehouseProductId, shopId: entry.item.shopId, message });
+      }
+    }
+  }
+
+  return { synced, enqueued, failed, errors };
+}
+
+interface PriceSyncLogInput {
+  tenantId: string;
+  warehouseProductId: string;
+  shopId: string;
+  shopProductMappingId: string;
+  triggeredBy: PriceSyncTriggeredBy;
+  priceBefore: Prisma.Decimal | null;
+  priceAfter: number | Prisma.Decimal;
+  status: PriceSyncStatus;
+  attemptCount?: number;
+}
+
+function createPriceSyncLog(input: PriceSyncLogInput) {
+  return prisma.priceSyncLog.create({
+    data: {
+      tenantId: input.tenantId,
+      warehouseProductId: input.warehouseProductId,
+      shopId: input.shopId,
+      shopProductMappingId: input.shopProductMappingId,
+      triggeredBy: input.triggeredBy,
+      priceBefore: input.priceBefore,
+      priceAfter: input.priceAfter,
+      status: input.status,
+      attemptCount: input.attemptCount ?? 0,
+    },
+  });
+}
+
+interface MarkPriceSyncSuccessInput {
+  tenantId: string;
+  logId: string;
+  warehouseProductId: string;
+  shopId: string;
+  shopProductMappingId: string;
+  triggeredBy: PriceSyncTriggeredBy;
+  priceBefore: Prisma.Decimal | null;
+  priceAfter: number | Prisma.Decimal;
+}
+
+async function markPriceSyncSuccess(input: MarkPriceSyncSuccessInput) {
+  const syncedAt = new Date();
+  await prisma.$transaction(async (tx) => {
+    await tx.priceSyncLog.update({
+      where: { id: input.logId },
+      data: {
+        status: 'SUCCESS',
+        priceBefore: input.priceBefore,
+        priceAfter: input.priceAfter,
+        errorMessage: null,
+        syncedAt,
+      },
+    });
+    await tx.shopProductMapping.update({
+      where: { id: input.shopProductMappingId },
+      data: {
+        externalPrice: input.priceAfter,
+        lastSyncAt: syncedAt,
+      },
+    });
+    await tx.priceChangeHistory.create({
+      data: {
+        tenantId: input.tenantId,
+        warehouseProductId: input.warehouseProductId,
+        shopId: input.shopId,
+        shopProductMappingId: input.shopProductMappingId,
+        priceSyncLogId: input.logId,
+        triggeredBy: input.triggeredBy,
+        priceBefore: input.priceBefore,
+        priceAfter: input.priceAfter,
+        changedAt: syncedAt,
+      },
+    });
+
+    const older = await tx.priceChangeHistory.findMany({
+      where: {
+        tenantId: input.tenantId,
+        warehouseProductId: input.warehouseProductId,
+        shopId: input.shopId,
+        shopProductMappingId: input.shopProductMappingId,
+      },
+      orderBy: { changedAt: 'desc' },
+      skip: 5,
+      select: { id: true },
+    });
+    if (older.length > 0) {
+      await tx.priceChangeHistory.deleteMany({
+        where: { id: { in: older.map((item) => item.id) } },
+      });
+    }
+  });
+}
+
+function markPriceSyncFailed(logId: string, message: string) {
+  return prisma.priceSyncLog.update({
+    where: { id: logId },
+    data: {
+      status: 'FAILED',
+      errorMessage: message,
+    },
+  });
 }
 
 export interface BulkSyncProductPricesResult {

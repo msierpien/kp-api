@@ -36,6 +36,7 @@ export const TENANT_MODELS = new Set([
   'InvoiceEmailLog',
   'StockSyncLog',
   'PriceSyncLog',
+  'PriceChangeHistory',
   'WholesaleProvider',
   'WholesaleProductMapping',
   'WholesaleSyncLog',

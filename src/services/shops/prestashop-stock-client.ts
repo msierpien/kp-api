@@ -1,6 +1,12 @@
 /// <reference lib="dom" />
 import { Buffer } from 'node:buffer';
-import type { ShopProductInventorySnapshot, ShopStockClient, ShopStockUpdateOptions } from './shop-stock-client.interface';
+import type {
+  ShopPriceBulkUpdateItem,
+  ShopPriceBulkUpdateResult,
+  ShopProductInventorySnapshot,
+  ShopStockClient,
+  ShopStockUpdateOptions,
+} from './shop-stock-client.interface';
 
 export const DEFAULT_BULK_STOCK_BATCH_SIZE = 500;
 export const MIN_BULK_STOCK_BATCH_SIZE = 1;
@@ -214,6 +220,70 @@ export class PrestaShopStockClient implements ShopStockClient {
       },
       body: payload,
     });
+  }
+
+  async bulkUpdateProductPrices(items: ShopPriceBulkUpdateItem[]): Promise<ShopPriceBulkUpdateResult> {
+    if (!this.bulkStockUrl || !this.bulkStockApiKey) {
+      throw new Error('Moduł kp_adminconnector nie jest skonfigurowany dla bulk aktualizacji cen');
+    }
+
+    const combined: ShopPriceBulkUpdateResult = { updated: 0, errors: [], results: [] };
+
+    for (let i = 0; i < items.length; i += this.bulkStockBatchSize) {
+      const batch = items.slice(i, i + this.bulkStockBatchSize);
+      const payloadItems = batch.map((item) => {
+        const productId = Number(item.externalProductId);
+        if (!Number.isInteger(productId) || productId <= 0) {
+          throw new Error(`Invalid PrestaShop product id for bulk price update: ${item.externalProductId}`);
+        }
+        if (!Number.isFinite(item.price) || item.price < 0) {
+          throw new Error(`Invalid product price for PrestaShop product ${item.externalProductId}`);
+        }
+        if (item.wholesalePrice !== undefined && item.wholesalePrice !== null && (!Number.isFinite(item.wholesalePrice) || item.wholesalePrice < 0)) {
+          throw new Error(`Invalid wholesale price for PrestaShop product ${item.externalProductId}`);
+        }
+
+        return {
+          productId,
+          price: item.price,
+          ...(item.wholesalePrice === undefined || item.wholesalePrice === null ? {} : { wholesalePrice: item.wholesalePrice }),
+        };
+      });
+
+      const res = await fetch(this.moduleUrl(this.bulkStockUrl, 'bulkupdate'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'X-Api-Key': this.bulkStockApiKey,
+        },
+        body: JSON.stringify({ items: payloadItems }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`kp_adminconnector price bulk HTTP ${res.status}: ${text.slice(0, 200)}`);
+      }
+
+      const json = await res.json().catch(() => null) as { success: boolean; data?: Partial<ShopPriceBulkUpdateResult>; errors?: string[] } | null;
+      if (!json) {
+        throw new Error('kp_adminconnector price bulk returned non-JSON response');
+      }
+      if (!json.success) {
+        throw new Error(`kp_adminconnector price bulk error: ${json.errors?.join(', ') ?? 'Unknown error'}`);
+      }
+
+      const result = json.data ?? {};
+      combined.updated += Number(result.updated ?? 0);
+      combined.errors.push(...(Array.isArray(result.errors) ? result.errors : []));
+      combined.results.push(...(Array.isArray(result.results) ? result.results : []));
+    }
+
+    console.log(
+      `[PrestaShopStockClient] bulk price update: ${combined.updated} updated, ` +
+      `${combined.errors.length} errors, batchSize=${this.bulkStockBatchSize}`,
+    );
+    return combined;
   }
 
   async updateProductOrderAvailability(

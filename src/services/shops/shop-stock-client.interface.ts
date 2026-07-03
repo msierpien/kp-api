@@ -5,11 +5,29 @@ export interface ShopStockClient {
     options?: ShopStockUpdateOptions,
   ): Promise<void>;
   updateProductPrice?(externalProductId: string, price: number, options?: ShopPriceUpdateOptions): Promise<void>;
+  bulkUpdateProductPrices?(items: ShopPriceBulkUpdateItem[]): Promise<ShopPriceBulkUpdateResult>;
   getProductInventorySnapshot?(externalProductId: string): Promise<ShopProductInventorySnapshot>;
 }
 
 export interface ShopPriceUpdateOptions {
   wholesalePrice?: number | null;
+}
+
+export interface ShopPriceBulkUpdateItem extends ShopPriceUpdateOptions {
+  externalProductId: string;
+  price: number;
+}
+
+export interface ShopPriceBulkUpdateResult {
+  updated: number;
+  errors: string[];
+  results: Array<{
+    productId: number;
+    price?: number;
+    wholesalePrice?: number;
+    status: 'ok' | 'error';
+    message?: string;
+  }>;
 }
 
 export interface ShopStockUpdateOptions {

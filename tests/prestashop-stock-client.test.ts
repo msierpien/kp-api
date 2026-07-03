@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  PrestaShopStockClient,
   buildAdminConnectorControllerUrl,
   buildBulkStockSnapshotUrl,
   buildBulkStockUrl,
@@ -98,6 +99,47 @@ test('bulk stock URLs carry multistore shop context', () => {
     buildBulkStockSnapshotUrl('https://shop.test', 123, '2'),
     'https://shop.test/index.php?fc=module&module=kp_bulkstock&controller=snapshot&productId=123&idShop=2',
   );
+});
+
+test('bulk price update sends product prices through admin connector', async () => {
+  const previousFetch = globalThis.fetch;
+  const calls: Array<{ url: string; body: unknown; apiKey: string | null }> = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({
+      url: String(input),
+      body: JSON.parse(String(init?.body)),
+      apiKey: init?.headers instanceof Headers ? init.headers.get('X-Api-Key') : (init?.headers as Record<string, string>)?.['X-Api-Key'] ?? null,
+    });
+    return new Response(JSON.stringify({
+      success: true,
+      data: {
+        updated: 1,
+        errors: [],
+        results: [{ productId: 123, price: 13.99, wholesalePrice: 8.77, status: 'ok' }],
+      },
+      errors: [],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  try {
+    const client = new PrestaShopStockClient({
+      baseUrl: 'https://shop.test',
+      apiKey: 'webservice-key',
+      bulkStockUrl: buildAdminConnectorControllerUrl('https://shop.test/index.php?fc=module&module=kp_adminconnector&controller=capabilities', 'bulkupdate'),
+      bulkStockApiKey: 'connector-key',
+      prestashopShopId: 2,
+    });
+
+    const result = await client.bulkUpdateProductPrices([{ externalProductId: '123', price: 13.99, wholesalePrice: 8.77 }]);
+
+    assert.equal(result.updated, 1);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, 'https://shop.test/index.php?fc=module&module=kp_adminconnector&controller=bulkupdate&idShop=2');
+    assert.deepEqual(calls[0].body, { items: [{ productId: 123, price: 13.99, wholesalePrice: 8.77 }] });
+    assert.equal(calls[0].apiKey, 'connector-key');
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
 });
 
 function formatExpectedLeadTimeDate(days: number) {

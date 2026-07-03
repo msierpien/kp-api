@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { decrypt } from '../../lib/encryption';
 import { getTenantId } from '../../lib/tenant-context';
-import { syncProductPrice } from '../price/price-sync.service';
+import { syncProductPricesBulk } from '../price/price-sync.service';
 import type { PriceSyncTriggeredBy } from '../queue/price-sync.queue';
 import { PrestaShopClient, type PrestaShopCategoryDetails } from '../prestashop/prestashop-client';
 
@@ -1174,7 +1174,9 @@ export async function bulkUpdateProductPrices(input: BulkUpdatePricesInput) {
 export async function syncPricing(input: PricingProductsInput = {}) {
   const preview = await recalculatePricing(input);
   let enqueued = 0;
+  let synced = 0;
   const errors: Array<{ warehouseProductId: string; shopId: string; message: string }> = [];
+  const readyItems: Array<{ warehouseProductId: string; shopId: string; price: number; triggeredBy: PriceSyncTriggeredBy }> = [];
 
   for (const item of preview.items) {
     if (item.netPrice === null) {
@@ -1189,23 +1191,22 @@ export async function syncPricing(input: PricingProductsInput = {}) {
       });
       continue;
     }
-    try {
-      const result = await syncProductPrice(item.warehouseProductId, {
-        shopId: item.shopId,
-        price: item.netPrice,
-        triggeredBy: input.triggeredBy ?? 'MANUAL',
-      });
-      enqueued += result.enqueued;
-    } catch (error) {
-      errors.push({
-        warehouseProductId: item.warehouseProductId,
-        shopId: item.shopId,
-        message: error instanceof Error ? error.message : 'Błąd synchronizacji ceny',
-      });
-    }
+    readyItems.push({
+      warehouseProductId: item.warehouseProductId,
+      shopId: item.shopId,
+      price: item.netPrice,
+      triggeredBy: input.triggeredBy ?? 'MANUAL',
+    });
   }
 
-  return { ...preview, enqueued, errors };
+  if (readyItems.length > 0) {
+    const result = await syncProductPricesBulk(readyItems);
+    enqueued += result.enqueued;
+    synced += result.synced;
+    errors.push(...result.errors);
+  }
+
+  return { ...preview, enqueued, synced, errors };
 }
 
 function numericValues(items: PricingItem[], field: keyof PricingItem) {

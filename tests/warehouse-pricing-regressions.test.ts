@@ -268,7 +268,7 @@ test('warehouse product retail price update does not enqueue shop price sync', (
 test('legacy product sync-price routes delegate to pricing sync', () => {
   const source = readFileSync(join(process.cwd(), 'src/routes/admin/warehouse/products.routes.ts'), 'utf8');
   const start = source.indexOf("fastify.post('/products/bulk/sync-price'");
-  const end = source.indexOf("fastify.post('/products/:id/sync-stock'", start);
+  const end = source.indexOf("fastify.get('/products/ai/bulk-content-jobs'", start);
   const body = source.slice(start, end);
 
   assert.match(body, /pricingService\.syncPricing/);

@@ -295,6 +295,8 @@ export async function competitorAnalyticsRoutes(fastify: FastifyInstance) {
           maxApply: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
           sync: { type: 'boolean' },
           recalculate: { type: 'boolean' },
+          origin: { type: 'string', enum: ['MANUAL', 'COMPETITOR_AUTO', 'COMPETITOR_MANUAL', 'SYSTEM'] },
+          skipManualFixedPrices: { type: 'boolean' },
         },
       },
     },

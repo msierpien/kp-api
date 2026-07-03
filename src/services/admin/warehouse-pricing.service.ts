@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { decrypt } from '../../lib/encryption';
 import { getTenantId } from '../../lib/tenant-context';
-import { syncProductPricesBulk } from '../price/price-sync.service';
+import { syncProductPricesBulkForTenant } from '../price/price-sync.service';
 import type { PriceSyncTriggeredBy } from '../queue/price-sync.queue';
 import { PrestaShopClient, type PrestaShopCategoryDetails } from '../prestashop/prestashop-client';
 
@@ -10,6 +10,7 @@ export type PricingRuleLevel = 'GLOBAL' | 'SHOP' | 'CATALOG' | 'GROUP' | 'PRODUC
 export type PricingPriceMode = 'MARGIN' | 'FIXED';
 export type PricingRoundingMode = 'END_99' | 'TENTH' | 'CENT';
 export type PricingSyncMode = 'AUTO' | 'CONFIRM' | 'MANUAL';
+export type PricingRuleOrigin = 'MANUAL' | 'COMPETITOR_AUTO' | 'COMPETITOR_MANUAL' | 'SYSTEM';
 export type PricingWarningCode = 'MISSING_COST' | 'BELOW_COST' | 'BELOW_MIN_PROFIT' | null;
 export type PricingInfoCode = 'ABNORMAL_PROFIT' | null;
 export type PricingPriceSource = 'CLEARANCE' | 'PRODUCT' | 'GROUP' | 'CATALOG' | 'SHOP' | 'DEFAULT' | 'CEILING_FALLBACK';
@@ -31,6 +32,7 @@ export interface PricingRuleInput {
   vatRate?: number | null;
   roundingMode?: PricingRoundingMode | null;
   syncMode?: PricingSyncMode | null;
+  origin?: PricingRuleOrigin;
   isActive?: boolean;
 }
 
@@ -41,6 +43,7 @@ export interface PricingRulesQuery {
   priceGroupId?: string;
   warehouseProductId?: string;
   isActive?: boolean;
+  origin?: PricingRuleOrigin;
 }
 
 export interface PricingProductsInput {
@@ -63,6 +66,7 @@ export interface PricingProductsQuery {
   groupVariants?: boolean | string;
   source?: PricingPriceSource | 'ALL';
   status?: 'ALL' | 'READY' | 'MISSING_PRICE' | 'WARNING' | 'ALERT' | 'NO_GROUP' | 'OVERRIDES_GROUP' | 'BELOW_COST';
+  ruleOrigin?: PricingRuleOrigin | 'ALL' | 'FIXED_MANUAL' | 'FIXED_COMPETITOR_AUTO' | 'FIXED_ANY';
   page?: number | string;
   limit?: number | string;
 }
@@ -87,6 +91,12 @@ export interface PricingSettingsInput {
   costCeilingEnabledDefault?: boolean;
   abnormalProfitThreshold?: number;
   variantGroupingEnabled?: boolean;
+  competitorAutoPricingEnabled?: boolean;
+  competitorAutoPricingShopId?: string | null;
+  competitorAutoPricingIntervalMinutes?: number;
+  competitorAutoPricingMinMarkupPercent?: number;
+  competitorAutoPricingBelowMarketTolerancePercent?: number;
+  competitorAutoPricingAboveMarketTolerancePercent?: number;
 }
 
 export interface PriceGroupInput {
@@ -154,6 +164,10 @@ const DEFAULT_PRICING = {
   costCeilingEnabledDefault: true,
   abnormalProfitThreshold: 200,
   variantGroupingEnabled: true,
+  competitorAutoPricingIntervalMinutes: 1440,
+  competitorAutoPricingMinMarkupPercent: 40,
+  competitorAutoPricingBelowMarketTolerancePercent: 1,
+  competitorAutoPricingAboveMarketTolerancePercent: 5,
 };
 
 const MAX_PRICING_PRODUCTS = 500;
@@ -291,6 +305,12 @@ function validateSync(value: PricingSyncMode | null | undefined) {
   if (value && !['AUTO', 'CONFIRM', 'MANUAL'].includes(value)) throw new Error('Nieprawidłowy tryb synchronizacji');
 }
 
+function validateOrigin(value: PricingRuleOrigin | null | undefined) {
+  if (value && !['MANUAL', 'COMPETITOR_AUTO', 'COMPETITOR_MANUAL', 'SYSTEM'].includes(value)) {
+    throw new Error('Nieprawidłowe źródło reguły cennika');
+  }
+}
+
 function normalizeRuleInput(input: PricingRuleInput) {
   assertNonNegative(input.marginPercent, 'Marża');
   assertNonNegative(input.minProfit, 'Minimalny zysk');
@@ -299,6 +319,7 @@ function normalizeRuleInput(input: PricingRuleInput) {
   validatePriceMode(input.priceMode);
   validateRounding(input.roundingMode);
   validateSync(input.syncMode);
+  validateOrigin(input.origin);
 
   if (!['GLOBAL', 'SHOP', 'CATALOG', 'GROUP', 'PRODUCT'].includes(input.level)) {
     throw new Error('Nieprawidłowy poziom reguły cennika');
@@ -327,6 +348,7 @@ function normalizeRuleInput(input: PricingRuleInput) {
     vatRate: input.vatRate ?? null,
     roundingMode: input.roundingMode ?? null,
     syncMode: input.syncMode ?? null,
+    origin: input.origin ?? 'MANUAL',
     isActive: input.isActive ?? true,
   };
 }
@@ -351,6 +373,11 @@ async function ensurePricingSettings(tenantId: string) {
       costCeilingEnabledDefault: DEFAULT_PRICING.costCeilingEnabledDefault,
       abnormalProfitThreshold: DEFAULT_PRICING.abnormalProfitThreshold,
       variantGroupingEnabled: DEFAULT_PRICING.variantGroupingEnabled,
+      competitorAutoPricingEnabled: false,
+      competitorAutoPricingIntervalMinutes: DEFAULT_PRICING.competitorAutoPricingIntervalMinutes,
+      competitorAutoPricingMinMarkupPercent: DEFAULT_PRICING.competitorAutoPricingMinMarkupPercent,
+      competitorAutoPricingBelowMarketTolerancePercent: DEFAULT_PRICING.competitorAutoPricingBelowMarketTolerancePercent,
+      competitorAutoPricingAboveMarketTolerancePercent: DEFAULT_PRICING.competitorAutoPricingAboveMarketTolerancePercent,
     },
   });
 }
@@ -361,14 +388,37 @@ export async function getPricingSettings() {
 
 export async function updatePricingSettings(input: PricingSettingsInput) {
   const tenantId = requireTenantId();
+  const existingSettings = await ensurePricingSettings(tenantId);
   assertNonNegative(input.defaultMarginPercent, 'Domyślna marża');
   assertNonNegative(input.defaultMinProfit, 'Domyślny minimalny zysk');
   assertNonNegative(input.defaultVatRate, 'Domyślny VAT');
   assertNonNegative(input.abnormalProfitThreshold, 'Próg alertu');
+  assertNonNegative(input.competitorAutoPricingMinMarkupPercent, 'Minimalny narzut automatu konkurencji');
+  assertNonNegative(input.competitorAutoPricingBelowMarketTolerancePercent, 'Tolerancja poniżej rynku');
+  assertNonNegative(input.competitorAutoPricingAboveMarketTolerancePercent, 'Tolerancja powyżej rynku');
   validateRounding(input.defaultRoundingMode);
   validateSync(input.defaultSyncMode);
+  if (
+    input.competitorAutoPricingIntervalMinutes !== undefined
+    && (!Number.isInteger(input.competitorAutoPricingIntervalMinutes) || input.competitorAutoPricingIntervalMinutes < 60 || input.competitorAutoPricingIntervalMinutes > 10080)
+  ) {
+    throw new Error('Interwał automatu cen konkurencji musi być od 60 do 10080 minut');
+  }
+  const effectiveCompetitorShopId = input.competitorAutoPricingShopId === undefined
+    ? existingSettings.competitorAutoPricingShopId
+    : input.competitorAutoPricingShopId;
+  if (input.competitorAutoPricingEnabled === true && !effectiveCompetitorShopId) {
+    throw new Error('Włączony automat cen konkurencji wymaga wybranego sklepu');
+  }
 
-  await ensurePricingSettings(tenantId);
+  if (input.competitorAutoPricingShopId !== undefined && input.competitorAutoPricingShopId !== null) {
+    const shop = await prisma.shop.findFirst({
+      where: { id: input.competitorAutoPricingShopId, tenantId, status: 'ACTIVE' },
+      select: { id: true },
+    });
+    if (!shop) throw new Error('Wybrany sklep automatu cen konkurencji nie istnieje albo jest nieaktywny');
+  }
+
   return prisma.warehousePricingSettings.update({
     where: { tenantId },
     data: {
@@ -380,6 +430,13 @@ export async function updatePricingSettings(input: PricingSettingsInput) {
       ...(input.costCeilingEnabledDefault !== undefined ? { costCeilingEnabledDefault: input.costCeilingEnabledDefault } : {}),
       ...(input.abnormalProfitThreshold !== undefined ? { abnormalProfitThreshold: input.abnormalProfitThreshold } : {}),
       ...(input.variantGroupingEnabled !== undefined ? { variantGroupingEnabled: input.variantGroupingEnabled } : {}),
+      ...(input.competitorAutoPricingEnabled !== undefined ? { competitorAutoPricingEnabled: input.competitorAutoPricingEnabled } : {}),
+      ...(input.competitorAutoPricingShopId !== undefined ? { competitorAutoPricingShopId: input.competitorAutoPricingShopId } : {}),
+      ...(input.competitorAutoPricingIntervalMinutes !== undefined ? { competitorAutoPricingIntervalMinutes: input.competitorAutoPricingIntervalMinutes } : {}),
+      ...(input.competitorAutoPricingMinMarkupPercent !== undefined ? { competitorAutoPricingMinMarkupPercent: input.competitorAutoPricingMinMarkupPercent } : {}),
+      ...(input.competitorAutoPricingBelowMarketTolerancePercent !== undefined ? { competitorAutoPricingBelowMarketTolerancePercent: input.competitorAutoPricingBelowMarketTolerancePercent } : {}),
+      ...(input.competitorAutoPricingAboveMarketTolerancePercent !== undefined ? { competitorAutoPricingAboveMarketTolerancePercent: input.competitorAutoPricingAboveMarketTolerancePercent } : {}),
+      ...(input.competitorAutoPricingEnabled === false ? { competitorAutoPricingLastErrorAt: null, competitorAutoPricingLastErrorMessage: null } : {}),
     },
   });
 }
@@ -393,6 +450,7 @@ export async function getPricingRules(query: PricingRulesQuery = {}) {
   if (query.priceGroupId) where.priceGroupId = query.priceGroupId;
   if (query.warehouseProductId) where.warehouseProductId = query.warehouseProductId;
   if (query.isActive !== undefined) where.isActive = query.isActive;
+  if (query.origin) where.origin = query.origin;
 
   return prisma.warehousePricingRule.findMany({
     where,
@@ -432,6 +490,7 @@ export async function updatePricingRule(id: string, input: Partial<PricingRuleIn
     vatRate: input.vatRate === undefined ? numberOrNull(existing.vatRate) : input.vatRate,
     roundingMode: input.roundingMode === undefined ? existing.roundingMode as PricingRoundingMode | null : input.roundingMode,
     syncMode: input.syncMode === undefined ? existing.syncMode as PricingSyncMode | null : input.syncMode,
+    origin: input.origin === undefined ? existing.origin as PricingRuleOrigin : input.origin,
     isActive: input.isActive ?? existing.isActive,
   });
 
@@ -876,6 +935,7 @@ function calculatePrice(product: ProductForPricing, shop: ShopForPricing, state:
       primaryEan: product.barcodes.find((barcode) => barcode.isPrimary)?.ean ?? product.barcodes[0]?.ean ?? null,
       pricingRuleId: null,
       pricingRuleLevel: null,
+      ruleOrigin: null,
       priceSource: 'CLEARANCE' as PricingPriceSource,
       priceMode: 'FIXED' as PricingPriceMode,
       priceGroupId: clearanceGroup?.id ?? null,
@@ -910,6 +970,7 @@ function calculatePrice(product: ProductForPricing, shop: ShopForPricing, state:
       primaryEan: product.barcodes.find((barcode) => barcode.isPrimary)?.ean ?? product.barcodes[0]?.ean ?? null,
       pricingRuleId: rule?.id ?? null,
       pricingRuleLevel: rule?.level ?? null,
+      ruleOrigin: rule?.origin ?? null,
       priceSource: baseSource,
       priceMode,
       priceGroupId: visibleGroup?.id ?? null,
@@ -981,6 +1042,7 @@ function calculatePrice(product: ProductForPricing, shop: ShopForPricing, state:
     primaryEan: product.barcodes.find((barcode) => barcode.isPrimary)?.ean ?? product.barcodes[0]?.ean ?? null,
     pricingRuleId: rule?.id ?? null,
     pricingRuleLevel: rule?.level ?? null,
+    ruleOrigin: rule?.origin ?? null,
     priceSource,
     priceMode,
     priceGroupId: visibleGroup?.id ?? null,
@@ -1024,8 +1086,7 @@ type PricingItem = BasePricingItem & {
   };
 };
 
-export async function previewPricing(input: PricingProductsInput = {}) {
-  const tenantId = requireTenantId();
+export async function previewPricingForTenant(tenantId: string, input: PricingProductsInput = {}) {
   const resolvedInput = await resolveScopedPricingInput(tenantId, input);
   const [{ products, shops }, state] = await Promise.all([
     resolveProductsAndShops(tenantId, resolvedInput),
@@ -1045,9 +1106,12 @@ export async function previewPricing(input: PricingProductsInput = {}) {
   return buildPricingResponse(items);
 }
 
-export async function recalculatePricing(input: PricingProductsInput = {}) {
-  const tenantId = requireTenantId();
-  const result = await previewPricing(input);
+export async function previewPricing(input: PricingProductsInput = {}) {
+  return previewPricingForTenant(requireTenantId(), input);
+}
+
+export async function recalculatePricingForTenant(tenantId: string, input: PricingProductsInput = {}) {
+  const result = await previewPricingForTenant(tenantId, input);
 
   for (const item of result.items) {
     await prisma.warehouseProductShopPrice.upsert({
@@ -1111,6 +1175,10 @@ export async function recalculatePricing(input: PricingProductsInput = {}) {
   return result;
 }
 
+export async function recalculatePricing(input: PricingProductsInput = {}) {
+  return recalculatePricingForTenant(requireTenantId(), input);
+}
+
 export async function bulkUpdateProductPrices(input: BulkUpdatePricesInput) {
   const tenantId = requireTenantId();
   if (!input.productIds?.length) throw new Error('Wybierz produkty do masowej edycji cen');
@@ -1171,8 +1239,8 @@ export async function bulkUpdateProductPrices(input: BulkUpdatePricesInput) {
   return { createdRules: rules.length, skippedAutoSyncBelowCost: preview.items.filter((item) => item.syncMode === 'AUTO' && item.warningCode === 'BELOW_COST').length, ...preview };
 }
 
-export async function syncPricing(input: PricingProductsInput = {}) {
-  const preview = await recalculatePricing(input);
+export async function syncPricingForTenant(tenantId: string, input: PricingProductsInput = {}) {
+  const preview = await recalculatePricingForTenant(tenantId, input);
   let enqueued = 0;
   let synced = 0;
   const errors: Array<{ warehouseProductId: string; shopId: string; message: string }> = [];
@@ -1200,13 +1268,17 @@ export async function syncPricing(input: PricingProductsInput = {}) {
   }
 
   if (readyItems.length > 0) {
-    const result = await syncProductPricesBulk(readyItems);
+    const result = await syncProductPricesBulkForTenant(tenantId, readyItems);
     enqueued += result.enqueued;
     synced += result.synced;
     errors.push(...result.errors);
   }
 
   return { ...preview, enqueued, synced, errors };
+}
+
+export async function syncPricing(input: PricingProductsInput = {}) {
+  return syncPricingForTenant(requireTenantId(), input);
 }
 
 function numericValues(items: PricingItem[], field: keyof PricingItem) {
@@ -1322,10 +1394,24 @@ function decorateFlatVariantPricingItems(items: PricingItem[]) {
   });
 }
 
-function itemMatchesPricingFilters(item: PricingItem, source?: PricingPriceSource | 'ALL', status?: PricingProductsQuery['status']) {
+function itemMatchesRuleOriginFilter(item: PricingItem, ruleOrigin?: PricingProductsQuery['ruleOrigin']) {
+  if (!ruleOrigin || ruleOrigin === 'ALL') return true;
+  if (ruleOrigin === 'FIXED_MANUAL') return item.priceMode === 'FIXED' && item.ruleOrigin === 'MANUAL';
+  if (ruleOrigin === 'FIXED_COMPETITOR_AUTO') return item.priceMode === 'FIXED' && item.ruleOrigin === 'COMPETITOR_AUTO';
+  if (ruleOrigin === 'FIXED_ANY') return item.priceMode === 'FIXED';
+  return item.ruleOrigin === ruleOrigin;
+}
+
+function itemMatchesPricingFilters(
+  item: PricingItem,
+  source?: PricingPriceSource | 'ALL',
+  status?: PricingProductsQuery['status'],
+  ruleOrigin?: PricingProductsQuery['ruleOrigin'],
+) {
   const sourceFilter = source && source !== 'ALL' ? source : null;
   const statusFilter = status && status !== 'ALL' ? status : null;
   if (sourceFilter && item.priceSource !== sourceFilter) return false;
+  if (!itemMatchesRuleOriginFilter(item, ruleOrigin)) return false;
   if (!statusFilter) return true;
   if (statusFilter === 'READY') return item.netPrice !== null && !item.warningCode && !item.infoCode && !item.overridesGroup;
   if (statusFilter === 'MISSING_PRICE') return item.netPrice === null || item.warningCode === 'MISSING_COST';
@@ -1389,7 +1475,7 @@ async function filteredProductIdsForPricing(tenantId: string, filters: PricingPr
   const items = products.map((product) => calculatePrice(product, shop, state));
   return Array.from(new Set(
     items
-      .filter((item) => itemMatchesPricingFilters(item, filters.source, filters.status))
+      .filter((item) => itemMatchesPricingFilters(item, filters.source, filters.status, filters.ruleOrigin))
       .map((item) => item.warehouseProductId),
   ));
 }
@@ -1491,7 +1577,7 @@ export async function getPricingProducts(query: PricingProductsQuery) {
   });
 
   const baseItems = products.map((product) => calculatePrice(product, shop, state));
-  const filtered = baseItems.filter((item) => itemMatchesPricingFilters(item, query.source, query.status));
+  const filtered = baseItems.filter((item) => itemMatchesPricingFilters(item, query.source, query.status, query.ruleOrigin));
   const presentationItems = groupVariants ? groupVariantPricingItems(filtered) : decorateFlatVariantPricingItems(filtered);
   const total = presentationItems.length;
   const totalPages = Math.max(1, Math.ceil(total / limit));

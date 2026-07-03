@@ -73,6 +73,7 @@ model Tenant {
   productChannelSyncConfigs ProductChannelSyncConfig[]
   productCardOperationLogs ProductCardOperationLog[]
   competitorCategoryMappings CompetitorCategoryMapping[]
+  competitorPriceAutomationRuns CompetitorPriceAutomationRun[]
 
   @@index([status])
   @@index([slug])
@@ -138,6 +139,8 @@ model Shop {
   customerReturnRequests CustomerReturnRequest[]
   returnShippingPayments ReturnShippingPayment[]
   competitorCategoryMappings CompetitorCategoryMapping[]
+  competitorAutoPricingSettings WarehousePricingSettings[]
+  competitorPriceAutomationRuns CompetitorPriceAutomationRun[]
 
   @@index([tenantId])
   @@index([status])
@@ -1371,6 +1374,7 @@ model WarehousePricingRule {
   vatRate            Decimal? @map("vat_rate") @db.Decimal(5, 2)
   roundingMode       String?  @map("rounding_mode")
   syncMode           String?  @map("sync_mode")
+  origin             String   @default("MANUAL")
   isActive           Boolean  @default(true) @map("is_active")
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
@@ -1389,6 +1393,7 @@ model WarehousePricingRule {
   @@index([priceGroupId])
   @@index([warehouseProductId])
   @@index([tenantId, isActive])
+  @@index([tenantId, origin])
   @@map("warehouse_pricing_rules")
 }
 
@@ -1471,12 +1476,52 @@ model WarehousePricingSettings {
   costCeilingEnabledDefault Boolean  @default(true) @map("cost_ceiling_enabled_default")
   abnormalProfitThreshold   Decimal  @default(200) @map("abnormal_profit_threshold") @db.Decimal(7, 3)
   variantGroupingEnabled    Boolean  @default(true) @map("variant_grouping_enabled")
+  competitorAutoPricingEnabled Boolean @default(false) @map("competitor_auto_pricing_enabled")
+  competitorAutoPricingShopId String? @map("competitor_auto_pricing_shop_id")
+  competitorAutoPricingIntervalMinutes Int @default(1440) @map("competitor_auto_pricing_interval_minutes")
+  competitorAutoPricingMinMarkupPercent Decimal @default(40) @map("competitor_auto_pricing_min_markup_percent") @db.Decimal(7, 3)
+  competitorAutoPricingBelowMarketTolerancePercent Decimal @default(1) @map("competitor_auto_pricing_below_market_tolerance_percent") @db.Decimal(7, 3)
+  competitorAutoPricingAboveMarketTolerancePercent Decimal @default(5) @map("competitor_auto_pricing_above_market_tolerance_percent") @db.Decimal(7, 3)
+  competitorAutoPricingLastRunAt DateTime? @map("competitor_auto_pricing_last_run_at")
+  competitorAutoPricingLastErrorAt DateTime? @map("competitor_auto_pricing_last_error_at")
+  competitorAutoPricingLastErrorMessage String? @map("competitor_auto_pricing_last_error_message") @db.Text
   createdAt                 DateTime @default(now()) @map("created_at")
   updatedAt                 DateTime @updatedAt @map("updated_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  competitorAutoPricingShop Shop? @relation(fields: [competitorAutoPricingShopId], references: [id], onDelete: SetNull)
 
   @@map("warehouse_pricing_settings")
+}
+
+model CompetitorPriceAutomationRun {
+  id                        String   @id @default(cuid())
+  tenantId                  String   @map("tenant_id")
+  shopId                    String   @map("shop_id")
+  trigger                   String
+  status                    String
+  requested                 Int      @default(0)
+  applied                   Int      @default(0)
+  skippedManualOverrides    Int      @default(0) @map("skipped_manual_overrides")
+  synced                    Int      @default(0)
+  enqueued                  Int      @default(0)
+  failed                    Int      @default(0)
+  actionableBefore          Int      @default(0) @map("actionable_before")
+  minMarkupPercent          Decimal  @map("min_markup_percent") @db.Decimal(7, 3)
+  belowMarketTolerancePercent Decimal @map("below_market_tolerance_percent") @db.Decimal(7, 3)
+  aboveMarketTolerancePercent Decimal @map("above_market_tolerance_percent") @db.Decimal(7, 3)
+  errorMessage              String?  @map("error_message") @db.Text
+  startedAt                 DateTime @default(now()) @map("started_at")
+  finishedAt                DateTime? @map("finished_at")
+  createdAt                 DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, startedAt])
+  @@index([tenantId, shopId, startedAt])
+  @@index([tenantId, status])
+  @@map("competitor_price_automation_runs")
 }
 
 model WarehouseProductShopPrice {

@@ -6,6 +6,7 @@ import { cleanupStorage } from '../storage/cleanup-storage.service';
 import { syncWholesaleProviderForTenant } from '../admin/wholesale.service';
 import { reconcilePrestaShopForTenant } from '../prestashop/prestashop-reconciliation.service';
 import { syncStockForShop } from '../stock/stock-sync.service';
+import { runCompetitorPriceAutomationForTenant } from '../admin/competitor-analytics.service';
 // BullMQ Worker automatycznie przetwarza RenderJobs - nie potrzebujemy crona
 
 /**
@@ -19,6 +20,7 @@ const scheduledTasks = new Map<string, ScheduledTask>();
  * Key: providerId, Value: ScheduledTask
  */
 const scheduledWholesaleTasks = new Map<string, ScheduledTask>();
+const scheduledCompetitorPriceTasks = new Map<string, ScheduledTask>();
 const ACTIVE_WHOLESALE_SYNC_STATUSES = ['PENDING', 'PROCESSING'] as const;
 const DAILY_INVENTORY_WARNING =
   'Synchronizacja hurtowni była jeszcze w toku; opublikowano najnowsze zakończone dane hurtowni.';
@@ -157,6 +159,63 @@ function stopWholesaleSync(providerId: string) {
   }
 }
 
+async function runCompetitorPriceAutomation(tenantId: string, shopId: string, shopName: string) {
+  const startTime = new Date();
+  console.log(`[Scheduler] 🔄 Starting competitor auto-pricing for ${shopName} (${shopId})`);
+  try {
+    const result = await runCompetitorPriceAutomationForTenant(tenantId, { trigger: 'SCHEDULED', shopId });
+    const duration = Date.now() - startTime.getTime();
+    console.log(
+      `[Scheduler] ✅ Competitor auto-pricing completed for ${shopName}: ` +
+      `status ${result.run.status}, applied ${result.run.applied}, synced ${result.run.synced}, skipped manual ${result.run.skippedManualOverrides} ` +
+      `(${duration}ms)`
+    );
+  } catch (error) {
+    const duration = Date.now() - startTime.getTime();
+    console.error(`[Scheduler] ❌ Competitor auto-pricing failed for ${shopName} after ${duration}ms:`, error);
+  }
+}
+
+function scheduleCompetitorPriceAutomation(tenantId: string, shopId: string, shopName: string, intervalMinutes: number) {
+  stopCompetitorPriceAutomation(tenantId);
+  const cronExpression = intervalToCron(intervalMinutes);
+  const task = cron.schedule(
+    cronExpression,
+    () => {
+      runCompetitorPriceAutomation(tenantId, shopId, shopName);
+    },
+    { timezone: 'Europe/Warsaw' },
+  );
+  scheduledCompetitorPriceTasks.set(tenantId, task);
+  console.log(`[Scheduler] 📅 Scheduled competitor auto-pricing for ${shopName}: every ${intervalMinutes} min (${cronExpression})`);
+}
+
+function stopCompetitorPriceAutomation(tenantId: string) {
+  const task = scheduledCompetitorPriceTasks.get(tenantId);
+  if (task) {
+    task.stop();
+    scheduledCompetitorPriceTasks.delete(tenantId);
+    console.log(`[Scheduler] 🛑 Stopped competitor auto-pricing for tenant: ${tenantId}`);
+  }
+}
+
+export async function refreshCompetitorPriceAutomationSchedule(tenantId: string) {
+  const settings = await prisma.warehousePricingSettings.findUnique({
+    where: { tenantId },
+    include: { competitorAutoPricingShop: { select: { id: true, name: true, status: true } } },
+  });
+  if (!settings?.competitorAutoPricingEnabled || !settings.competitorAutoPricingShop || settings.competitorAutoPricingShop.status !== 'ACTIVE') {
+    stopCompetitorPriceAutomation(tenantId);
+    return;
+  }
+  scheduleCompetitorPriceAutomation(
+    tenantId,
+    settings.competitorAutoPricingShop.id,
+    settings.competitorAutoPricingShop.name,
+    settings.competitorAutoPricingIntervalMinutes,
+  );
+}
+
 export function removeWholesaleProviderFromScheduler(providerId: string) {
   stopWholesaleSync(providerId);
 }
@@ -193,7 +252,7 @@ export async function initializeScheduler() {
   console.log('[Scheduler] 🚀 Initializing order synchronization scheduler...');
   
   try {
-    const [shops, wholesaleProviders] = await Promise.all([
+    const [shops, wholesaleProviders, competitorAutoSettings] = await Promise.all([
       prisma.shop.findMany({
         where: {
           status: 'ACTIVE',
@@ -219,6 +278,15 @@ export async function initializeScheduler() {
           syncInterval: true,
         },
       }),
+      prisma.warehousePricingSettings.findMany({
+        where: {
+          competitorAutoPricingEnabled: true,
+          competitorAutoPricingShopId: { not: null },
+        },
+        include: {
+          competitorAutoPricingShop: { select: { id: true, name: true, status: true } },
+        },
+      }),
     ]);
 
     shops.forEach((shop) => {
@@ -229,9 +297,20 @@ export async function initializeScheduler() {
       scheduleWholesaleSync(provider.id, provider.name, provider.tenantId, provider.syncInterval);
     });
 
+    competitorAutoSettings.forEach((settings) => {
+      if (!settings.competitorAutoPricingShop || settings.competitorAutoPricingShop.status !== 'ACTIVE') return;
+      scheduleCompetitorPriceAutomation(
+        settings.tenantId,
+        settings.competitorAutoPricingShop.id,
+        settings.competitorAutoPricingShop.name,
+        settings.competitorAutoPricingIntervalMinutes,
+      );
+    });
+
     console.log(
       `[Scheduler] ✅ Initialized ${shops.length} shop sync schedules and ` +
-      `${wholesaleProviders.length} wholesale sync schedules`
+      `${wholesaleProviders.length} wholesale sync schedules and ` +
+      `${competitorAutoSettings.length} competitor auto-pricing schedules`
     );
     
     // Scheduleuj storage cleanup - codziennie o 3:00
@@ -452,6 +531,10 @@ export async function reloadScheduler() {
   for (const [providerId] of scheduledWholesaleTasks) {
     stopWholesaleSync(providerId);
   }
+
+  for (const [tenantId] of scheduledCompetitorPriceTasks) {
+    stopCompetitorPriceAutomation(tenantId);
+  }
   
   // Ponownie zainicjalizuj
   await initializeScheduler();
@@ -551,6 +634,11 @@ export function getSchedulerStatus() {
     providerId: string;
     isScheduled: boolean;
   }> = [];
+
+  const competitorPriceStatus: Array<{
+    tenantId: string;
+    isScheduled: boolean;
+  }> = [];
   
   for (const [shopId, task] of scheduledTasks) {
     status.push({
@@ -565,11 +653,19 @@ export function getSchedulerStatus() {
       isScheduled: task !== undefined,
     });
   }
+
+  for (const [tenantId, task] of scheduledCompetitorPriceTasks) {
+    competitorPriceStatus.push({
+      tenantId,
+      isScheduled: task !== undefined,
+    });
+  }
   
   return {
-    totalScheduled: scheduledTasks.size + scheduledWholesaleTasks.size,
+    totalScheduled: scheduledTasks.size + scheduledWholesaleTasks.size + scheduledCompetitorPriceTasks.size,
     shops: status,
     wholesaleProviders: wholesaleStatus,
+    competitorAutoPricing: competitorPriceStatus,
   };
 }
 

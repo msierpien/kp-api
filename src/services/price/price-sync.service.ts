@@ -182,8 +182,7 @@ export async function syncProductPrice(
   return { enqueued, logs };
 }
 
-export async function syncProductPricesBulk(items: BulkPriceSyncItem[]) {
-  const tenantId = requireTenantId();
+export async function syncProductPricesBulkForTenant(tenantId: string, items: BulkPriceSyncItem[]) {
   const normalizedItems = items.filter((item) => item.warehouseProductId && item.shopId);
   const productIds = [...new Set(normalizedItems.map((item) => item.warehouseProductId))];
   const shopIds = [...new Set(normalizedItems.map((item) => item.shopId))];
@@ -342,6 +341,10 @@ export async function syncProductPricesBulk(items: BulkPriceSyncItem[]) {
   }
 
   return { synced, enqueued, failed, errors };
+}
+
+export async function syncProductPricesBulk(items: BulkPriceSyncItem[]) {
+  return syncProductPricesBulkForTenant(requireTenantId(), items);
 }
 
 interface PriceSyncLogInput {

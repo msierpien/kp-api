@@ -44,6 +44,7 @@ export const TENANT_MODELS = new Set([
   'ProductChannelSyncConfig',
   'ProductCardOperationLog',
   'CompetitorCategoryMapping',
+  'CompetitorPriceAutomationRun',
   'CustomerReturnRequest',
   'ReturnShippingPayment',
 ]);

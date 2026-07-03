@@ -1,5 +1,8 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import * as pricingService from '../../../services/admin/warehouse-pricing.service';
+import * as competitorAnalytics from '../../../services/admin/competitor-analytics.service';
+import { refreshCompetitorPriceAutomationSchedule } from '../../../services/scheduler/scheduler.service';
+import { getTenantId } from '../../../lib/tenant-context';
 
 export async function registerWarehousePricingRoutes(fastify: FastifyInstance) {
   fastify.get('/pricing-rules', {
@@ -46,7 +49,19 @@ export async function registerWarehousePricingRoutes(fastify: FastifyInstance) {
     },
   }, async (request: FastifyRequest<{ Body: pricingService.PricingSettingsInput }>, reply: FastifyReply) => {
     try {
-      return reply.send(await pricingService.updatePricingSettings(request.body));
+      const result = await pricingService.updatePricingSettings(request.body);
+      const tenantId = getTenantId();
+      if (
+        tenantId
+        && (
+          request.body.competitorAutoPricingEnabled !== undefined
+          || request.body.competitorAutoPricingShopId !== undefined
+          || request.body.competitorAutoPricingIntervalMinutes !== undefined
+        )
+      ) {
+        await refreshCompetitorPriceAutomationSchedule(tenantId);
+      }
+      return reply.send(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Błąd edycji ustawień cennika';
       return reply.status(400).send({ error: 'Bad Request', message });
@@ -69,6 +84,7 @@ export async function registerWarehousePricingRoutes(fastify: FastifyInstance) {
           groupVariants: { anyOf: [{ type: 'boolean' }, { type: 'string' }] },
           source: { type: 'string', enum: ['ALL', 'CLEARANCE', 'PRODUCT', 'GROUP', 'CATALOG', 'SHOP', 'DEFAULT', 'CEILING_FALLBACK'] },
           status: { type: 'string', enum: ['ALL', 'READY', 'MISSING_PRICE', 'WARNING', 'ALERT', 'NO_GROUP', 'OVERRIDES_GROUP', 'BELOW_COST'] },
+          ruleOrigin: { type: 'string', enum: ['ALL', 'MANUAL', 'COMPETITOR_AUTO', 'COMPETITOR_MANUAL', 'SYSTEM', 'FIXED_MANUAL', 'FIXED_COMPETITOR_AUTO', 'FIXED_ANY'] },
           page: { type: 'integer', minimum: 1 },
           limit: { type: 'integer', minimum: 1, maximum: 200 },
         },
@@ -362,6 +378,47 @@ export async function registerWarehousePricingRoutes(fastify: FastifyInstance) {
       return reply.status(message.includes('Brak kontekstu') ? 400 : 500).send({ error: 'Error', message });
     }
   });
+
+  fastify.get('/pricing/competitor-auto/runs', {
+    schema: {
+      tags: ['warehouse-pricing'],
+      summary: 'Historia automatycznych uruchomień cen konkurencji',
+      querystring: {
+        type: 'object',
+        properties: {
+          shopId: { type: 'string' },
+          limit: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: { shopId?: string; limit?: number | string } }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await competitorAnalytics.listCompetitorPriceAutomationRuns(request.query));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania historii automatu cen konkurencji';
+      return reply.status(message.includes('Brak kontekstu') ? 400 : 500).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.post('/pricing/competitor-auto/run-now', {
+    schema: {
+      tags: ['warehouse-pricing'],
+      summary: 'Uruchom automatyczne ceny konkurencji teraz',
+      body: {
+        type: 'object',
+        properties: {
+          shopId: { type: 'string' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: { shopId?: string } }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await competitorAnalytics.runCompetitorPriceAutomation(request.body ?? {}));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd uruchamiania automatu cen konkurencji';
+      return reply.status(message.includes('Wybierz') || message.includes('już uruchomiona') ? 400 : 500).send({ error: 'Error', message });
+    }
+  });
 }
 
 export function pricingProductsBodySchema() {
@@ -397,6 +454,7 @@ function pricingRuleBodySchema(requireLevel = true) {
       vatRate: { type: ['number', 'null'], minimum: 0 },
       roundingMode: { type: 'string', enum: ['END_99', 'TENTH', 'CENT'] },
       syncMode: { type: 'string', enum: ['AUTO', 'CONFIRM', 'MANUAL'] },
+      origin: { type: 'string', enum: ['MANUAL', 'COMPETITOR_AUTO', 'COMPETITOR_MANUAL', 'SYSTEM'] },
       isActive: { type: 'boolean' },
     },
   };
@@ -414,6 +472,12 @@ function pricingSettingsBodySchema() {
       costCeilingEnabledDefault: { type: 'boolean' },
       abnormalProfitThreshold: { type: 'number', minimum: 0 },
       variantGroupingEnabled: { type: 'boolean' },
+      competitorAutoPricingEnabled: { type: 'boolean' },
+      competitorAutoPricingShopId: { type: ['string', 'null'] },
+      competitorAutoPricingIntervalMinutes: { type: 'integer', minimum: 60, maximum: 10080 },
+      competitorAutoPricingMinMarkupPercent: { type: 'number', minimum: 0 },
+      competitorAutoPricingBelowMarketTolerancePercent: { type: 'number', minimum: 0 },
+      competitorAutoPricingAboveMarketTolerancePercent: { type: 'number', minimum: 0 },
     },
   };
 }

@@ -97,6 +97,9 @@ export interface PriceAuditApplyInput extends PriceAuditQuery {
   sync?: boolean;
   recalculate?: boolean;
   maxApply?: number | string;
+  origin?: pricingService.PricingRuleOrigin;
+  skipManualFixedPrices?: boolean;
+  triggeredBy?: import('../queue/price-sync.queue').PriceSyncTriggeredBy;
 }
 
 export interface DescriptionAiInput {
@@ -125,6 +128,7 @@ type PricePreviewStatus = 'READY' | 'BELOW_COST' | 'NO_COMPETITOR_PRICE' | 'LOW_
 
 const PRICE_AUDIT_DEFAULT_ITEM_LIMIT = 1000;
 const PRICE_AUDIT_MAX_ITEM_LIMIT = 10000;
+const activeCompetitorPriceAutomationRuns = new Set<string>();
 
 const matchedSourceProductCache = new Map<string, {
   expiresAt: number;
@@ -1480,7 +1484,11 @@ function serializeEnriched(product: EnrichedProduct, includeOffers = false) {
 }
 
 async function pricingVatRate(tenantId: string) {
-  const settings = await prisma.warehousePricingSettings.findUnique({ where: { tenantId } });
+  const settings = await prisma.warehousePricingSettings.upsert({
+    where: { tenantId },
+    update: {},
+    create: { tenantId },
+  });
   return decimalToNumber(settings?.defaultVatRate) ?? 23;
 }
 
@@ -1549,8 +1557,7 @@ function auditTargetGross(
   return round2(Math.max(lowerBound, minMarkupGross ?? 0));
 }
 
-export async function auditPrices(query: PriceAuditQuery) {
-  const tenantId = requireTenantId();
+export async function auditPricesForTenant(tenantId: string, query: PriceAuditQuery) {
   const db = await ensureMongo();
   await requireShop(tenantId, query.shopId);
   const sources = selectedSources(query.source);
@@ -1777,19 +1784,24 @@ export async function auditPrices(query: PriceAuditQuery) {
   };
 }
 
-export async function applyPriceAudit(input: PriceAuditApplyInput) {
-  const tenantId = requireTenantId();
+export async function auditPrices(query: PriceAuditQuery) {
+  return auditPricesForTenant(requireTenantId(), query);
+}
+
+export async function applyPriceAuditForTenant(tenantId: string, input: PriceAuditApplyInput) {
   const maxApply = pageValue(input.maxApply, PRICE_AUDIT_MAX_ITEM_LIMIT, PRICE_AUDIT_MAX_ITEM_LIMIT);
-  const audit = await auditPrices({ ...input, itemLimit: PRICE_AUDIT_MAX_ITEM_LIMIT });
+  const audit = await auditPricesForTenant(tenantId, { ...input, itemLimit: PRICE_AUDIT_MAX_ITEM_LIMIT });
   const candidates = audit.items
     .filter((item: any) => item.actionable && item.targetNet !== null && item.targetNet !== undefined)
     .slice(0, maxApply);
   const result = {
     requested: candidates.length,
     applied: 0,
+    skippedManualOverrides: 0,
     recalculatedBatches: 0,
     syncedBatches: 0,
     enqueued: 0,
+    synced: 0,
     appliedIds: [] as string[],
     audit: {
       generatedAt: audit.generatedAt,
@@ -1839,10 +1851,16 @@ export async function applyPriceAudit(input: PriceAuditApplyInput) {
           vatRate: new Prisma.Decimal(audit.rule.vatRate),
           roundingMode: 'CENT' as const,
           syncMode: 'CONFIRM' as const,
+          origin: input.origin ?? 'COMPETITOR_MANUAL',
           isActive: true,
         };
         const existing = primaryRuleByProductId.get(item.warehouseProductId);
         if (existing) {
+          const isManualFixed = existing.origin === 'MANUAL' && existing.priceMode === 'FIXED';
+          if (input.skipManualFixedPrices === true && isManualFixed) {
+            result.skippedManualOverrides += 1;
+            continue;
+          }
           await tx.warehousePricingRule.update({ where: { id: existing.id }, data });
         } else {
           await tx.warehousePricingRule.create({ data: { tenantId, ...data } });
@@ -1861,20 +1879,148 @@ export async function applyPriceAudit(input: PriceAuditApplyInput) {
 
   for (const productIds of chunked(result.appliedIds, 500)) {
     if (input.sync) {
-      const synced = await pricingService.syncPricing({ productIds, shopIds: [input.shopId], triggeredBy: 'MANUAL' });
+      const synced = await pricingService.syncPricingForTenant(tenantId, { productIds, shopIds: [input.shopId], triggeredBy: input.triggeredBy ?? 'MANUAL' });
       result.syncedBatches += 1;
       result.enqueued += synced.enqueued;
+      result.synced += synced.synced ?? 0;
       result.errors.push(...synced.errors.map((error) => ({
         warehouseProductId: error.warehouseProductId,
         message: error.message,
       })));
     } else if (input.recalculate !== false) {
-      await pricingService.recalculatePricing({ productIds, shopIds: [input.shopId] });
+      await pricingService.recalculatePricingForTenant(tenantId, { productIds, shopIds: [input.shopId] });
       result.recalculatedBatches += 1;
     }
   }
 
   return result;
+}
+
+export async function applyPriceAudit(input: PriceAuditApplyInput) {
+  return applyPriceAuditForTenant(requireTenantId(), input);
+}
+
+export async function listCompetitorPriceAutomationRuns(query: { shopId?: string; limit?: number | string } = {}) {
+  const tenantId = requireTenantId();
+  const limit = pageValue(query.limit, 20, 100);
+  return prisma.competitorPriceAutomationRun.findMany({
+    where: {
+      tenantId,
+      ...(query.shopId ? { shopId: query.shopId } : {}),
+    },
+    orderBy: { startedAt: 'desc' },
+    take: limit,
+  });
+}
+
+export async function runCompetitorPriceAutomationForTenant(
+  tenantId: string,
+  input: { trigger?: 'MANUAL' | 'SCHEDULED'; shopId?: string } = {},
+) {
+  const settings = await prisma.warehousePricingSettings.findUnique({ where: { tenantId } });
+  const shopId = input.shopId ?? settings?.competitorAutoPricingShopId;
+  if (!shopId) throw new ValidationError('Wybierz sklep dla automatycznych cen konkurencji');
+
+  const shop = await prisma.shop.findFirst({ where: { id: shopId, tenantId, status: 'ACTIVE' }, select: { id: true } });
+  if (!shop) throw new ValidationError('Sklep automatycznych cen konkurencji nie istnieje albo jest nieaktywny');
+
+  const runKey = `${tenantId}:${shopId}`;
+  if (activeCompetitorPriceAutomationRuns.has(runKey)) {
+    throw new ValidationError('Automatyczna reguła cen konkurencji jest już uruchomiona dla tego sklepu');
+  }
+
+  const minMarkupPercent = decimalToNumber(settings?.competitorAutoPricingMinMarkupPercent) ?? 40;
+  const belowMarketTolerancePercent = decimalToNumber(settings?.competitorAutoPricingBelowMarketTolerancePercent) ?? 1;
+  const aboveMarketTolerancePercent = decimalToNumber(settings?.competitorAutoPricingAboveMarketTolerancePercent) ?? 5;
+  const startedAt = new Date();
+  const run = await prisma.competitorPriceAutomationRun.create({
+    data: {
+      tenantId,
+      shopId,
+      trigger: input.trigger ?? 'MANUAL',
+      status: 'PROCESSING',
+      minMarkupPercent,
+      belowMarketTolerancePercent,
+      aboveMarketTolerancePercent,
+      startedAt,
+    },
+  });
+
+  activeCompetitorPriceAutomationRuns.add(runKey);
+  try {
+    const result = await applyPriceAuditForTenant(tenantId, {
+      shopId,
+      minMarkupPercent,
+      belowMarketTolerancePercent,
+      aboveMarketTolerancePercent,
+      sync: true,
+      recalculate: false,
+      origin: 'COMPETITOR_AUTO',
+      skipManualFixedPrices: true,
+      triggeredBy: 'MANUAL',
+    });
+    const failed = result.errors.length;
+    const status = failed > 0 ? (result.applied > 0 ? 'PARTIAL' : 'FAILED') : 'SUCCESS';
+    const finishedAt = new Date();
+    const updated = await prisma.competitorPriceAutomationRun.update({
+      where: { id: run.id },
+      data: {
+        status,
+        requested: result.requested,
+        applied: result.applied,
+        skippedManualOverrides: result.skippedManualOverrides,
+        synced: result.synced,
+        enqueued: result.enqueued,
+        failed,
+        actionableBefore: result.audit.totals.actionable,
+        errorMessage: failed > 0 ? result.errors.map((error) => `${error.warehouseProductId}: ${error.message}`).join('\n').slice(0, 5000) : null,
+        finishedAt,
+      },
+    });
+    await prisma.warehousePricingSettings.update({
+      where: { tenantId },
+      data: {
+        competitorAutoPricingLastRunAt: finishedAt,
+        ...(failed > 0
+          ? {
+              competitorAutoPricingLastErrorAt: finishedAt,
+              competitorAutoPricingLastErrorMessage: updated.errorMessage,
+            }
+          : {
+              competitorAutoPricingLastErrorAt: null,
+              competitorAutoPricingLastErrorMessage: null,
+            }),
+      },
+    });
+    return { run: updated, result };
+  } catch (error) {
+    const finishedAt = new Date();
+    const message = error instanceof Error ? error.message : 'Błąd automatycznej reguły cen konkurencji';
+    const updated = await prisma.competitorPriceAutomationRun.update({
+      where: { id: run.id },
+      data: {
+        status: 'FAILED',
+        failed: 1,
+        errorMessage: message,
+        finishedAt,
+      },
+    });
+    await prisma.warehousePricingSettings.update({
+      where: { tenantId },
+      data: {
+        competitorAutoPricingLastRunAt: finishedAt,
+        competitorAutoPricingLastErrorAt: finishedAt,
+        competitorAutoPricingLastErrorMessage: message,
+      },
+    });
+    return { run: updated, result: null };
+  } finally {
+    activeCompetitorPriceAutomationRuns.delete(runKey);
+  }
+}
+
+export async function runCompetitorPriceAutomation(input: { shopId?: string } = {}) {
+  return runCompetitorPriceAutomationForTenant(requireTenantId(), { ...input, trigger: 'MANUAL' });
 }
 
 function emptyIssueCounts() {
@@ -2896,6 +3042,7 @@ export async function applyPrices(input: PriceApplyInput) {
       vatRate: new Prisma.Decimal(preview.vatRate),
       roundingMode: 'CENT',
       syncMode: 'CONFIRM',
+      origin: 'COMPETITOR_MANUAL',
       isActive: true,
     };
 

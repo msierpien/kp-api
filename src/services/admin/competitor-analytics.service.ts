@@ -95,6 +95,7 @@ export interface PriceAuditQuery {
 
 export interface PriceAuditApplyInput extends PriceAuditQuery {
   sync?: boolean;
+  recalculate?: boolean;
   maxApply?: number | string;
 }
 
@@ -1761,6 +1762,7 @@ export async function applyPriceAudit(input: PriceAuditApplyInput) {
     recalculatedBatches: 0,
     syncedBatches: 0,
     enqueued: 0,
+    appliedIds: [] as string[],
     audit: {
       generatedAt: audit.generatedAt,
       totals: audit.totals,
@@ -1818,6 +1820,7 @@ export async function applyPriceAudit(input: PriceAuditApplyInput) {
           await tx.warehousePricingRule.create({ data: { tenantId, ...data } });
         }
         result.applied += 1;
+        result.appliedIds.push(item.warehouseProductId);
       }
       if (duplicateRuleIds.length > 0) {
         await tx.warehousePricingRule.updateMany({
@@ -1828,8 +1831,7 @@ export async function applyPriceAudit(input: PriceAuditApplyInput) {
     });
   }
 
-  const appliedIds = candidates.map((item: any) => item.warehouseProductId);
-  for (const productIds of chunked(appliedIds, 500)) {
+  for (const productIds of chunked(result.appliedIds, 500)) {
     if (input.sync) {
       const synced = await pricingService.syncPricing({ productIds, shopIds: [input.shopId], triggeredBy: 'MANUAL' });
       result.syncedBatches += 1;
@@ -1838,7 +1840,7 @@ export async function applyPriceAudit(input: PriceAuditApplyInput) {
         warehouseProductId: error.warehouseProductId,
         message: error.message,
       })));
-    } else {
+    } else if (input.recalculate !== false) {
       await pricingService.recalculatePricing({ productIds, shopIds: [input.shopId] });
       result.recalculatedBatches += 1;
     }

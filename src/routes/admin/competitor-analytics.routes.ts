@@ -294,6 +294,7 @@ export async function competitorAnalyticsRoutes(fastify: FastifyInstance) {
           itemLimit: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
           maxApply: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
           sync: { type: 'boolean' },
+          recalculate: { type: 'boolean' },
         },
       },
     },

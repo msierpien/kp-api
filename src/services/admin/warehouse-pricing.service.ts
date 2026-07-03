@@ -1577,13 +1577,7 @@ export async function getPricingProducts(query: PricingProductsQuery) {
   const products = await prisma.warehouseProduct.findMany({
     where: productWhere,
     ...(categoryProductIds ? {} : { take: MAX_PRICING_LIST_PRODUCTS }),
-    include: {
-      ...productPricingInclude,
-      productChannelSnapshots: {
-        where: { shopId: query.shopId },
-        select: { shopId: true, payloadJson: true },
-      },
-    },
+    include: productPricingInclude,
     orderBy: { name: 'asc' },
   });
 

@@ -346,6 +346,12 @@ function round2(value: number | null | undefined) {
   return Math.round(value * 100) / 100;
 }
 
+function grossToNetCeil(gross: number | null | undefined, vatRate: number) {
+  if (gross === null || gross === undefined || !Number.isFinite(gross)) return null;
+  const multiplier = 1 + vatRate / 100;
+  return Math.ceil((gross / multiplier) * 100 - 1e-9) / 100;
+}
+
 function escapeRegex(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -826,7 +832,7 @@ function priceStats(offers: CompetitorOffer[], currentGross: number | null, cost
       : (prices[prices.length / 2 - 1] + prices[prices.length / 2]) / 2
     : null;
   const suggestedGross = round2(medianGross);
-  const suggestedNet = suggestedGross === null ? null : round2(suggestedGross / (1 + vatRate / 100));
+  const suggestedNet = grossToNetCeil(suggestedGross, vatRate);
   const diffPercentVsCurrent = priceDiffPercent(currentGross, suggestedGross);
 
   return {
@@ -1679,7 +1685,7 @@ export async function auditPrices(query: PriceAuditQuery) {
     const stats = priceStats(offers as CompetitorOffer[], currentGross, productCostNet, vatRate);
     const minMarkupGross = productCostNet === null ? null : round2(productCostNet * (1 + minMarkupPercent / 100) * (1 + vatRate / 100));
     const targetGross = auditTargetGross(stats.medianGross, minMarkupGross, belowMarketTolerancePercent);
-    const targetNet = targetGross === null ? null : round2(targetGross / (1 + vatRate / 100));
+    const targetNet = grossToNetCeil(targetGross, vatRate);
     const lowerMarketBound = stats.medianGross === null ? null : round2(stats.medianGross * (1 - belowMarketTolerancePercent / 100));
     const upperMarketBound = stats.medianGross === null ? null : round2(stats.medianGross * (1 + aboveMarketTolerancePercent / 100));
     const minMarginForcesAboveMarket = Boolean(minMarkupGross !== null && upperMarketBound !== null && minMarkupGross > upperMarketBound);
@@ -2770,7 +2776,7 @@ export async function previewPrices(input: PricePreviewInput) {
     const suggestedGross = typeof overrideGross === 'number' && Number.isFinite(overrideGross)
       ? overrideGross
       : enriched.priceStats.suggestedGross;
-    const suggestedNet = suggestedGross === null ? null : round2(suggestedGross / (1 + vatRate / 100));
+    const suggestedNet = grossToNetCeil(suggestedGross, vatRate);
     const blockedBelowCost = Boolean(enriched.costNet !== null && suggestedNet !== null && suggestedNet < enriched.costNet);
     const marketOfferCount = enriched.offers.filter((offer) => (
       typeof offer.price === 'number' && Number.isFinite(offer.price) && offer.price > 0

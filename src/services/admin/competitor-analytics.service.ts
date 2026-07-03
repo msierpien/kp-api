@@ -1957,7 +1957,7 @@ export async function runCompetitorPriceAutomationForTenant(
       recalculate: false,
       origin: 'COMPETITOR_AUTO',
       skipManualFixedPrices: true,
-      triggeredBy: 'MANUAL',
+      triggeredBy: 'COMPETITOR_AUTO',
     });
     const failed = result.errors.length;
     const status = failed > 0 ? (result.applied > 0 ? 'PARTIAL' : 'FAILED') : 'SUCCESS';

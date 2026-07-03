@@ -3,7 +3,7 @@ import { getBullMqConnection } from './render.queue';
 
 export const PRICE_SYNC_QUEUE_NAME = 'price-sync';
 
-export type PriceSyncTriggeredBy = 'MANUAL' | 'PRODUCT_PRICE_UPDATE' | 'SHOP_PUBLICATION';
+export type PriceSyncTriggeredBy = 'MANUAL' | 'PRODUCT_PRICE_UPDATE' | 'SHOP_PUBLICATION' | 'COMPETITOR_AUTO';
 
 export interface PriceSyncJobData {
   logId: string;

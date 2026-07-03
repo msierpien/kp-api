@@ -66,7 +66,8 @@ export interface PricingProductsQuery {
   expandedFamilyKeys?: string;
   groupVariants?: boolean | string;
   source?: PricingPriceSource | 'ALL';
-  status?: 'ALL' | 'READY' | 'MISSING_PRICE' | 'WARNING' | 'ALERT' | 'NO_GROUP' | 'OVERRIDES_GROUP' | 'BELOW_COST';
+  costSource?: PricingCostSource | 'ALL';
+  status?: 'ALL' | 'READY' | 'MISSING_PRICE' | 'WARNING' | 'ALERT' | 'NO_GROUP' | 'IN_GROUP' | 'OVERRIDES_GROUP' | 'BELOW_COST';
   ruleOrigin?: PricingRuleOrigin | 'ALL' | 'FIXED_MANUAL' | 'FIXED_COMPETITOR_AUTO' | 'FIXED_ANY';
   page?: number | string;
   limit?: number | string;
@@ -1477,10 +1478,13 @@ function itemMatchesPricingFilters(
   source?: PricingPriceSource | 'ALL',
   status?: PricingProductsQuery['status'],
   ruleOrigin?: PricingProductsQuery['ruleOrigin'],
+  costSource?: PricingProductsQuery['costSource'],
 ) {
   const sourceFilter = source && source !== 'ALL' ? source : null;
   const statusFilter = status && status !== 'ALL' ? status : null;
+  const costSourceFilter = costSource && costSource !== 'ALL' ? costSource : null;
   if (sourceFilter && item.priceSource !== sourceFilter) return false;
+  if (costSourceFilter && item.costSource !== costSourceFilter) return false;
   if (!itemMatchesRuleOriginFilter(item, ruleOrigin)) return false;
   if (!statusFilter) return true;
   if (statusFilter === 'READY') return item.netPrice !== null && !item.warningCode && !item.infoCode && !item.overridesGroup;
@@ -1488,6 +1492,7 @@ function itemMatchesPricingFilters(
   if (statusFilter === 'WARNING') return Boolean(item.warningCode);
   if (statusFilter === 'ALERT') return item.infoCode === 'ABNORMAL_PROFIT';
   if (statusFilter === 'NO_GROUP') return !item.priceGroupId;
+  if (statusFilter === 'IN_GROUP') return Boolean(item.priceGroupId);
   if (statusFilter === 'OVERRIDES_GROUP') return item.overridesGroup;
   if (statusFilter === 'BELOW_COST') return item.warningCode === 'BELOW_COST';
   return true;
@@ -1545,7 +1550,7 @@ async function filteredProductIdsForPricing(tenantId: string, filters: PricingPr
   const items = products.map((product) => calculatePrice(product, shop, state));
   return Array.from(new Set(
     items
-      .filter((item) => itemMatchesPricingFilters(item, filters.source, filters.status, filters.ruleOrigin))
+      .filter((item) => itemMatchesPricingFilters(item, filters.source, filters.status, filters.ruleOrigin, filters.costSource))
       .map((item) => item.warehouseProductId),
   ));
 }
@@ -1642,7 +1647,7 @@ export async function getPricingProducts(query: PricingProductsQuery) {
   });
 
   const baseItems = products.map((product) => calculatePrice(product, shop, state));
-  const scopeItems = baseItems.filter((item) => itemMatchesPricingFilters(item, query.source, undefined, query.ruleOrigin));
+  const scopeItems = baseItems.filter((item) => itemMatchesPricingFilters(item, query.source, undefined, query.ruleOrigin, query.costSource));
   const filtered = scopeItems.filter((item) => itemMatchesPricingFilters(item, undefined, query.status, undefined));
   const presentationItems = groupVariants ? groupVariantPricingItems(filtered, expandedFamilyKeys) : decorateFlatVariantPricingItems(filtered);
   const total = presentationItems.length;

@@ -63,6 +63,7 @@ export interface PricingProductsQuery {
   priceGroupId?: string;
   categoryId?: string;
   categoryIds?: string;
+  expandedFamilyKeys?: string;
   groupVariants?: boolean | string;
   source?: PricingPriceSource | 'ALL';
   status?: 'ALL' | 'READY' | 'MISSING_PRICE' | 'WARNING' | 'ALERT' | 'NO_GROUP' | 'OVERRIDES_GROUP' | 'BELOW_COST';
@@ -282,6 +283,15 @@ function normalizeCategoryIdSet(query: PricingProductsQuery) {
 function normalizeCategoryId(value: unknown) {
   const id = String(value ?? '').trim();
   return id && id !== 'ALL' ? id : null;
+}
+
+function normalizeExpandedFamilyKeys(value: unknown) {
+  return new Set(
+    String(value ?? '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
 }
 
 function categorySlug(value: string) {
@@ -1343,7 +1353,7 @@ function decorateVariantFamily(items: PricingItem[]) {
   }));
 }
 
-function groupVariantPricingItems(items: PricingItem[]) {
+function groupVariantPricingItems(items: PricingItem[], expandedFamilyKeys = new Set<string>()) {
   const groups = new Map<string, PricingItem[]>();
   for (const item of items) {
     const key = item.variantFamilyKey || `product:${item.warehouseProductId}`;
@@ -1353,7 +1363,7 @@ function groupVariantPricingItems(items: PricingItem[]) {
   }
 
   const result: PricingItem[] = [];
-  for (const groupItems of groups.values()) {
+  for (const [familyKey, groupItems] of groups.entries()) {
     const sorted = [...groupItems].sort((a, b) => String(a.variantSortKey ?? a.sku).localeCompare(String(b.variantSortKey ?? b.sku)));
     const decorated = decorateVariantFamily(sorted);
     if (decorated.length <= 1) {
@@ -1370,7 +1380,7 @@ function groupVariantPricingItems(items: PricingItem[]) {
       variantFamilyName: familyDisplayName(decorated, representative.variantFamilyName ?? representative.name),
       variantCount: decorated.length,
       variantProductIds: decorated.map((item) => item.warehouseProductId),
-      variants: decorated,
+      ...(expandedFamilyKeys.has(familyKey) ? { variants: decorated } : {}),
       familyStats: decorated[0].familyStats,
     });
   }
@@ -1524,6 +1534,7 @@ export async function getPricingProducts(query: PricingProductsQuery) {
   const search = normalizeSearch(query.search);
   const categoryIds = normalizeCategoryIdSet(query);
   const groupVariants = normalizeBoolean(query.groupVariants, false);
+  const expandedFamilyKeys = normalizeExpandedFamilyKeys(query.expandedFamilyKeys);
 
   const [shop, state] = await Promise.all([
     prisma.shop.findFirst({
@@ -1578,7 +1589,7 @@ export async function getPricingProducts(query: PricingProductsQuery) {
 
   const baseItems = products.map((product) => calculatePrice(product, shop, state));
   const filtered = baseItems.filter((item) => itemMatchesPricingFilters(item, query.source, query.status, query.ruleOrigin));
-  const presentationItems = groupVariants ? groupVariantPricingItems(filtered) : decorateFlatVariantPricingItems(filtered);
+  const presentationItems = groupVariants ? groupVariantPricingItems(filtered, expandedFamilyKeys) : decorateFlatVariantPricingItems(filtered);
   const total = presentationItems.length;
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const offset = (Math.min(page, totalPages) - 1) * limit;

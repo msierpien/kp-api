@@ -93,6 +93,11 @@ export interface PriceAuditQuery {
   itemLimit?: number | string;
 }
 
+export interface PriceAuditApplyInput extends PriceAuditQuery {
+  sync?: boolean;
+  maxApply?: number | string;
+}
+
 export interface DescriptionAiInput {
   shopId: string;
   productIds: string[];
@@ -1741,6 +1746,105 @@ export async function auditPrices(query: PriceAuditQuery) {
     warnings: warningsForSources(sources, 'prices'),
     items: anomalies.slice(0, itemLimit),
   };
+}
+
+export async function applyPriceAudit(input: PriceAuditApplyInput) {
+  const tenantId = requireTenantId();
+  const maxApply = pageValue(input.maxApply, PRICE_AUDIT_MAX_ITEM_LIMIT, PRICE_AUDIT_MAX_ITEM_LIMIT);
+  const audit = await auditPrices({ ...input, itemLimit: PRICE_AUDIT_MAX_ITEM_LIMIT });
+  const candidates = audit.items
+    .filter((item: any) => item.actionable && item.targetNet !== null && item.targetNet !== undefined)
+    .slice(0, maxApply);
+  const result = {
+    requested: candidates.length,
+    applied: 0,
+    recalculatedBatches: 0,
+    syncedBatches: 0,
+    enqueued: 0,
+    audit: {
+      generatedAt: audit.generatedAt,
+      totals: audit.totals,
+      counts: audit.counts,
+      rule: audit.rule,
+      warnings: audit.warnings,
+    },
+    errors: [] as Array<{ warehouseProductId: string; sku?: string | null; message: string }>,
+  };
+
+  for (const items of chunked(candidates, 100)) {
+    const productIds = items.map((item: any) => item.warehouseProductId);
+    const existingRules = await prisma.warehousePricingRule.findMany({
+      where: {
+        tenantId,
+        level: 'PRODUCT',
+        warehouseProductId: { in: productIds },
+        shopId: input.shopId,
+        isActive: true,
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const primaryRuleByProductId = new Map<string, typeof existingRules[number]>();
+    const duplicateRuleIds: string[] = [];
+    for (const rule of existingRules) {
+      if (rule.warehouseProductId && !primaryRuleByProductId.has(rule.warehouseProductId)) {
+        primaryRuleByProductId.set(rule.warehouseProductId, rule);
+      } else {
+        duplicateRuleIds.push(rule.id);
+      }
+    }
+
+    await prisma.$transaction(async (tx) => {
+      for (const item of items as any[]) {
+        const data = {
+          level: 'PRODUCT' as const,
+          shopId: input.shopId,
+          catalogId: null,
+          priceGroupId: null,
+          warehouseProductId: item.warehouseProductId,
+          marginPercent: null,
+          minProfit: null,
+          fixedNetPrice: new Prisma.Decimal(item.targetNet),
+          priceMode: 'FIXED' as const,
+          costCeilingEnabled: true,
+          vatRate: new Prisma.Decimal(audit.rule.vatRate),
+          roundingMode: 'CENT' as const,
+          syncMode: 'CONFIRM' as const,
+          isActive: true,
+        };
+        const existing = primaryRuleByProductId.get(item.warehouseProductId);
+        if (existing) {
+          await tx.warehousePricingRule.update({ where: { id: existing.id }, data });
+        } else {
+          await tx.warehousePricingRule.create({ data: { tenantId, ...data } });
+        }
+        result.applied += 1;
+      }
+      if (duplicateRuleIds.length > 0) {
+        await tx.warehousePricingRule.updateMany({
+          where: { tenantId, id: { in: duplicateRuleIds } },
+          data: { isActive: false },
+        });
+      }
+    });
+  }
+
+  const appliedIds = candidates.map((item: any) => item.warehouseProductId);
+  for (const productIds of chunked(appliedIds, 500)) {
+    if (input.sync) {
+      const synced = await pricingService.syncPricing({ productIds, shopIds: [input.shopId], triggeredBy: 'MANUAL' });
+      result.syncedBatches += 1;
+      result.enqueued += synced.enqueued;
+      result.errors.push(...synced.errors.map((error) => ({
+        warehouseProductId: error.warehouseProductId,
+        message: error.message,
+      })));
+    } else {
+      await pricingService.recalculatePricing({ productIds, shopIds: [input.shopId] });
+      result.recalculatedBatches += 1;
+    }
+  }
+
+  return result;
 }
 
 function emptyIssueCounts() {

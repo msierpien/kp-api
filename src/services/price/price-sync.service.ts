@@ -21,6 +21,11 @@ export interface SyncProductPriceOptions {
   triggeredBy?: PriceSyncTriggeredBy;
 }
 
+export interface PriceChangeHistoryQuery {
+  shopId?: string;
+  limit?: number | string;
+}
+
 function requireTenantId() {
   const tenantId = getTenantId();
   if (!tenantId) throw new Error('Brak kontekstu tenanta');
@@ -66,6 +71,39 @@ export async function getPriceSyncLogs(query: PriceSyncLogsQuery = {}) {
   ]);
 
   return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+}
+
+export async function getPriceChangeHistory(warehouseProductId: string, query: PriceChangeHistoryQuery = {}) {
+  const tenantId = requireTenantId();
+  const limit = Math.min(Math.max(Number(query.limit ?? 5) || 5, 1), 20);
+  const where: Prisma.PriceChangeHistoryWhereInput = { tenantId, warehouseProductId };
+  if (query.shopId) where.shopId = query.shopId;
+
+  return prisma.priceChangeHistory.findMany({
+    where,
+    take: limit,
+    orderBy: { changedAt: 'desc' },
+    include: {
+      shop: { select: { id: true, name: true, platform: true } },
+      shopProductMapping: {
+        select: {
+          id: true,
+          externalProductId: true,
+          externalSku: true,
+          externalName: true,
+        },
+      },
+      priceSyncLog: {
+        select: {
+          id: true,
+          status: true,
+          triggeredBy: true,
+          syncedAt: true,
+          createdAt: true,
+        },
+      },
+    },
+  });
 }
 
 export async function syncProductPrice(

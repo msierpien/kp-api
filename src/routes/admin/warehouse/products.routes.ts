@@ -5,6 +5,7 @@ import * as diagnosticsService from '../../../services/admin/warehouse-diagnosti
 import * as sourceMappingService from '../../../services/admin/warehouse-product-source-mapping.service';
 import * as reservationService from '../../../services/admin/warehouse-reservations.service';
 import * as stockSyncService from '../../../services/stock/stock-sync.service';
+import * as priceSyncService from '../../../services/price/price-sync.service';
 import * as shopProductPublicationService from '../../../services/admin/shop-product-publication.service';
 import * as pricingService from '../../../services/admin/warehouse-pricing.service';
 import * as productCardService from '../../../services/admin/product-card.service';
@@ -1011,6 +1012,35 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
       const message = error instanceof Error ? error.message : 'Błąd synchronizacji ceny';
       const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.get('/products/:id/price-history', {
+    schema: {
+      tags: ['price-sync'],
+      summary: 'Ostatnie zmiany cen produktu',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+      querystring: {
+        type: 'object',
+        properties: {
+          shopId: { type: 'string' },
+          limit: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Querystring: { shopId?: string; limit?: number | string };
+  }>, reply: FastifyReply) => {
+    try {
+      return reply.send(await priceSyncService.getPriceChangeHistory(request.params.id, request.query));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania historii cen';
+      return reply.status(message.includes('Brak kontekstu') ? 400 : 500).send({ error: 'Error', message });
     }
   });
 

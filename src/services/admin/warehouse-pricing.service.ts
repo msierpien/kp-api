@@ -172,8 +172,9 @@ const DEFAULT_PRICING = {
   competitorAutoPricingAboveMarketTolerancePercent: 5,
 };
 
-const MAX_PRICING_PRODUCTS = 500;
 const MAX_PRICING_LIST_PRODUCTS = 5000;
+const MAX_PRICING_ACTION_PRODUCTS = MAX_PRICING_LIST_PRODUCTS;
+const MAX_PRICING_BULK_EDIT_PRODUCTS = 500;
 const CATEGORY_LISTING_CACHE_TTL_MS = 5 * 60 * 1000;
 const CATEGORY_LISTING_MAX_PAGES = 50;
 
@@ -527,7 +528,7 @@ async function assertRuleTargets(tenantId: string, input: ReturnType<typeof norm
   if (result.some((item) => !item)) throw new Error('Cel reguły cennika nie istnieje');
 }
 
-async function resolveProductsAndShops(tenantId: string, input: PricingProductsInput, take = MAX_PRICING_PRODUCTS) {
+async function resolveProductsAndShops(tenantId: string, input: PricingProductsInput, take = MAX_PRICING_ACTION_PRODUCTS) {
   const productWhere: Prisma.WarehouseProductWhereInput = {
     tenantId,
     isActive: true,
@@ -1255,7 +1256,7 @@ export async function bulkUpdateProductPrices(input: BulkUpdatePricesInput) {
   if (!input.productIds?.length) throw new Error('Wybierz produkty do masowej edycji cen');
   const rules = [];
 
-  for (const productId of input.productIds.slice(0, MAX_PRICING_PRODUCTS)) {
+  for (const productId of input.productIds.slice(0, MAX_PRICING_BULK_EDIT_PRODUCTS)) {
     const data = normalizeRuleInput({
       level: 'PRODUCT',
       warehouseProductId: productId,
@@ -1794,7 +1795,7 @@ export async function addPriceGroupMembers(id: string, input: PriceGroupMembersI
   const tenantId = requireTenantId();
   const group = await prisma.warehousePriceGroup.findFirst({ where: { id, tenantId }, select: { id: true } });
   if (!group) throw new Error('Grupa cenowa nie znaleziona');
-  const productIds = Array.from(new Set((input.productIds ?? []).map((productId) => productId.trim()).filter(Boolean))).slice(0, MAX_PRICING_PRODUCTS);
+  const productIds = Array.from(new Set((input.productIds ?? []).map((productId) => productId.trim()).filter(Boolean))).slice(0, MAX_PRICING_BULK_EDIT_PRODUCTS);
   if (productIds.length === 0) throw new Error('Wybierz produkty do dodania do grupy');
   const products = await prisma.warehouseProduct.findMany({ where: { tenantId, id: { in: productIds } }, select: { id: true } });
   const validIds = new Set(products.map((product) => product.id));

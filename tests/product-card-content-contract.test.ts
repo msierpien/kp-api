@@ -52,9 +52,10 @@ describe('product card content contract', () => {
     assert.match(SERVICE, /productCardOperationLog\.create/);
   });
 
-  it('uses kp_productcontent over HTTP and does not connect to the PrestaShop database', () => {
-    assert.match(ADAPTER, /module=kp_productcontent/);
+  it('uses kp_adminconnector over HTTP and does not connect to the PrestaShop database', () => {
+    assert.match(ADAPTER, /adminConnectorUrl/);
     assert.match(ADAPTER, /'X-Api-Key': this\.apiKey/);
+    assert.doesNotMatch(ADAPTER, /module=kp_productcontent/);
     assert.doesNotMatch(ADAPTER, /mysql|postgres|DATABASE_URL|createConnection|PrismaClient/i);
   });
 });

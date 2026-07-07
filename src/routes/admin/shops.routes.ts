@@ -837,7 +837,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
     {
       schema: {
         tags: ['shops'],
-        summary: 'Zapisz konfigurację modułu kp_bulkstock dla sklepu',
+        summary: 'Zapisz konfigurację stanów (kp_adminconnector) dla sklepu',
         params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
         body: {
           type: 'object',
@@ -863,7 +863,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
     {
       schema: {
         tags: ['shops'],
-        summary: 'Niemutujący test osiągalności endpointu kp_bulkstock',
+        summary: 'Niemutujący test osiągalności endpointu kp_adminconnector',
         params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
         response: { 200: bulkStockDiagnosticsResponseSchema },
       },

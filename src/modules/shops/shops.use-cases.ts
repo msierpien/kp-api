@@ -33,7 +33,6 @@ import {
 } from '../../services/scheduler/scheduler.service';
 import {
   buildAdminConnectorControllerUrl,
-  buildBulkStockUrl,
   DEFAULT_BULK_STOCK_BATCH_SIZE,
   MAX_BULK_STOCK_BATCH_SIZE,
   MIN_BULK_STOCK_BATCH_SIZE,
@@ -92,47 +91,6 @@ function normalizeOptionalString(value: unknown) {
 function secretFromConfig(value: unknown) {
   const secret = normalizeOptionalString(value);
   return secret ? decrypt(secret) : null;
-}
-
-function moduleControllerUrl(moduleUrl: string | null, controller: string) {
-  if (!moduleUrl) return null;
-  const trimmed = moduleUrl.replace(/\/+$/, '');
-
-  if (!trimmed.includes('?')) {
-    return `${stripKnownModuleController(trimmed)}/${encodeURIComponent(controller)}`;
-  }
-
-  if (trimmed.includes('controller=')) {
-    return trimmed.replace(/([?&]controller=)[^&]*/, `$1${encodeURIComponent(controller)}`);
-  }
-
-  return `${trimmed}&controller=${encodeURIComponent(controller)}`;
-}
-
-function stripKnownModuleController(url: string) {
-  return url.replace(/\/(?:bulkupdate|snapshot|stocksnapshot|capabilities|patch|mediaimport|mediaorder|mediaupdate|mediadelete)$/i, '');
-}
-
-function isAdminConnectorModuleUrl(value: string | null | undefined) {
-  return Boolean(value && /\bmodule=kp_adminconnector\b|\/kp_adminconnector(?:\/|$)/i.test(value));
-}
-
-function prestashopShopIdFromConfig(config: Record<string, unknown>) {
-  const defaults = config.prestashopProductDefaults;
-  const productCreate = config.productCreate;
-
-  if (typeof config.idShopDefault === 'string' || typeof config.idShopDefault === 'number') return config.idShopDefault;
-  if (typeof config.prestashopShopId === 'string' || typeof config.prestashopShopId === 'number') return config.prestashopShopId;
-  if (defaults && typeof defaults === 'object' && !Array.isArray(defaults)) {
-    const value = (defaults as Record<string, unknown>).idShopDefault;
-    if (typeof value === 'string' || typeof value === 'number') return value;
-  }
-  if (productCreate && typeof productCreate === 'object' && !Array.isArray(productCreate)) {
-    const value = (productCreate as Record<string, unknown>).idShopDefault;
-    if (typeof value === 'string' || typeof value === 'number') return value;
-  }
-
-  return null;
 }
 
 async function checkJsonEndpoint(input: {
@@ -218,11 +176,11 @@ export function normalizeBulkStockUrl(value: unknown) {
   try {
     parsed = new URL(url);
   } catch {
-    throw new ValidationError('URL endpointu kp_bulkstock musi być poprawnym adresem http(s)');
+    throw new ValidationError('URL endpointu kp_adminconnector musi być poprawnym adresem http(s)');
   }
 
   if (!['http:', 'https:'].includes(parsed.protocol)) {
-    throw new ValidationError('URL endpointu kp_bulkstock musi zaczynać się od http:// lub https://');
+    throw new ValidationError('URL endpointu kp_adminconnector musi zaczynać się od http:// lub https://');
   }
 
   return url;
@@ -404,20 +362,24 @@ export const shopsUseCases = {
     const config = (shop.configJson && typeof shop.configJson === 'object' && !Array.isArray(shop.configJson))
       ? shop.configJson as Record<string, unknown>
       : {};
-    const configuredUrl = normalizeOptionalString(config.bulkStockUrl);
     const adminConnectorUrl = normalizeOptionalString(config.adminConnectorUrl);
-    const adminConnectorBulkUrl = buildAdminConnectorControllerUrl(adminConnectorUrl, 'bulkupdate');
-    const prestashopShopId = prestashopShopIdFromConfig(config);
-    const url = configuredUrl
-      ?? adminConnectorBulkUrl
-      ?? buildBulkStockUrl(shop.baseUrl.replace(/\/+$/, '').replace(/\/api$/, ''), normalizeOptionalString(prestashopShopId));
-    const usesAdminConnector = isAdminConnectorModuleUrl(url);
-    const configuredApiKey = usesAdminConnector
-      ? config.adminConnectorApiKey ?? config.bulkStockApiKey
-      : config.bulkStockApiKey;
-    const apiKey = typeof configuredApiKey === 'string' && configuredApiKey
-      ? decrypt(configuredApiKey)
+    const url = buildAdminConnectorControllerUrl(adminConnectorUrl, 'bulkupdate');
+    const apiKey = typeof config.adminConnectorApiKey === 'string' && config.adminConnectorApiKey
+      ? decrypt(config.adminConnectorApiKey)
       : null;
+
+    if (!url) {
+      return {
+        ok: false,
+        expectedGet405: false,
+        status: 0,
+        latencyMs: 0,
+        contentType: '',
+        url: '',
+        message: 'Moduł kp_adminconnector nie ma skonfigurowanego adresu URL dla tego sklepu.',
+        bodyPreview: '',
+      };
+    }
 
     const startedAt = Date.now();
     const controller = new AbortController();
@@ -461,7 +423,7 @@ export const shopsUseCases = {
     } catch (error) {
       const message = error instanceof Error
         ? error.message
-        : 'Nie udało się połączyć z endpointem kp_bulkstock';
+        : 'Nie udało się połączyć z endpointem kp_adminconnector';
       return {
         ok: false,
         expectedGet405: false,
@@ -508,8 +470,6 @@ export const shopsUseCases = {
     const baseUrl = shop.baseUrl.replace(/\/+$/, '').replace(/\/api$/, '');
     const adminConnectorUrl = normalizeOptionalString(config.adminConnectorUrl);
     const adminConnectorApiKey = secretFromConfig(config.adminConnectorApiKey);
-    const productContentApiKey = secretFromConfig(config.productContentApiKey ?? config.contentModuleApiKey);
-    const bulkStockApiKey = secretFromConfig(config.bulkStockApiKey);
 
     const adminConnectorCheck = await checkJsonEndpoint({
       key: 'admin_connector',
@@ -521,26 +481,19 @@ export const shopsUseCases = {
       missingMessage: 'Nie skonfigurowano wspólnego modułu KP Admin Connector.',
     });
 
-    const productContentModuleBaseUrl = normalizeOptionalString(config.productContentUrl ?? config.contentModuleUrl)
-      ?? adminConnectorUrl;
-    const productContentUsesAdminConnector = isAdminConnectorModuleUrl(productContentModuleBaseUrl);
-    const productContentUrl = moduleControllerUrl(productContentModuleBaseUrl, 'capabilities')
-      ?? `${baseUrl}/index.php?fc=module&module=kp_productcontent&controller=capabilities`;
-    const productContentCheckApiKey = productContentUsesAdminConnector
-      ? adminConnectorApiKey ?? productContentApiKey
-      : productContentApiKey;
+    const productContentUrl = buildAdminConnectorControllerUrl(adminConnectorUrl, 'capabilities')
+      ?? `${baseUrl}/index.php?fc=module&module=kp_adminconnector&controller=capabilities`;
     const productContentCheck = await checkJsonEndpoint({
       key: 'product_content',
       label: 'Karta produktu',
-      configured: Boolean(productContentCheckApiKey),
+      configured: Boolean(adminConnectorApiKey),
       url: productContentUrl,
-      apiKey: productContentCheckApiKey,
-      missingMessage: 'Brak klucza dla modułu treści produktu.',
+      apiKey: adminConnectorApiKey,
+      missingMessage: 'Nie skonfigurowano modułu KP Admin Connector dla treści produktu.',
     });
 
     const bulkDiagnostics = await shopsUseCases.getBulkStockDiagnostics(id);
-    const bulkUsesAdminConnector = isAdminConnectorModuleUrl(bulkDiagnostics.url);
-    const bulkConfigured = Boolean(bulkStockApiKey || (bulkUsesAdminConnector && adminConnectorApiKey));
+    const bulkConfigured = Boolean(adminConnectorApiKey && bulkDiagnostics.url);
     const bulkStockCheck: ModuleDiagnostic = {
       key: 'bulk_stock',
       label: 'Stany i dostępność',

@@ -6,11 +6,6 @@ type ProductContentModuleConfig = {
   adminConnectorUrl?: string | null;
   adminConnectorApiKey?: string | null;
   adminConnectorEnabled?: boolean;
-  productContentUrl?: string | null;
-  contentModuleUrl?: string | null;
-  productContentApiKey?: string | null;
-  contentModuleApiKey?: string | null;
-  productContentEnabled?: boolean;
 };
 
 export class ProductContentConflictError extends Error {
@@ -25,18 +20,13 @@ export class ProductContentConflictError extends Error {
 }
 
 export class PrestaShopProductContentAdapter {
-  private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly explicitModuleUrl: string | null;
 
   constructor(private readonly shop: Shop) {
     const config = this.config();
-    this.baseUrl = shop.baseUrl.replace(/\/+$/, '');
-    this.explicitModuleUrl = normalizeUrl(config.productContentUrl ?? config.contentModuleUrl)
-      ?? normalizeUrl(config.adminConnectorUrl);
-    this.apiKey = this.usesAdminConnector()
-      ? configSecret(config.adminConnectorApiKey ?? config.productContentApiKey ?? config.contentModuleApiKey)
-      : configSecret(config.productContentApiKey ?? config.contentModuleApiKey);
+    this.explicitModuleUrl = normalizeUrl(config.adminConnectorUrl);
+    this.apiKey = configSecret(config.adminConnectorApiKey);
   }
 
   get configured(): boolean {
@@ -113,33 +103,29 @@ export class PrestaShopProductContentAdapter {
     try {
       json = text ? JSON.parse(text) : null;
     } catch {
-      throw new Error(`kp_productcontent returned non-JSON response: ${text.slice(0, 160)}`);
+      throw new Error(`kp_adminconnector returned non-JSON response: ${text.slice(0, 160)}`);
     }
 
     if (!response.ok || !json?.success) {
       const message = json?.errors?.join(', ') || text.slice(0, 160) || `HTTP ${response.status}`;
       if (response.status === 409) throw new ProductContentConflictError(message, json?.data);
-      throw new Error(`${this.usesAdminConnector() ? 'kp_adminconnector' : 'kp_productcontent'} ${response.status}: ${message}`);
+      throw new Error(`kp_adminconnector ${response.status}: ${message}`);
     }
 
     return json.data;
   }
 
   private endpoint(controller: string) {
+    if (!this.explicitModuleUrl) {
+      throw new Error('Moduł kp_adminconnector nie ma skonfigurowanego adresu URL dla tego sklepu');
+    }
     const [name, qs] = controller.split('&', 2);
-    const base = this.explicitModuleUrl
-      ? buildModuleControllerUrl(this.explicitModuleUrl, name)
-      : `${this.baseUrl}/index.php?fc=module&module=kp_productcontent&controller=${encodeURIComponent(name)}`;
-    if (this.explicitModuleUrl) return qs ? `${base}${base.includes('?') ? '&' : '?'}${qs}` : base;
-    return qs ? `${base}&${qs}` : base;
+    const base = buildModuleControllerUrl(this.explicitModuleUrl, name);
+    return qs ? `${base}${base.includes('?') ? '&' : '?'}${qs}` : base;
   }
 
   private config(): ProductContentModuleConfig {
     return (this.shop.configJson || {}) as ProductContentModuleConfig;
-  }
-
-  private usesAdminConnector() {
-    return Boolean(this.explicitModuleUrl && /\bmodule=kp_adminconnector\b|\/kp_adminconnector(?:\/|$)/i.test(this.explicitModuleUrl));
   }
 }
 

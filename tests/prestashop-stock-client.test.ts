@@ -3,8 +3,6 @@ import test from 'node:test';
 import {
   PrestaShopStockClient,
   buildAdminConnectorControllerUrl,
-  buildBulkStockSnapshotUrl,
-  buildBulkStockUrl,
   normalizeBulkStockBatchSize,
   replaceProductOrderAvailabilityXml,
   replaceProductPriceXml,
@@ -87,17 +85,6 @@ test('module URL helpers replace existing connector controllers', () => {
       { productId: 123, idShop: 2 },
     ),
     'https://shop.test/index.php?fc=module&module=kp_adminconnector&controller=stocksnapshot&productId=123&idShop=2',
-  );
-});
-
-test('bulk stock URLs carry multistore shop context', () => {
-  assert.equal(
-    buildBulkStockUrl('https://shop.test', '2'),
-    'https://shop.test/index.php?fc=module&module=kp_bulkstock&controller=bulkupdate&idShop=2',
-  );
-  assert.equal(
-    buildBulkStockSnapshotUrl('https://shop.test', 123, '2'),
-    'https://shop.test/index.php?fc=module&module=kp_bulkstock&controller=snapshot&productId=123&idShop=2',
   );
 });
 

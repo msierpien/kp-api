@@ -77,7 +77,7 @@ export class PrestaShopStockClient implements ShopStockClient {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '').replace(/\/api$/, '');
     this.apiKey = config.apiKey;
     this.prestashopShopId = normalizeNullableString(config.prestashopShopId);
-    this.bulkStockUrl = normalizeNullableString(config.bulkStockUrl) ?? buildBulkStockUrl(this.baseUrl, this.prestashopShopId);
+    this.bulkStockUrl = normalizeNullableString(config.bulkStockUrl);
     this.bulkStockApiKey = normalizeNullableString(config.bulkStockApiKey);
     this.bulkStockBatchSize = normalizeBulkStockBatchSize(config.bulkStockBatchSize);
   }
@@ -92,7 +92,7 @@ export class PrestaShopStockClient implements ShopStockClient {
 
   async bulkUpdateStock(items: BulkStockItem[]): Promise<BulkStockResult> {
     if (!this.bulkStockUrl || !this.bulkStockApiKey) {
-      throw new Error('Moduł kp_bulkstock nie jest skonfigurowany dla tego sklepu');
+      throw new Error('Moduł kp_adminconnector nie jest skonfigurowany dla tego sklepu');
     }
 
     const combined: BulkStockResult = { updated: 0, errors: [], results: [] };
@@ -112,7 +112,7 @@ export class PrestaShopStockClient implements ShopStockClient {
       }));
       for (const item of payloadItems) {
         if (item.quantity === undefined && item.leadTimeDays === undefined) {
-          throw new Error(`kp_bulkstock item for product ${item.productId} requires quantity or leadTimeDays`);
+          throw new Error(`kp_adminconnector item for product ${item.productId} requires quantity or leadTimeDays`);
         }
       }
       const res = await fetch(this.moduleUrl(this.bulkStockUrl, 'bulkupdate'), {
@@ -127,15 +127,15 @@ export class PrestaShopStockClient implements ShopStockClient {
 
       if (!res.ok) {
         const text = await res.text();
-        throw new Error(`kp_bulkstock HTTP ${res.status}: ${text.slice(0, 200)}`);
+        throw new Error(`kp_adminconnector HTTP ${res.status}: ${text.slice(0, 200)}`);
       }
 
       const json = await res.json().catch(() => null) as { success: boolean; data?: Partial<BulkStockResult>; errors?: string[] } | null;
       if (!json) {
-        throw new Error('kp_bulkstock returned non-JSON response');
+        throw new Error('kp_adminconnector returned non-JSON response');
       }
       if (!json.success) {
-        throw new Error(`kp_bulkstock error: ${json.errors?.join(', ') ?? 'Unknown error'}`);
+        throw new Error(`kp_adminconnector error: ${json.errors?.join(', ') ?? 'Unknown error'}`);
       }
 
       const result = json.data ?? {};
@@ -451,15 +451,13 @@ export class PrestaShopStockClient implements ShopStockClient {
   }
 
   private async fetchBulkStockSnapshot(externalProductId: string): Promise<BulkStockSnapshot | null> {
-    if (!this.bulkStockApiKey) return null;
+    if (!this.bulkStockApiKey || !this.bulkStockUrl) return null;
 
     const productId = Number(externalProductId);
     if (!Number.isInteger(productId) || productId <= 0) return null;
 
     try {
-      const url = this.bulkStockUrl
-        ? this.moduleUrl(this.bulkStockUrl, this.usesAdminConnectorBulkStock() ? 'stocksnapshot' : 'snapshot', { productId })
-        : buildBulkStockSnapshotUrl(this.baseUrl, productId, this.prestashopShopId);
+      const url = this.moduleUrl(this.bulkStockUrl, 'stocksnapshot', { productId });
       const response = await fetch(url, {
         method: 'GET',
         headers: {
@@ -486,10 +484,6 @@ export class PrestaShopStockClient implements ShopStockClient {
       ...params,
       idShop: this.prestashopShopId,
     });
-  }
-
-  private usesAdminConnectorBulkStock() {
-    return Boolean(this.bulkStockUrl && /\bmodule=kp_adminconnector\b|\/kp_adminconnector(?:\/|$)/i.test(this.bulkStockUrl));
   }
 }
 
@@ -591,19 +585,6 @@ function normalizeOptionalBoolean(value: unknown) {
   if (value === 1 || value === '1' || value === 'true') return true;
   if (value === 0 || value === '0' || value === 'false') return false;
   throw new Error('active must be boolean');
-}
-
-export function buildBulkStockUrl(baseUrl: string, prestashopShopId?: string | null) {
-  return withQueryParams(`${baseUrl}/index.php?fc=module&module=kp_bulkstock&controller=bulkupdate`, {
-    idShop: prestashopShopId,
-  });
-}
-
-export function buildBulkStockSnapshotUrl(baseUrl: string, productId: number, prestashopShopId?: string | null) {
-  return withQueryParams(`${baseUrl}/index.php?fc=module&module=kp_bulkstock&controller=snapshot`, {
-    productId,
-    idShop: prestashopShopId,
-  });
 }
 
 export function buildAdminConnectorControllerUrl(

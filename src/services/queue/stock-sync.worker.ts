@@ -161,7 +161,7 @@ async function processBulkBatch(
 
     const hasItemErrors = result.results.some((item) => item.status === 'error');
     if (result.errors.length > 0 && !hasItemErrors) {
-      const message = `kp_bulkstock errors: ${result.errors.join('; ')}`;
+      const message = `kp_adminconnector errors: ${result.errors.join('; ')}`;
       await markLogsFailed(items.map((item) => item.logId), message, meta);
       return { success: false, failed: items.length, message };
     }
@@ -174,13 +174,13 @@ async function processBulkBatch(
       if (!remote) {
         failed++;
         const details = result.errors.length > 0 ? `: ${result.errors.join('; ')}` : '';
-        await markLogsFailed([item.logId], `kp_bulkstock did not return item result${details}`, meta);
+        await markLogsFailed([item.logId], `kp_adminconnector did not return item result${details}`, meta);
         continue;
       }
 
       if (remote?.status === 'error') {
         failed++;
-        await markLogsFailed([item.logId], remote.message ?? 'kp_bulkstock item error', meta);
+        await markLogsFailed([item.logId], remote.message ?? 'kp_adminconnector item error', meta);
         continue;
       }
 

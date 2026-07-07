@@ -11,17 +11,10 @@ function getConfigJson(shop: Shop): Record<string, unknown> {
 export function createShopStockClient(shop: Shop): ShopStockClient {
   if (shop.platform === 'PRESTASHOP') {
     const config = getConfigJson(shop);
-    const configuredBulkStockUrl = typeof config.bulkStockUrl === 'string' && config.bulkStockUrl.trim()
-      ? config.bulkStockUrl
+    const bulkStockUrl = adminConnectorStockUrl(config);
+    const bulkStockApiKey = typeof config.adminConnectorApiKey === 'string' && config.adminConnectorApiKey
+      ? decrypt(String(config.adminConnectorApiKey))
       : null;
-    const connectorBulkStockUrl = adminConnectorStockUrl(config);
-    const bulkStockUrl = configuredBulkStockUrl ?? connectorBulkStockUrl;
-    const bulkStockUsesConnector = isAdminConnectorModuleUrl(bulkStockUrl);
-    const bulkStockApiKey = bulkStockUsesConnector && typeof config.adminConnectorApiKey === 'string' && config.adminConnectorApiKey
-        ? decrypt(String(config.adminConnectorApiKey))
-      : typeof config.bulkStockApiKey === 'string' && config.bulkStockApiKey
-        ? decrypt(config.bulkStockApiKey)
-        : null;
 
     return new PrestaShopStockClient({
       baseUrl: shop.baseUrl,
@@ -34,10 +27,6 @@ export function createShopStockClient(shop: Shop): ShopStockClient {
   }
 
   throw new Error(`Stock sync is not implemented for platform ${shop.platform}`);
-}
-
-function isAdminConnectorModuleUrl(value: string | null | undefined) {
-  return Boolean(value && /\bmodule=kp_adminconnector\b|\/kp_adminconnector(?:\/|$)/i.test(value));
 }
 
 function getPrestaShopShopId(config: Record<string, unknown>) {

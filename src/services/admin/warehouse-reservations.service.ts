@@ -98,6 +98,21 @@ type ReservationAvailability = {
   source: WarehouseReservationSource;
 };
 
+type ActiveReservationForPlanning = {
+  id: string;
+  status: WarehouseReservationStatus;
+  warehouseProductId: string;
+  quantity: Prisma.Decimal;
+  source: WarehouseReservationSource;
+  reason: string | null;
+};
+
+type ReservationSplitPlan = {
+  localQuantity: Prisma.Decimal;
+  backorderQuantity: Prisma.Decimal;
+  missingQuantity: Prisma.Decimal;
+};
+
 function normalizePage(value?: number) {
   const page = Number(value ?? 1);
   return Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
@@ -213,6 +228,112 @@ async function reserveQuantityForProduct(
     quantity: new Prisma.Decimal(0),
     source: 'LOCAL_STOCK',
   };
+}
+
+function sumReservationQuantity(reservations: Array<{ quantity: Prisma.Decimal }>) {
+  return reservations.reduce((sum, reservation) => sum.plus(reservation.quantity), new Prisma.Decimal(0));
+}
+
+async function hasWholesaleBackorderAvailability(tx: Tx, productId: string) {
+  const wholesale = await tx.wholesaleProductMapping.findFirst({
+    where: {
+      warehouseProductId: productId,
+      isActive: true,
+      lastKnownStock: { gt: new Prisma.Decimal(0) },
+      provider: { isActive: true },
+    },
+    select: { id: true },
+  });
+
+  return Boolean(wholesale);
+}
+
+async function planReservationSplit(
+  tx: Tx,
+  productId: string,
+  targetQuantity: Prisma.Decimal,
+  existingLocalQuantity: Prisma.Decimal,
+  existingBackorderQuantity: Prisma.Decimal,
+  allowNegativeStock: boolean,
+): Promise<ReservationSplitPlan> {
+  if (targetQuantity.lte(0)) {
+    return {
+      localQuantity: new Prisma.Decimal(0),
+      backorderQuantity: new Prisma.Decimal(0),
+      missingQuantity: new Prisma.Decimal(0),
+    };
+  }
+
+  if (allowNegativeStock) {
+    return {
+      localQuantity: targetQuantity,
+      backorderQuantity: new Prisma.Decimal(0),
+      missingQuantity: new Prisma.Decimal(0),
+    };
+  }
+
+  const product = await tx.warehouseProduct.findUnique({
+    where: { id: productId },
+    select: { currentStock: true },
+  });
+  const availableLocal = Prisma.Decimal.max(new Prisma.Decimal(product?.currentStock ?? 0), new Prisma.Decimal(0));
+  const localCapacity = existingLocalQuantity.plus(availableLocal);
+  const localQuantity = Prisma.Decimal.min(targetQuantity, localCapacity);
+  let remainingQuantity = targetQuantity.minus(localQuantity);
+  let backorderQuantity = Prisma.Decimal.min(existingBackorderQuantity, remainingQuantity);
+
+  remainingQuantity = remainingQuantity.minus(backorderQuantity);
+  if (remainingQuantity.gt(0) && await hasWholesaleBackorderAvailability(tx, productId)) {
+    backorderQuantity = backorderQuantity.plus(remainingQuantity);
+    remainingQuantity = new Prisma.Decimal(0);
+  }
+
+  return {
+    localQuantity,
+    backorderQuantity,
+    missingQuantity: remainingQuantity,
+  };
+}
+
+async function setActiveReservationsForSource(
+  tx: Tx,
+  reservations: ActiveReservationForPlanning[],
+  desiredQuantity: Prisma.Decimal,
+  input: CreateReservationInput & { source: WarehouseReservationSource },
+) {
+  const [primary, ...extras] = reservations;
+
+  for (const reservation of extras) {
+    await closeActiveReservationInTx(tx, reservation, 'RELEASED', 'Scalenie aktywnych rezerwacji zamówienia');
+  }
+
+  if (desiredQuantity.lte(0)) {
+    if (primary) {
+      await closeActiveReservationInTx(tx, primary, 'RELEASED', 'Aktualizacja ilości rezerwacji zamówienia');
+    }
+    return;
+  }
+
+  if (!primary) {
+    await createActiveReservationInTx(tx, input, desiredQuantity);
+    return;
+  }
+
+  const currentQuantity = new Prisma.Decimal(primary.quantity);
+  const delta = desiredQuantity.minus(currentQuantity);
+  if (delta.equals(0)) return;
+
+  await tx.warehouseReservation.update({
+    where: { id: primary.id },
+    data: {
+      quantity: desiredQuantity,
+      reason: primary.reason ?? input.reason ?? null,
+    },
+  });
+
+  if (primary.source === 'LOCAL_STOCK') {
+    await adjustProductStock(tx, primary.warehouseProductId, delta.mul(-1));
+  }
 }
 
 async function createActiveReservationInTx(tx: Tx, input: CreateReservationInput, quantity: Prisma.Decimal) {
@@ -409,22 +530,25 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
         continue;
       }
 
-      const existingReservation = await tx.warehouseReservation.findFirst({
+      const activeReservations = await tx.warehouseReservation.findMany({
         where: {
           tenantId: order.shop.tenantId,
           orderItemId: item.id,
           status: 'ACTIVE',
         },
+        orderBy: { createdAt: 'asc' },
       });
 
       if (!warehouseProduct.isStockTracked) {
-        if (existingReservation) {
+        for (const reservation of activeReservations) {
           await closeActiveReservationInTx(
             tx,
-            existingReservation,
+            reservation,
             'RELEASED',
             'Produkt wykluczony z magazynu',
           );
+        }
+        if (activeReservations.length > 0) {
           result.updated++;
         }
         result.missingMapping++;
@@ -467,17 +591,19 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
           requestedQuantity: item.quantity,
           reservedQuantity: Number(consumedQuantity),
           warehouseProductId,
-          status: existingReservation ? 'UPDATED' : 'UNCHANGED',
+          status: activeReservations.length > 0 ? 'UPDATED' : 'UNCHANGED',
           message: 'Pozycja została już wydana dokumentem WZ',
         };
 
-        if (existingReservation) {
+        for (const reservation of activeReservations) {
           await closeActiveReservationInTx(
             tx,
-            existingReservation,
+            reservation,
             'RELEASED',
             'Pozycja została już wydana dokumentem WZ',
           );
+        }
+        if (activeReservations.length > 0) {
           result.updated++;
         } else {
           result.unchanged++;
@@ -488,200 +614,93 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
 
       const targetActiveQuantity = requestedQuantity.minus(consumedQuantity);
 
-      if (existingReservation && existingReservation.warehouseProductId !== warehouseProductId) {
-        await closeActiveReservationInTx(tx, existingReservation, 'RELEASED', 'Zmiana mapowania produktu zamówienia');
-      } else if (existingReservation) {
-        const currentQuantity = new Prisma.Decimal(existingReservation.quantity);
-        const delta = targetActiveQuantity.minus(currentQuantity);
-
-        if (delta.equals(0)) {
-          if (existingReservation.source === 'WHOLESALE_BACKORDER') {
-            const localAvailability = await reserveQuantityForProduct(tx, warehouseProductId, currentQuantity, settings.allowNegativeStock);
-            if (localAvailability.source === 'LOCAL_STOCK' && localAvailability.quantity.gte(currentQuantity)) {
-              await tx.warehouseReservation.update({
-                where: { id: existingReservation.id },
-                data: {
-                  source: 'LOCAL_STOCK',
-                  reason: existingReservation.reason ?? `Towar przyjęty na magazyn dla zamówienia ${order.orderReference}`,
-                },
-              });
-              await adjustProductStock(tx, warehouseProductId, currentQuantity.mul(-1));
-              result.updated++;
-              result.issues.push({
-                orderItemId: item.id,
-                sku: item.sku,
-                productName: item.productNameSnapshot,
-                requestedQuantity: item.quantity,
-                reservedQuantity: Number(consumedQuantity.plus(currentQuantity)),
-                warehouseProductId,
-                status: 'UPDATED',
-                message: 'Rezerwacja hurtowa została przeniesiona na stan lokalny',
-              });
-              continue;
-            }
-          }
-
-          result.unchanged++;
-          result.issues.push({
-            orderItemId: item.id,
-            sku: item.sku,
-            productName: item.productNameSnapshot,
-            requestedQuantity: item.quantity,
-            reservedQuantity: Number(consumedQuantity.plus(currentQuantity)),
-            warehouseProductId,
-            status: 'UNCHANGED',
-          });
-          continue;
-        }
-
-        if (delta.lt(0)) {
-          await tx.warehouseReservation.update({
-            where: { id: existingReservation.id },
-            data: { quantity: targetActiveQuantity },
-          });
-          if (existingReservation.source === 'LOCAL_STOCK') {
-            await adjustProductStock(tx, warehouseProductId, delta.mul(-1));
-          }
-          result.updated++;
-          result.issues.push({
-            orderItemId: item.id,
-            sku: item.sku,
-            productName: item.productNameSnapshot,
-            requestedQuantity: item.quantity,
-            reservedQuantity: Number(requestedQuantity),
-            warehouseProductId,
-            status: 'UPDATED',
-            message: consumedQuantity.gt(0) ? 'Część pozycji została już wydana WZ' : undefined,
-          });
-          continue;
-        }
-
-        const additionalAvailability = await reserveQuantityForProduct(tx, warehouseProductId, delta, settings.allowNegativeStock);
-        if (additionalAvailability.quantity.lte(0) || additionalAvailability.source !== existingReservation.source) {
-          if (existingReservation.source === 'WHOLESALE_BACKORDER') {
-            const localAvailability = await reserveQuantityForProduct(tx, warehouseProductId, targetActiveQuantity, settings.allowNegativeStock);
-            if (localAvailability.source === 'LOCAL_STOCK' && localAvailability.quantity.gte(targetActiveQuantity)) {
-              await tx.warehouseReservation.update({
-                where: { id: existingReservation.id },
-                data: {
-                  quantity: targetActiveQuantity,
-                  source: 'LOCAL_STOCK',
-                  reason: existingReservation.reason ?? `Towar przyjęty na magazyn dla zamówienia ${order.orderReference}`,
-                },
-              });
-              await adjustProductStock(tx, warehouseProductId, targetActiveQuantity.mul(-1));
-              result.updated++;
-              result.issues.push({
-                orderItemId: item.id,
-                sku: item.sku,
-                productName: item.productNameSnapshot,
-                requestedQuantity: item.quantity,
-                reservedQuantity: Number(requestedQuantity),
-                warehouseProductId,
-                status: 'UPDATED',
-                message: 'Rezerwacja hurtowa została przeniesiona na stan lokalny',
-              });
-              continue;
-            }
-          }
-
-          result.missingStock++;
-          result.issues.push({
-            orderItemId: item.id,
-            sku: item.sku,
-            productName: item.productNameSnapshot,
-            requestedQuantity: item.quantity,
-            reservedQuantity: Number(consumedQuantity.plus(currentQuantity)),
-            warehouseProductId,
-            status: 'MISSING_STOCK',
-            message: additionalAvailability.source !== existingReservation.source
-              ? 'Nie można mieszać źródeł realizacji w jednej rezerwacji'
-              : 'Brak dodatkowego stanu do zwiększenia rezerwacji',
-          });
-          continue;
-        }
-
-        const nextQuantity = currentQuantity.plus(additionalAvailability.quantity);
-        await tx.warehouseReservation.update({
-          where: { id: existingReservation.id },
-          data: { quantity: nextQuantity },
-        });
-        if (existingReservation.source === 'LOCAL_STOCK') {
-          await adjustProductStock(tx, warehouseProductId, additionalAvailability.quantity.mul(-1));
-        }
-
-        if (nextQuantity.lt(targetActiveQuantity)) {
-          result.partial++;
-          result.issues.push({
-            orderItemId: item.id,
-            sku: item.sku,
-            productName: item.productNameSnapshot,
-            requestedQuantity: item.quantity,
-            reservedQuantity: Number(consumedQuantity.plus(nextQuantity)),
-            warehouseProductId,
-            status: 'PARTIAL',
-            message: 'Rezerwacja częściowa z powodu niewystarczającego stanu',
-          });
-        } else {
-          result.updated++;
-          result.issues.push({
-            orderItemId: item.id,
-            sku: item.sku,
-            productName: item.productNameSnapshot,
-            requestedQuantity: item.quantity,
-            reservedQuantity: Number(requestedQuantity),
-            warehouseProductId,
-            status: 'UPDATED',
-            message: consumedQuantity.gt(0) ? 'Część pozycji została już wydana WZ' : undefined,
-          });
-        }
-        continue;
+      const staleReservations = activeReservations.filter((reservation) => reservation.warehouseProductId !== warehouseProductId);
+      for (const reservation of staleReservations) {
+        await closeActiveReservationInTx(tx, reservation, 'RELEASED', 'Zmiana mapowania produktu zamówienia');
       }
 
-      const availability = await reserveQuantityForProduct(tx, warehouseProductId, targetActiveQuantity, settings.allowNegativeStock);
-      if (availability.quantity.lte(0)) {
-        result.missingStock++;
-        result.issues.push({
-          orderItemId: item.id,
-          sku: item.sku,
-          productName: item.productNameSnapshot,
-          requestedQuantity: item.quantity,
-          reservedQuantity: Number(consumedQuantity),
-          warehouseProductId,
-          status: 'MISSING_STOCK',
-          message: 'Brak stanu do rezerwacji',
-        });
-        continue;
-      }
-
-      await createActiveReservationInTx(
+      const productReservations = activeReservations.filter((reservation) => reservation.warehouseProductId === warehouseProductId);
+      const localReservations = productReservations.filter((reservation) => reservation.source === 'LOCAL_STOCK');
+      const backorderReservations = productReservations.filter((reservation) => reservation.source === 'WHOLESALE_BACKORDER');
+      const existingLocalQuantity = sumReservationQuantity(localReservations);
+      const existingBackorderQuantity = sumReservationQuantity(backorderReservations);
+      const plan = await planReservationSplit(
         tx,
+        warehouseProductId,
+        targetActiveQuantity,
+        existingLocalQuantity,
+        existingBackorderQuantity,
+        settings.allowNegativeStock,
+      );
+      const nextActiveQuantity = plan.localQuantity.plus(plan.backorderQuantity);
+      const totalReservedQuantity = consumedQuantity.plus(nextActiveQuantity);
+      const changed = staleReservations.length > 0 ||
+        !existingLocalQuantity.equals(plan.localQuantity) ||
+        !existingBackorderQuantity.equals(plan.backorderQuantity);
+      const hadProductReservation = productReservations.length > 0;
+      const baseReservationInput = {
+        tenantId: order.shop.tenantId,
+        warehouseProductId,
+        orderId: order.id,
+        orderItemId: item.id,
+        expectedShipDate: item.shippingDate ?? null,
+        reason: `Zamówienie ${order.orderReference}`,
+      };
+
+      await setActiveReservationsForSource(
+        tx,
+        localReservations,
+        plan.localQuantity,
         {
-          tenantId: order.shop.tenantId,
-          warehouseProductId,
-          orderId: order.id,
-          orderItemId: item.id,
-          quantity: availability.quantity,
-          source: availability.source,
-          expectedShipDate: item.shippingDate ?? null,
-          reason: `Zamówienie ${order.orderReference}`,
+          ...baseReservationInput,
+          quantity: plan.localQuantity,
+          source: 'LOCAL_STOCK',
         },
-        availability.quantity,
+      );
+      await setActiveReservationsForSource(
+        tx,
+        backorderReservations,
+        plan.backorderQuantity,
+        {
+          ...baseReservationInput,
+          quantity: plan.backorderQuantity,
+          source: 'WHOLESALE_BACKORDER',
+        },
       );
 
-      if (availability.quantity.lt(targetActiveQuantity)) {
+      const splitMessage = plan.localQuantity.gt(0) && plan.backorderQuantity.gt(0)
+        ? 'Część pozycji zarezerwowana lokalnie, reszta do domówienia'
+        : plan.backorderQuantity.gt(0)
+          ? 'Pozycja do domówienia z hurtowni'
+          : consumedQuantity.gt(0)
+            ? 'Część pozycji została już wydana WZ'
+            : undefined;
+
+      if (plan.missingQuantity.gt(0) && totalReservedQuantity.gt(consumedQuantity)) {
         result.partial++;
         result.issues.push({
           orderItemId: item.id,
           sku: item.sku,
           productName: item.productNameSnapshot,
           requestedQuantity: item.quantity,
-          reservedQuantity: Number(consumedQuantity.plus(availability.quantity)),
+          reservedQuantity: Number(totalReservedQuantity),
           warehouseProductId,
           status: 'PARTIAL',
-          message: 'Rezerwacja częściowa z powodu niewystarczającego stanu',
+          message: 'Rezerwacja częściowa z powodu niewystarczającego stanu lub braku oferty hurtowni',
         });
-      } else {
+      } else if (plan.missingQuantity.gt(0)) {
+        result.missingStock++;
+        result.issues.push({
+          orderItemId: item.id,
+          sku: item.sku,
+          productName: item.productNameSnapshot,
+          requestedQuantity: item.quantity,
+          reservedQuantity: Number(totalReservedQuantity),
+          warehouseProductId,
+          status: 'MISSING_STOCK',
+          message: 'Brak stanu lub aktywnej oferty hurtowni do rezerwacji',
+        });
+      } else if (!hadProductReservation && nextActiveQuantity.gt(0)) {
         result.reserved++;
         result.issues.push({
           orderItemId: item.id,
@@ -691,7 +710,33 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
           reservedQuantity: Number(requestedQuantity),
           warehouseProductId,
           status: 'RESERVED',
-          message: consumedQuantity.gt(0) ? 'Zarezerwowano pozostałą ilość po WZ' : undefined,
+          message: splitMessage,
+        });
+      } else if (changed) {
+        result.updated++;
+        result.issues.push({
+          orderItemId: item.id,
+          sku: item.sku,
+          productName: item.productNameSnapshot,
+          requestedQuantity: item.quantity,
+          reservedQuantity: Number(totalReservedQuantity),
+          warehouseProductId,
+          status: 'UPDATED',
+          message: existingBackorderQuantity.gt(0) && plan.backorderQuantity.equals(0) && plan.localQuantity.gte(targetActiveQuantity)
+            ? 'Rezerwacja hurtowa została przeniesiona na stan lokalny'
+            : splitMessage,
+        });
+      } else {
+        result.unchanged++;
+        result.issues.push({
+          orderItemId: item.id,
+          sku: item.sku,
+          productName: item.productNameSnapshot,
+          requestedQuantity: item.quantity,
+          reservedQuantity: Number(totalReservedQuantity),
+          warehouseProductId,
+          status: 'UNCHANGED',
+          message: splitMessage,
         });
       }
     }

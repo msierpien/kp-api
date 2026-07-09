@@ -110,6 +110,7 @@ type ActiveReservationForPlanning = {
 type ReservationSplitPlan = {
   localQuantity: Prisma.Decimal;
   backorderQuantity: Prisma.Decimal;
+  backorderShortfallQuantity: Prisma.Decimal;
   missingQuantity: Prisma.Decimal;
 };
 
@@ -260,6 +261,7 @@ async function planReservationSplit(
     return {
       localQuantity: new Prisma.Decimal(0),
       backorderQuantity: new Prisma.Decimal(0),
+      backorderShortfallQuantity: new Prisma.Decimal(0),
       missingQuantity: new Prisma.Decimal(0),
     };
   }
@@ -268,6 +270,7 @@ async function planReservationSplit(
     return {
       localQuantity: targetQuantity,
       backorderQuantity: new Prisma.Decimal(0),
+      backorderShortfallQuantity: new Prisma.Decimal(0),
       missingQuantity: new Prisma.Decimal(0),
     };
   }
@@ -277,21 +280,53 @@ async function planReservationSplit(
     select: { currentStock: true },
   });
   const availableLocal = Prisma.Decimal.max(new Prisma.Decimal(product?.currentStock ?? 0), new Prisma.Decimal(0));
+  const hasBackorderAvailability = await hasWholesaleBackorderAvailability(tx, productId);
+
+  if (existingBackorderQuantity.gt(0)) {
+    if (availableLocal.gte(targetQuantity)) {
+      return {
+        localQuantity: targetQuantity,
+        backorderQuantity: new Prisma.Decimal(0),
+        backorderShortfallQuantity: new Prisma.Decimal(0),
+        missingQuantity: new Prisma.Decimal(0),
+      };
+    }
+
+    return {
+      localQuantity: new Prisma.Decimal(0),
+      backorderQuantity: targetQuantity,
+      backorderShortfallQuantity: new Prisma.Decimal(0),
+      missingQuantity: hasBackorderAvailability ? new Prisma.Decimal(0) : targetQuantity,
+    };
+  }
+
   const localCapacity = existingLocalQuantity.plus(availableLocal);
   const localQuantity = Prisma.Decimal.min(targetQuantity, localCapacity);
-  let remainingQuantity = targetQuantity.minus(localQuantity);
-  let backorderQuantity = Prisma.Decimal.min(existingBackorderQuantity, remainingQuantity);
+  const remainingQuantity = targetQuantity.minus(localQuantity);
 
-  remainingQuantity = remainingQuantity.minus(backorderQuantity);
-  if (remainingQuantity.gt(0) && await hasWholesaleBackorderAvailability(tx, productId)) {
-    backorderQuantity = backorderQuantity.plus(remainingQuantity);
-    remainingQuantity = new Prisma.Decimal(0);
+  if (localQuantity.gt(0)) {
+    return {
+      localQuantity,
+      backorderQuantity: new Prisma.Decimal(0),
+      backorderShortfallQuantity: hasBackorderAvailability ? remainingQuantity : new Prisma.Decimal(0),
+      missingQuantity: hasBackorderAvailability ? new Prisma.Decimal(0) : remainingQuantity,
+    };
+  }
+
+  if (hasBackorderAvailability) {
+    return {
+      localQuantity: new Prisma.Decimal(0),
+      backorderQuantity: targetQuantity,
+      backorderShortfallQuantity: new Prisma.Decimal(0),
+      missingQuantity: new Prisma.Decimal(0),
+    };
   }
 
   return {
-    localQuantity,
-    backorderQuantity,
-    missingQuantity: remainingQuantity,
+    localQuantity: new Prisma.Decimal(0),
+    backorderQuantity: new Prisma.Decimal(0),
+    backorderShortfallQuantity: new Prisma.Decimal(0),
+    missingQuantity: targetQuantity,
   };
 }
 
@@ -634,6 +669,7 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
       );
       const nextActiveQuantity = plan.localQuantity.plus(plan.backorderQuantity);
       const totalReservedQuantity = consumedQuantity.plus(nextActiveQuantity);
+      const totalCoveredQuantity = totalReservedQuantity.plus(plan.backorderShortfallQuantity);
       const changed = staleReservations.length > 0 ||
         !existingLocalQuantity.equals(plan.localQuantity) ||
         !existingBackorderQuantity.equals(plan.backorderQuantity);
@@ -646,29 +682,56 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
         expectedShipDate: item.shippingDate ?? null,
         reason: `Zamówienie ${order.orderReference}`,
       };
+      const closesBackorderBeforeLocal = plan.localQuantity.gt(0) &&
+        plan.backorderQuantity.lte(0) &&
+        localReservations.length === 0 &&
+        backorderReservations.length > 0;
 
-      await setActiveReservationsForSource(
-        tx,
-        localReservations,
-        plan.localQuantity,
-        {
-          ...baseReservationInput,
-          quantity: plan.localQuantity,
-          source: 'LOCAL_STOCK',
-        },
-      );
-      await setActiveReservationsForSource(
-        tx,
-        backorderReservations,
-        plan.backorderQuantity,
-        {
-          ...baseReservationInput,
-          quantity: plan.backorderQuantity,
-          source: 'WHOLESALE_BACKORDER',
-        },
-      );
+      if (closesBackorderBeforeLocal) {
+        await setActiveReservationsForSource(
+          tx,
+          backorderReservations,
+          new Prisma.Decimal(0),
+          {
+            ...baseReservationInput,
+            quantity: new Prisma.Decimal(0),
+            source: 'WHOLESALE_BACKORDER',
+          },
+        );
+        await setActiveReservationsForSource(
+          tx,
+          localReservations,
+          plan.localQuantity,
+          {
+            ...baseReservationInput,
+            quantity: plan.localQuantity,
+            source: 'LOCAL_STOCK',
+          },
+        );
+      } else {
+        await setActiveReservationsForSource(
+          tx,
+          localReservations,
+          plan.localQuantity,
+          {
+            ...baseReservationInput,
+            quantity: plan.localQuantity,
+            source: 'LOCAL_STOCK',
+          },
+        );
+        await setActiveReservationsForSource(
+          tx,
+          backorderReservations,
+          plan.backorderQuantity,
+          {
+            ...baseReservationInput,
+            quantity: plan.backorderQuantity,
+            source: 'WHOLESALE_BACKORDER',
+          },
+        );
+      }
 
-      const splitMessage = plan.localQuantity.gt(0) && plan.backorderQuantity.gt(0)
+      const splitMessage = plan.backorderShortfallQuantity.gt(0)
         ? 'Część pozycji zarezerwowana lokalnie, reszta do domówienia'
         : plan.backorderQuantity.gt(0)
           ? 'Pozycja do domówienia z hurtowni'
@@ -707,7 +770,7 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
           sku: item.sku,
           productName: item.productNameSnapshot,
           requestedQuantity: item.quantity,
-          reservedQuantity: Number(requestedQuantity),
+          reservedQuantity: Number(totalCoveredQuantity),
           warehouseProductId,
           status: 'RESERVED',
           message: splitMessage,
@@ -719,7 +782,7 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
           sku: item.sku,
           productName: item.productNameSnapshot,
           requestedQuantity: item.quantity,
-          reservedQuantity: Number(totalReservedQuantity),
+          reservedQuantity: Number(totalCoveredQuantity),
           warehouseProductId,
           status: 'UPDATED',
           message: existingBackorderQuantity.gt(0) && plan.backorderQuantity.equals(0) && plan.localQuantity.gte(targetActiveQuantity)
@@ -733,7 +796,7 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
           sku: item.sku,
           productName: item.productNameSnapshot,
           requestedQuantity: item.quantity,
-          reservedQuantity: Number(totalReservedQuantity),
+          reservedQuantity: Number(totalCoveredQuantity),
           warehouseProductId,
           status: 'UNCHANGED',
           message: splitMessage,

@@ -545,6 +545,103 @@ async function getOrderReplenishment(
       { orderRef },
     );
   }
+
+  const wholesaleOrderItems = await prisma.orderItem.findMany({
+    where: {
+      warehouseProductId: { not: null },
+      shippingSource: 'WHOLESALE_BACKORDER',
+      order: {
+        shop: { tenantId },
+        operationalStatus: { in: STOCK_RESERVATION_ORDER_OPERATIONAL_STATUSES },
+      },
+    },
+    select: {
+      id: true,
+      sku: true,
+      productNameSnapshot: true,
+      quantity: true,
+      warehouseProductId: true,
+      warehouseProduct: {
+        select: { id: true, sku: true, name: true, unit: true },
+      },
+      order: {
+        select: { id: true, orderReference: true, externalOrderId: true },
+      },
+      warehouseReservations: {
+        where: {
+          status: { in: ['ACTIVE', 'CONSUMED'] },
+        },
+        select: {
+          warehouseProductId: true,
+          quantity: true,
+          status: true,
+          source: true,
+        },
+      },
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+  const shortfallItems = wholesaleOrderItems
+    .map((item) => {
+      const coveredQuantity = item.warehouseReservations.reduce((sum, reservation) => {
+        if (reservation.warehouseProductId !== item.warehouseProductId) return sum;
+        if (reservation.status === 'ACTIVE') return sum + toNumber(reservation.quantity);
+        if (reservation.status === 'CONSUMED') return sum + toNumber(reservation.quantity);
+        return sum;
+      }, 0);
+      return {
+        item,
+        shortfall: roundQuantity(Math.max(0, item.quantity - coveredQuantity)),
+      };
+    })
+    .filter(({ item, shortfall }) => item.warehouseProduct && item.warehouseProductId && shortfall > 0);
+
+  const shortfallOffersByProductId = await loadBestOffersForProducts(
+    tenantId,
+    shortfallItems.map(({ item }) => item.warehouseProductId ?? ''),
+    providerId,
+  );
+
+  for (const { item, shortfall } of shortfallItems) {
+    if (!item.warehouseProduct || !item.warehouseProductId) continue;
+
+    const offer = shortfallOffersByProductId.get(item.warehouseProductId);
+    const orderRef = item.order.orderReference || item.order.externalOrderId || null;
+
+    if (!offer) {
+      if (!providerId) {
+        const alreadyReported = uncovered.some((uncoveredItem) => (
+          uncoveredItem.orderItemId === item.id &&
+          uncoveredItem.warehouseProductId === item.warehouseProductId &&
+          uncoveredItem.cause === 'MISSING_STOCK'
+        ));
+
+        if (!alreadyReported) {
+          uncovered.push({
+            id: `order-item-shortfall:${item.id}`,
+            sku: item.sku,
+            name: item.productNameSnapshot,
+            quantity: shortfall,
+            orderRef,
+            orderItemId: item.id,
+            warehouseProductId: item.warehouseProductId,
+            cause: 'MISSING_STOCK',
+            message: 'Brak aktywnej oferty hurtowni dla brakującej części zamówienia',
+          });
+        }
+      }
+      continue;
+    }
+
+    addReplenishmentItem(
+      providers,
+      offer,
+      item.warehouseProduct,
+      shortfall,
+      'ORDER',
+      { orderRef },
+    );
+  }
 }
 
 async function getLowStockReplenishment(

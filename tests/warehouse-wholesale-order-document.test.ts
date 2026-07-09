@@ -9,6 +9,10 @@ const MIGRATION = readFileSync(
   join(ROOT, 'prisma/migrations/20260615120000_add_wholesale_order_document/migration.sql'),
   'utf8',
 );
+const RESERVATION_FLOW_MIGRATION = readFileSync(
+  join(ROOT, 'prisma/migrations/20260517133000_add_order_reservation_flow/migration.sql'),
+  'utf8',
+);
 const DOCS_SERVICE = readFileSync(join(ROOT, 'src/services/admin/warehouse-documents.service.ts'), 'utf8');
 const DOCS_ROUTES = readFileSync(join(ROOT, 'src/routes/admin/warehouse/documents.routes.ts'), 'utf8');
 const ORDERS_ROUTES = readFileSync(join(ROOT, 'src/routes/admin/orders.routes.ts'), 'utf8');
@@ -107,9 +111,19 @@ describe('warehouse wholesale order document (ZH)', () => {
     assert.match(RESERVATIONS_SERVICE, /planReservationSplit/);
     assert.match(RESERVATIONS_SERVICE, /localQuantity/);
     assert.match(RESERVATIONS_SERVICE, /backorderQuantity/);
+    assert.match(RESERVATIONS_SERVICE, /backorderShortfallQuantity/);
+    assert.match(RESERVATION_FLOW_MIGRATION, /warehouse_reservations_active_order_item_uidx/);
     assert.match(RESERVATIONS_SERVICE, /source: 'LOCAL_STOCK'/);
     assert.match(RESERVATIONS_SERVICE, /source: 'WHOLESALE_BACKORDER'/);
+    assert.match(RESERVATIONS_SERVICE, /closesBackorderBeforeLocal/);
     assert.match(RESERVATIONS_SERVICE, /Część pozycji zarezerwowana lokalnie, reszta do domówienia/);
     assert.match(RESERVATIONS_SERVICE, /Rezerwacja hurtowa została przeniesiona na stan lokalny/);
+  });
+
+  it('replenishment dolicza hurtowe braki z pozycji zamówienia', () => {
+    assert.match(REPLENISHMENT_SERVICE, /shippingSource: 'WHOLESALE_BACKORDER'/);
+    assert.match(REPLENISHMENT_SERVICE, /warehouseReservations/);
+    assert.match(REPLENISHMENT_SERVICE, /order-item-shortfall/);
+    assert.match(REPLENISHMENT_SERVICE, /Brak aktywnej oferty hurtowni dla brakującej części zamówienia/);
   });
 });

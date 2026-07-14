@@ -312,6 +312,18 @@ export async function getDocuments(query: DocumentsQuery = {}) {
     }),
   ]);
   const documentIds = documents.map((document) => document.id);
+  const relatedPzIds = documents
+    .map((document) => document.type === 'ZH' && document.metadataJson && typeof document.metadataJson === 'object' && !Array.isArray(document.metadataJson)
+      ? (document.metadataJson as Record<string, unknown>).convertedToPzDocumentId
+      : null)
+    .filter((id): id is string => typeof id === 'string');
+  const relatedPzDocuments = relatedPzIds.length === 0
+    ? []
+    : await prisma.warehouseDocument.findMany({
+        where: { id: { in: relatedPzIds }, type: 'PZ' },
+        select: { id: true, number: true, status: true },
+      });
+  const relatedPzById = new Map(relatedPzDocuments.map((document) => [document.id, document]));
   const [quantityGroups, valueGroups] = documentIds.length === 0
     ? [[], []] as const
     : await Promise.all([
@@ -332,6 +344,9 @@ export async function getDocuments(query: DocumentsQuery = {}) {
   const valueByDocumentId = new Map(valueGroups.map((row) => [row.documentId, Number(row.totalValue ?? 0)]));
   const data = documents.map((document) => ({
     ...document,
+    relatedPz: document.type === 'ZH' && document.metadataJson && typeof document.metadataJson === 'object' && !Array.isArray(document.metadataJson)
+      ? relatedPzById.get(String((document.metadataJson as Record<string, unknown>).convertedToPzDocumentId)) ?? null
+      : null,
     itemsCount: document._count.items,
     totalQuantity: quantityByDocumentId.get(document.id) ?? 0,
     totalValue: valueByDocumentId.get(document.id) ?? 0,

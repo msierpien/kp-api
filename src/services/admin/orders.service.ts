@@ -28,6 +28,7 @@ export interface OrderListItem {
   orderReference: string;
   customerEmail: string;
   customerName: string | null;
+  customerPhone: string | null;
   currency: string;
   totalPaid: number;
   paymentStatus: 'paid' | 'unpaid' | 'unknown';
@@ -47,6 +48,10 @@ export interface OrderListItem {
     platform: string;
   };
   itemsCount: number;
+  itemsReadiness: {
+    ready: number;
+    total: number;
+  };
   personalizationSummary: {
     total: number;
     waiting: number;
@@ -249,6 +254,8 @@ export async function getOrdersList(query: OrdersListQueryInput): Promise<Pagina
         orderReference: true,
         customerEmail: true,
         customerName: true,
+        billingAddressJson: true,
+        deliveryAddressJson: true,
         currency: true,
         totalPaid: true,
         paymentMethod: true,
@@ -273,6 +280,13 @@ export async function getOrdersList(query: OrdersListQueryInput): Promise<Pagina
         },
         items: {
           select: {
+            quantity: true,
+            warehouseProductId: true,
+            shippingSource: true,
+            warehouseReservations: {
+              where: { status: { in: ['ACTIVE', 'CONSUMED'] } },
+              select: { quantity: true, source: true },
+            },
             personalizationCase: {
               select: { status: true },
             },
@@ -300,6 +314,24 @@ export async function getOrdersList(query: OrdersListQueryInput): Promise<Pagina
       .map((item) => item.personalizationCase)
       .filter((item): item is NonNullable<typeof item> => Boolean(item));
     const invoice = order.salesDocuments[0] ?? null;
+    const addressValue = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : null;
+    const readPhone = (value: unknown) => {
+      const address = addressValue(value);
+      for (const key of ['phone_mobile', 'phoneMobile', 'phone']) {
+        const phone = address?.[key];
+        if (typeof phone === 'string' && phone.trim()) return phone.trim();
+      }
+      return null;
+    };
+    const readyItems = order.items.filter((item) => {
+      if (!item.warehouseProductId) return false;
+      const reserved = item.warehouseReservations
+        .filter((reservation) => reservation.source === 'LOCAL_STOCK')
+        .reduce((sum, reservation) => sum + Number(reservation.quantity), 0);
+      return reserved >= item.quantity;
+    }).length;
 
     return {
       id: order.id,
@@ -308,6 +340,7 @@ export async function getOrdersList(query: OrdersListQueryInput): Promise<Pagina
       orderReference: order.orderReference,
       customerEmail: order.customerEmail,
       customerName: order.customerName,
+      customerPhone: readPhone(order.deliveryAddressJson) ?? readPhone(order.billingAddressJson),
       currency: order.currency,
       totalPaid: Number(order.totalPaid),
       paymentStatus: paymentStatusForOrder(order.operationalStatus),
@@ -323,6 +356,7 @@ export async function getOrdersList(query: OrdersListQueryInput): Promise<Pagina
       shippingPromiseLabel: order.shippingPromiseLabel,
       shop: order.shop,
       itemsCount: order._count.items,
+      itemsReadiness: { ready: readyItems, total: order._count.items },
       personalizationSummary: {
         total: cases.length,
         waiting: cases.filter((item) => item.status === 'WAITING_FOR_CUSTOMER').length,

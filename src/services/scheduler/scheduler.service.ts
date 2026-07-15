@@ -22,8 +22,10 @@ const scheduledTasks = new Map<string, ScheduledTask>();
 const scheduledWholesaleTasks = new Map<string, ScheduledTask>();
 const scheduledCompetitorPriceTasks = new Map<string, ScheduledTask>();
 const ACTIVE_WHOLESALE_SYNC_STATUSES = ['PENDING', 'PROCESSING'] as const;
-const DAILY_INVENTORY_WARNING =
-  'Synchronizacja hurtowni była jeszcze w toku; opublikowano najnowsze zakończone dane hurtowni.';
+const DAILY_INVENTORY_WHOLESALE_WAIT_TIMEOUT_MS = 30 * 60_000;
+const DAILY_INVENTORY_WHOLESALE_WAIT_INTERVAL_MS = 10_000;
+const DAILY_INVENTORY_BLOCKED_WARNING =
+  'Synchronizacja hurtowni nadal trwa; pominięto dzienną publikację stanów, żeby nie wysłać nieaktualnych danych.';
 
 /**
  * Konwersja interwału (w minutach) na cron expression
@@ -157,6 +159,42 @@ function stopWholesaleSync(providerId: string) {
     scheduledWholesaleTasks.delete(providerId);
     console.log(`[Scheduler] 🛑 Stopped wholesale sync for provider: ${providerId}`);
   }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function countActiveWholesaleSyncs() {
+  return prisma.wholesaleSyncLog.count({
+    where: {
+      status: { in: [...ACTIVE_WHOLESALE_SYNC_STATUSES] },
+      provider: {
+        isActive: true,
+        syncEnabled: true,
+        platform: 'CSV_FEED',
+      },
+    },
+  });
+}
+
+async function waitForWholesaleSyncsToFinish() {
+  const deadline = Date.now() + DAILY_INVENTORY_WHOLESALE_WAIT_TIMEOUT_MS;
+  let activeWholesaleSyncs = await countActiveWholesaleSyncs();
+
+  if (activeWholesaleSyncs > 0) {
+    console.warn(
+      `[Scheduler] ⏳ Waiting for wholesale syncs before inventory publication: ` +
+      `${activeWholesaleSyncs} active`
+    );
+  }
+
+  while (activeWholesaleSyncs > 0 && Date.now() < deadline) {
+    await sleep(Math.min(DAILY_INVENTORY_WHOLESALE_WAIT_INTERVAL_MS, deadline - Date.now()));
+    activeWholesaleSyncs = await countActiveWholesaleSyncs();
+  }
+
+  return activeWholesaleSyncs;
 }
 
 async function runCompetitorPriceAutomation(tenantId: string, shopId: string, shopName: string) {
@@ -445,20 +483,14 @@ async function runDailyInventoryPublication() {
       }
     }
 
-    const activeWholesaleSyncs = await prisma.wholesaleSyncLog.count({
-      where: {
-        status: { in: [...ACTIVE_WHOLESALE_SYNC_STATUSES] },
-        provider: {
-          isActive: true,
-          syncEnabled: true,
-          platform: 'CSV_FEED',
-        },
-      },
-    });
-
-    const warningMessage = activeWholesaleSyncs > 0 ? DAILY_INVENTORY_WARNING : undefined;
-    if (warningMessage) {
-      console.warn(`[Scheduler] ⚠️ ${warningMessage} Aktywne logi hurtowni: ${activeWholesaleSyncs}`);
+    const activeWholesaleSyncs = await waitForWholesaleSyncsToFinish();
+    if (activeWholesaleSyncs > 0) {
+      const duration = Date.now() - startTime.getTime();
+      console.warn(
+        `[Scheduler] ⚠️ ${DAILY_INVENTORY_BLOCKED_WARNING} ` +
+        `Aktywne logi hurtowni: ${activeWholesaleSyncs}, czas=${duration}ms`
+      );
+      return;
     }
 
     const shops = await prisma.shop.findMany({
@@ -483,7 +515,7 @@ async function runDailyInventoryPublication() {
     let shopErrors = 0;
     for (const shop of shops) {
       try {
-        const result = await syncStockForShop(shop.id, 'SCHEDULED', { warningMessage });
+        const result = await syncStockForShop(shop.id, 'SCHEDULED');
         enqueued += result.enqueued;
         console.log(`[Scheduler] 📤 Inventory publication queued for ${shop.name}: ${result.enqueued} jobs`);
       } catch (error) {

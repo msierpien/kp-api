@@ -11,6 +11,7 @@ import type {
 export const DEFAULT_BULK_STOCK_BATCH_SIZE = 500;
 export const MIN_BULK_STOCK_BATCH_SIZE = 1;
 export const MAX_BULK_STOCK_BATCH_SIZE = 500;
+const BULK_STOCK_REQUEST_TIMEOUT_MS = 300_000;
 
 export interface BulkStockItem {
   productId: number;
@@ -123,6 +124,7 @@ export class PrestaShopStockClient implements ShopStockClient {
           'X-Api-Key': this.bulkStockApiKey,
         },
         body: JSON.stringify({ items: payloadItems }),
+        signal: AbortSignal.timeout(BULK_STOCK_REQUEST_TIMEOUT_MS),
       });
 
       if (!res.ok) {

@@ -42,7 +42,18 @@ export interface PublishInventoryOptions {
   triggeredBy: StockSyncTriggeredBy;
   documentId?: string;
   warningMessage?: string;
+  skipUnchangedPublication?: boolean;
 }
+
+export type PublishedInventoryState = {
+  publishedQuantity: Prisma.Decimal | null;
+  inStockQuantity: Prisma.Decimal | null;
+  publishedLeadTimeDays: number | null;
+  publishedWarehouseAvailableAt: Date | null;
+  availabilityPolicy: string | null;
+  outOfStockBehavior: number | null;
+  publishedProductActive: boolean | null;
+};
 
 type ProductForPublication = {
   id: string;
@@ -295,8 +306,13 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
     { warningMessage: options.warningMessage },
   );
 
+  const lastPublishedByMapping = options.skipUnchangedPublication
+    ? await getLastPublishedInventoryStates(mappings)
+    : new Map<string, PublishedInventoryState>();
+
   let enqueued = 0;
   let batchJobs = 0;
+  let skippedUnchangedPublication = 0;
   const logs = [];
   const batchItemsByShop = new Map<string, {
     tenantId: string;
@@ -316,12 +332,33 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
     const publishedLeadTimeDays = publishedLeadTime.leadTimeDays;
     const publishedWarehouseAvailableAt = resolvePublishedWarehouseAvailableAt(decision, publishedLeadTimeDays);
     const publishActive = resolvePublishedProductActive(decision, mapping.shop.configJson);
+    const nextPublishedState: PublishedInventoryState = {
+      publishedQuantity: decision.publishedQuantity,
+      inStockQuantity: decision.inStockQuantity ?? null,
+      publishedLeadTimeDays,
+      publishedWarehouseAvailableAt,
+      availabilityPolicy: decision.availabilityPolicy,
+      outOfStockBehavior: decision.outOfStockBehavior,
+      publishedProductActive: publishActive ?? null,
+    };
+
+    if (
+      options.skipUnchangedPublication &&
+      isSamePublishedInventoryState(
+        lastPublishedByMapping.get(publicationStateKey(mapping.shopId, product.id, mapping.externalProductId)),
+        nextPublishedState,
+      )
+    ) {
+      skippedUnchangedPublication++;
+      continue;
+    }
 
     const log = await prisma.stockSyncLog.create({
       data: {
         tenantId: product.tenantId,
         warehouseProductId: product.id,
         shopId: mapping.shopId,
+        externalProductId: mapping.externalProductId,
         triggeredBy: options.triggeredBy,
         documentId: options.documentId,
         stockBefore: null,
@@ -332,6 +369,7 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
         publishedWarehouseAvailableAt,
         availabilityPolicy: decision.availabilityPolicy,
         outOfStockBehavior: decision.outOfStockBehavior,
+        publishedProductActive: publishActive ?? null,
         warningMessage: decision.warningMessage,
         status: 'PENDING',
       },
@@ -376,7 +414,90 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
     skippedInactiveProducts,
     skippedUntrackedProducts,
     skippedMissingProducts,
+    skippedUnchangedPublication,
   };
+}
+
+async function getLastPublishedInventoryStates(mappings: Array<{
+  shopId: string;
+  externalProductId: string;
+  warehouseProduct: { id: string } | null;
+}>) {
+  const shopIds = Array.from(new Set(mappings.map((mapping) => mapping.shopId)));
+  const warehouseProductIds = Array.from(new Set(
+    mappings.flatMap((mapping) => mapping.warehouseProduct ? [mapping.warehouseProduct.id] : []),
+  ));
+  if (shopIds.length === 0 || warehouseProductIds.length === 0) {
+    return new Map<string, PublishedInventoryState>();
+  }
+
+  const logs = await prisma.stockSyncLog.findMany({
+    where: {
+      shopId: { in: shopIds },
+      warehouseProductId: { in: warehouseProductIds },
+      status: { in: ['PENDING', 'PROCESSING', 'SUCCESS'] },
+    },
+    select: {
+      shopId: true,
+      warehouseProductId: true,
+      externalProductId: true,
+      publishedQuantity: true,
+      inStockQuantity: true,
+      publishedLeadTimeDays: true,
+      publishedWarehouseAvailableAt: true,
+      availabilityPolicy: true,
+      outOfStockBehavior: true,
+      publishedProductActive: true,
+      createdAt: true,
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  const states = new Map<string, PublishedInventoryState>();
+  for (const log of logs) {
+    if (!log.externalProductId) continue;
+    const key = publicationStateKey(log.shopId, log.warehouseProductId, log.externalProductId);
+    if (states.has(key)) continue;
+    states.set(key, {
+      publishedQuantity: log.publishedQuantity,
+      inStockQuantity: log.inStockQuantity,
+      publishedLeadTimeDays: log.publishedLeadTimeDays,
+      publishedWarehouseAvailableAt: log.publishedWarehouseAvailableAt,
+      availabilityPolicy: log.availabilityPolicy,
+      outOfStockBehavior: log.outOfStockBehavior,
+      publishedProductActive: log.publishedProductActive,
+    });
+  }
+
+  return states;
+}
+
+export function isSamePublishedInventoryState(
+  previous: PublishedInventoryState | undefined,
+  next: PublishedInventoryState,
+) {
+  if (!previous) return false;
+
+  return sameNullableDecimal(previous.publishedQuantity, next.publishedQuantity) &&
+    sameNullableDecimal(previous.inStockQuantity, next.inStockQuantity) &&
+    previous.publishedLeadTimeDays === next.publishedLeadTimeDays &&
+    sameDateOnly(previous.publishedWarehouseAvailableAt, next.publishedWarehouseAvailableAt) &&
+    previous.availabilityPolicy === next.availabilityPolicy &&
+    previous.outOfStockBehavior === next.outOfStockBehavior &&
+    previous.publishedProductActive === next.publishedProductActive;
+}
+
+function publicationStateKey(shopId: string, warehouseProductId: string, externalProductId: string) {
+  return `${shopId}:${warehouseProductId}:${externalProductId}`;
+}
+
+function sameNullableDecimal(a: Prisma.Decimal | null, b: Prisma.Decimal | null) {
+  if (a === null || b === null) return a === b;
+  return a.eq(b);
+}
+
+function sameDateOnly(a: Date | null, b: Date | null) {
+  return (a?.toISOString().slice(0, 10) ?? null) === (b?.toISOString().slice(0, 10) ?? null);
 }
 
 export async function syncStockToAllShops(

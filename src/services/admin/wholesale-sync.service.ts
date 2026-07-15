@@ -199,9 +199,13 @@ export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
 
     let created = 0;
     let updated = 0;
+    let unchanged = 0;
     let skipped = 0;
     let processed = 0;
     let handledMissingFromFeed = 0;
+    let productsRecalculated = 0;
+    let stockSyncEnqueued = 0;
+    let stockSyncSkipped = 0;
 
     for (let offset = 0; offset < limitedRecords.length; offset += batchSize) {
       const batch = limitedRecords.slice(offset, offset + batchSize);
@@ -214,7 +218,11 @@ export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
 
       created += result.created;
       updated += result.updated;
+      unchanged += result.unchanged;
       skipped += result.skipped;
+      productsRecalculated += result.productsRecalculated;
+      stockSyncEnqueued += result.stockSyncEnqueued;
+      stockSyncSkipped += result.stockSyncSkipped;
       processed += batch.length;
 
       await prisma.wholesaleSyncLog.update({
@@ -223,6 +231,10 @@ export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
           processedItems: processed,
           mappingsCreated: created,
           mappingsUpdated: updated,
+          mappingsUnchanged: unchanged,
+          productsRecalculated,
+          stockSyncEnqueued,
+          stockSyncSkipped,
           skipped,
         },
       });
@@ -238,6 +250,9 @@ export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
       });
       handledMissingFromFeed = missing.deactivated + missing.zeroedMapped;
       updated += handledMissingFromFeed;
+      productsRecalculated += missing.productsRecalculated;
+      stockSyncEnqueued += missing.stockSyncEnqueued;
+      stockSyncSkipped += missing.stockSyncSkipped;
     }
 
     const finishedLog = await prisma.wholesaleSyncLog.update({
@@ -249,6 +264,10 @@ export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
         processedItems: processed,
         mappingsCreated: created,
         mappingsUpdated: updated,
+        mappingsUnchanged: unchanged,
+        productsRecalculated,
+        stockSyncEnqueued,
+        stockSyncSkipped,
         skipped: skipped + handledMissingFromFeed,
         errorMessage: null,
         finishedAt,
@@ -299,7 +318,9 @@ async function processWholesaleSyncBatch(input: {
   }
 
   const mappedRecords = Array.from(mappedBySku.values());
-  if (mappedRecords.length === 0) return { created: 0, updated: 0, skipped };
+  if (mappedRecords.length === 0) {
+    return { created: 0, updated: 0, unchanged: 0, skipped, productsRecalculated: 0, stockSyncEnqueued: 0, stockSyncSkipped: 0 };
+  }
 
   const existingMappings = await prisma.wholesaleProductMapping.findMany({
     where: {
@@ -311,6 +332,7 @@ async function processWholesaleSyncBatch(input: {
       externalSku: true,
       warehouseProductId: true,
       lastKnownStock: true,
+      lastKnownPrice: true,
       warehouseAvailableAt: true,
       isActive: true,
     },
@@ -319,8 +341,9 @@ async function processWholesaleSyncBatch(input: {
   const now = new Date();
   const createData: Prisma.WholesaleProductMappingCreateManyInput[] = [];
   const updateOperations: Prisma.PrismaPromise<unknown>[] = [];
-  const availabilityChangedProductIds = new Set<string>();
+  const changedProductIds = new Set<string>();
   const missingCostCandidates = new Map<string, Prisma.Decimal>();
+  let unchanged = 0;
 
   for (const mapped of mappedRecords) {
     const existing = existingBySku.get(mapped.externalSku);
@@ -337,19 +360,18 @@ async function processWholesaleSyncBatch(input: {
     };
 
     if (existing) {
-      const wasAvailable = existing.isActive && isPositiveDecimal(existing.lastKnownStock);
-      const isAvailable = isPositiveDecimal(mapped.lastKnownStock);
-      const availabilityDateChanged = !sameDateOnly(existing.warehouseAvailableAt, mapped.warehouseAvailableAt);
-      if (existing.warehouseProductId && (wasAvailable !== isAvailable || availabilityDateChanged)) {
-        availabilityChangedProductIds.add(existing.warehouseProductId);
+      const businessDataChanged = hasWholesaleBusinessDataChanged(existing, mapped);
+      if (existing.warehouseProductId && businessDataChanged) {
+        changedProductIds.add(existing.warehouseProductId);
       }
       if (existing.warehouseProductId && isPositiveDecimal(mapped.lastKnownPrice)) {
         missingCostCandidates.set(existing.warehouseProductId, mapped.lastKnownPrice!);
       }
       updateOperations.push(prisma.wholesaleProductMapping.update({
         where: { id: existing.id },
-        data,
+        data: businessDataChanged ? data : { lastSyncAt: now },
       }));
+      if (!businessDataChanged) unchanged++;
     } else {
       createData.push({
         tenantId: input.tenantId,
@@ -381,36 +403,46 @@ async function processWholesaleSyncBatch(input: {
     await prisma.$transaction(costFillOperations);
   }
 
-  await enqueueWholesaleAvailabilityStockSync(Array.from(availabilityChangedProductIds), input.tenantId);
+  const publication = await enqueueWholesaleAvailabilityStockSync(Array.from(changedProductIds), input.tenantId);
 
   return {
     created,
-    updated: updateOperations.length,
+    updated: updateOperations.length - unchanged,
+    unchanged,
     skipped,
+    productsRecalculated: publication.productsRecalculated,
+    stockSyncEnqueued: publication.enqueued,
+    stockSyncSkipped: publication.skippedUnchangedPublication,
   };
 }
 
 async function enqueueWholesaleAvailabilityStockSync(warehouseProductIds: string[], tenantId: string) {
   const productIds = Array.from(new Set(warehouseProductIds.filter(Boolean)));
-  if (productIds.length === 0) return;
+  if (productIds.length === 0) return { productsRecalculated: 0, enqueued: 0, skippedUnchangedPublication: 0 };
 
   const products = await prisma.warehouseProduct.findMany({
     where: {
       id: { in: productIds },
       tenantId,
       isActive: true,
-      currentStock: { lte: new Prisma.Decimal(0) },
     },
     select: { id: true },
   });
 
+  let enqueued = 0;
+  let skippedUnchangedPublication = 0;
   for (let i = 0; i < products.length; i += 500) {
-    await publishInventoryToShops({
+    const result = await publishInventoryToShops({
       tenantId,
       warehouseProductIds: products.slice(i, i + 500).map((product) => product.id),
       triggeredBy: 'WHOLESALE_SYNC',
+      skipUnchangedPublication: true,
     });
+    enqueued += result.enqueued;
+    skippedUnchangedPublication += result.skippedUnchangedPublication;
   }
+
+  return { productsRecalculated: products.length, enqueued, skippedUnchangedPublication };
 }
 
 async function markMappingsMissingFromFeed(input: {
@@ -437,7 +469,13 @@ async function markMappingsMissingFromFeed(input: {
   });
 
   if (staleMappings.length === 0) {
-    return { deactivated: 0, zeroedMapped: 0 };
+    return {
+      deactivated: 0,
+      zeroedMapped: 0,
+      productsRecalculated: 0,
+      stockSyncEnqueued: 0,
+      stockSyncSkipped: 0,
+    };
   }
 
   const changedProductIds = staleMappings
@@ -471,9 +509,38 @@ async function markMappingsMissingFromFeed(input: {
     });
   }
 
-  await enqueueWholesaleAvailabilityStockSync(changedProductIds, input.tenantId);
+  const publication = await enqueueWholesaleAvailabilityStockSync(changedProductIds, input.tenantId);
 
-  return { deactivated: unmappedIds.length, zeroedMapped: mappedIds.length };
+  return {
+    deactivated: unmappedIds.length,
+    zeroedMapped: mappedIds.length,
+    productsRecalculated: publication.productsRecalculated,
+    stockSyncEnqueued: publication.enqueued,
+    stockSyncSkipped: publication.skippedUnchangedPublication,
+  };
+}
+
+function hasWholesaleBusinessDataChanged(
+  existing: {
+    lastKnownStock: Prisma.Decimal | null;
+    lastKnownPrice: Prisma.Decimal | null;
+    warehouseAvailableAt: Date | null;
+    isActive: boolean;
+  },
+  mapped: ReturnType<typeof mapCsvRecord>,
+) {
+  return !sameNullableDecimal(existing.lastKnownStock, mapped.lastKnownStock) ||
+    !sameNullableDecimal(existing.lastKnownPrice, mapped.lastKnownPrice) ||
+    !sameDateOnly(existing.warehouseAvailableAt, mapped.warehouseAvailableAt) ||
+    !existing.isActive;
+}
+
+function sameNullableDecimal(
+  a: Prisma.Decimal | number | string | null | undefined,
+  b: Prisma.Decimal | number | string | null | undefined,
+) {
+  if (a === null || a === undefined || b === null || b === undefined) return a === b;
+  return new Prisma.Decimal(a).eq(new Prisma.Decimal(b));
 }
 
 function normalizeSyncLimit(limit?: number) {

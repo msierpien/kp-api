@@ -1797,6 +1797,7 @@ model StockSyncLog {
   tenantId           String    @map("tenant_id")
   warehouseProductId String    @map("warehouse_product_id")
   shopId             String    @map("shop_id")
+  externalProductId  String?   @map("external_product_id")
   triggeredBy        String    @map("triggered_by")
   documentId         String?   @map("document_id")
   stockBefore        Decimal?  @map("stock_before") @db.Decimal(10, 3)
@@ -1807,6 +1808,7 @@ model StockSyncLog {
   publishedWarehouseAvailableAt DateTime? @map("published_warehouse_available_at")
   availabilityPolicy String?   @map("availability_policy")
   outOfStockBehavior Int?      @map("out_of_stock_behavior")
+  publishedProductActive Boolean? @map("published_product_active")
   warningMessage     String?   @map("warning_message") @db.Text
   syncMode           String?   @map("sync_mode")
   remoteQuantity     Decimal?  @map("remote_quantity") @db.Decimal(10, 3)
@@ -1961,6 +1963,10 @@ model WholesaleSyncLog {
   itemsFetched    Int       @default(0) @map("items_fetched")
   mappingsCreated Int       @default(0) @map("mappings_created")
   mappingsUpdated Int       @default(0) @map("mappings_updated")
+  mappingsUnchanged Int     @default(0) @map("mappings_unchanged")
+  productsRecalculated Int  @default(0) @map("products_recalculated")
+  stockSyncEnqueued Int     @default(0) @map("stock_sync_enqueued")
+  stockSyncSkipped Int      @default(0) @map("stock_sync_skipped")
   skipped         Int       @default(0)
   errorMessage    String?   @map("error_message") @db.Text
   startedAt       DateTime  @default(now()) @map("started_at")

@@ -46,6 +46,14 @@ export async function registerWholesaleProviderRoutes(fastify: FastifyInstance) 
           delimiter: { type: 'string', default: ';' },
           fieldMapping: { type: 'object', additionalProperties: true },
           availabilityRule: { type: 'string', enum: ['STOCK_ONLY', 'STOCK_OR_FUTURE_DELIVERY'] },
+          feedSafety: {
+            type: 'object',
+            properties: {
+              minItems: { type: 'integer', minimum: 1, maximum: 1000000 },
+              maxDropPercent: { type: 'number', minimum: 0, maximum: 95 },
+              maxInvalidPercent: { type: 'number', minimum: 0, maximum: 100 },
+            },
+          },
           syncEnabled: { type: 'boolean', default: true },
           syncInterval: { type: 'integer', minimum: 30, maximum: 1440, default: 1440 },
           leadTimeDays: { type: ['integer', 'null'], minimum: 0, maximum: 365 },
@@ -181,6 +189,14 @@ export async function registerWholesaleProviderRoutes(fastify: FastifyInstance) 
           delimiter: { type: 'string' },
           fieldMapping: { type: 'object', additionalProperties: true },
           availabilityRule: { type: 'string', enum: ['STOCK_ONLY', 'STOCK_OR_FUTURE_DELIVERY'] },
+          feedSafety: {
+            type: 'object',
+            properties: {
+              minItems: { type: 'integer', minimum: 1, maximum: 1000000 },
+              maxDropPercent: { type: 'number', minimum: 0, maximum: 95 },
+              maxInvalidPercent: { type: 'number', minimum: 0, maximum: 100 },
+            },
+          },
           syncEnabled: { type: 'boolean' },
           syncInterval: { type: 'integer', minimum: 30, maximum: 1440 },
           leadTimeDays: { type: ['integer', 'null'], minimum: 0, maximum: 365 },

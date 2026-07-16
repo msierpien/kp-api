@@ -23,8 +23,21 @@ export interface WholesaleProviderConfig {
   preset?: WholesalePreset;
   delimiter?: string;
   availabilityRule?: WholesaleAvailabilityRule;
+  feedSafety?: WholesaleFeedSafetyConfig;
   fieldMapping: FieldMapping;
 }
+
+export interface WholesaleFeedSafetyConfig {
+  minItems: number;
+  maxDropPercent: number;
+  maxInvalidPercent: number;
+}
+
+const DEFAULT_FEED_SAFETY: WholesaleFeedSafetyConfig = {
+  minItems: 1,
+  maxDropPercent: 40,
+  maxInvalidPercent: 5,
+};
 
 const PRESET_CONFIGS: Record<Exclude<WholesalePreset, 'CUSTOM'>, WholesaleProviderConfig> = {
   GODAN: {
@@ -78,6 +91,7 @@ export function buildProviderConfig(input: {
   delimiter?: string;
   fieldMapping?: FieldMapping;
   availabilityRule?: WholesaleAvailabilityRule;
+  feedSafety?: Partial<WholesaleFeedSafetyConfig>;
   feedUrl: string;
   name: string;
 }): WholesaleProviderConfig {
@@ -94,7 +108,13 @@ export function buildProviderConfig(input: {
     throw new Error('Konfiguracja hurtowni wymaga mapowania pól sku i name');
   }
 
-  return { preset, delimiter, availabilityRule, fieldMapping: fieldMapping as FieldMapping };
+  return {
+    preset,
+    delimiter,
+    availabilityRule,
+    feedSafety: normalizeFeedSafety(input.feedSafety),
+    fieldMapping: fieldMapping as FieldMapping,
+  };
 }
 
 export function parseProviderConfig(configJson: unknown): WholesaleProviderConfig {
@@ -113,8 +133,27 @@ export function parseProviderConfig(configJson: unknown): WholesaleProviderConfi
     preset,
     delimiter: normalizeDelimiter(config.delimiter ?? presetConfig?.delimiter),
     availabilityRule: resolveWholesaleAvailabilityRule(configJson),
+    feedSafety: normalizeFeedSafety(config.feedSafety),
     fieldMapping,
   };
+}
+
+export function normalizeFeedSafety(input?: Partial<WholesaleFeedSafetyConfig>): WholesaleFeedSafetyConfig {
+  const minItems = Number(input?.minItems ?? DEFAULT_FEED_SAFETY.minItems);
+  const maxDropPercent = Number(input?.maxDropPercent ?? DEFAULT_FEED_SAFETY.maxDropPercent);
+  const maxInvalidPercent = Number(input?.maxInvalidPercent ?? DEFAULT_FEED_SAFETY.maxInvalidPercent);
+
+  if (!Number.isInteger(minItems) || minItems < 1 || minItems > 1_000_000) {
+    throw new Error('Minimalna liczba rekordów feedu musi być liczbą całkowitą od 1 do 1000000');
+  }
+  if (!Number.isFinite(maxDropPercent) || maxDropPercent < 0 || maxDropPercent > 95) {
+    throw new Error('Maksymalny spadek liczby rekordów musi być od 0 do 95%');
+  }
+  if (!Number.isFinite(maxInvalidPercent) || maxInvalidPercent < 0 || maxInvalidPercent > 100) {
+    throw new Error('Maksymalny odsetek błędnych rekordów musi być od 0 do 100%');
+  }
+
+  return { minItems, maxDropPercent, maxInvalidPercent };
 }
 
 export function resolveWholesaleAvailabilityRule(configJson: unknown): WholesaleAvailabilityRule {

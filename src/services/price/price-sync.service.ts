@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import config from '../../config';
 import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
 import { addPriceSyncJob, type PriceSyncTriggeredBy } from '../queue/price-sync.queue';
@@ -152,6 +153,15 @@ export async function syncProductPrice(
   const logs = [];
 
   for (const mapping of mappings) {
+    const safety = validateAutomaticPriceChange({
+      triggeredBy,
+      currentPrice: mapping.externalPrice,
+      targetPrice,
+      maxChangePercent: config.priceSyncSafety.maxAutoChangePercent,
+    });
+    if (!safety.ok) throw new Error(safety.message);
+    if (safety.unchanged) continue;
+
     const log = await prisma.priceSyncLog.create({
       data: {
         tenantId,
@@ -190,9 +200,22 @@ export async function syncProductPricesBulkForTenant(tenantId: string, items: Bu
   let synced = 0;
   let enqueued = 0;
   let failed = 0;
+  let skippedUnchanged = 0;
   const errors: Array<{ warehouseProductId: string; shopId: string; message: string }> = [];
 
-  if (normalizedItems.length === 0) return { synced, enqueued, failed, errors };
+  if (normalizedItems.length === 0) return { synced, enqueued, failed, skippedUnchanged, errors };
+
+  const automaticItems = normalizedItems.filter((item) => (item.triggeredBy ?? 'MANUAL') !== 'MANUAL');
+  if (automaticItems.length > config.priceSyncSafety.maxAutoBatch) {
+    const message = `Automatyczny batch cen (${automaticItems.length}) przekracza limit ${config.priceSyncSafety.maxAutoBatch}. Wymagane ręczne zatwierdzenie.`;
+    return {
+      synced,
+      enqueued,
+      failed: normalizedItems.length,
+      skippedUnchanged,
+      errors: normalizedItems.map((item) => ({ warehouseProductId: item.warehouseProductId, shopId: item.shopId, message })),
+    };
+  }
 
   const [products, mappings] = await Promise.all([
     prisma.warehouseProduct.findMany({
@@ -239,6 +262,22 @@ export async function syncProductPricesBulkForTenant(tenantId: string, items: Bu
     if (!mapping) {
       failed += 1;
       errors.push({ warehouseProductId: item.warehouseProductId, shopId: item.shopId, message: 'Brak aktywnego mapowania produktu do wskazanego sklepu' });
+      continue;
+    }
+
+    const safety = validateAutomaticPriceChange({
+      triggeredBy: item.triggeredBy ?? 'MANUAL',
+      currentPrice: mapping.externalPrice,
+      targetPrice,
+      maxChangePercent: config.priceSyncSafety.maxAutoChangePercent,
+    });
+    if (!safety.ok) {
+      failed += 1;
+      errors.push({ warehouseProductId: item.warehouseProductId, shopId: item.shopId, message: safety.message });
+      continue;
+    }
+    if (safety.unchanged) {
+      skippedUnchanged += 1;
       continue;
     }
 
@@ -340,7 +379,43 @@ export async function syncProductPricesBulkForTenant(tenantId: string, items: Bu
     }
   }
 
-  return { synced, enqueued, failed, errors };
+  return { synced, enqueued, failed, skippedUnchanged, errors };
+}
+
+export function validateAutomaticPriceChange(input: {
+  triggeredBy: PriceSyncTriggeredBy;
+  currentPrice: Prisma.Decimal | number | string | null;
+  targetPrice: number;
+  maxChangePercent: number;
+}) {
+  if (input.currentPrice !== null && new Prisma.Decimal(input.currentPrice).eq(input.targetPrice)) {
+    return { ok: true as const, unchanged: true, changePercent: 0, message: '' };
+  }
+  if (input.triggeredBy === 'MANUAL' || input.currentPrice === null) {
+    return { ok: true as const, unchanged: false, changePercent: null, message: '' };
+  }
+
+  const currentPrice = Number(input.currentPrice);
+  if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+    return {
+      ok: false as const,
+      unchanged: false,
+      changePercent: null,
+      message: 'Automatyczna zmiana ceny z wartości zerowej lub nieprawidłowej wymaga ręcznego zatwierdzenia.',
+    };
+  }
+
+  const changePercent = Math.abs(((input.targetPrice - currentPrice) / currentPrice) * 100);
+  if (changePercent > input.maxChangePercent) {
+    return {
+      ok: false as const,
+      unchanged: false,
+      changePercent,
+      message: `Automatyczna zmiana ceny ${changePercent.toFixed(2)}% przekracza limit ${input.maxChangePercent}%.`,
+    };
+  }
+
+  return { ok: true as const, unchanged: false, changePercent, message: '' };
 }
 
 export async function syncProductPricesBulk(items: BulkPriceSyncItem[]) {

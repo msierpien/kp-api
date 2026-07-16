@@ -1967,6 +1967,9 @@ model WholesaleSyncLog {
   productsRecalculated Int  @default(0) @map("products_recalculated")
   stockSyncEnqueued Int     @default(0) @map("stock_sync_enqueued")
   stockSyncSkipped Int      @default(0) @map("stock_sync_skipped")
+  baselineItems    Int?      @map("baseline_items")
+  feedDropPercent  Decimal?  @map("feed_drop_percent") @db.Decimal(5, 2)
+  validationStatus String?   @map("validation_status")
   skipped         Int       @default(0)
   errorMessage    String?   @map("error_message") @db.Text
   startedAt       DateTime  @default(now()) @map("started_at")
@@ -1975,10 +1978,34 @@ model WholesaleSyncLog {
 
   tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   provider WholesaleProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  stagingItems WholesaleFeedStagingItem[]
 
   @@index([tenantId])
   @@index([providerId])
   @@index([status])
   @@index([startedAt])
   @@map("wholesale_sync_logs")
+}
+
+model WholesaleFeedStagingItem {
+  id                   String    @id @default(cuid())
+  syncLogId            String    @map("sync_log_id")
+  tenantId             String    @map("tenant_id")
+  providerId           String    @map("provider_id")
+  externalSku          String    @map("external_sku")
+  externalEan          String?   @map("external_ean")
+  externalName         String?   @map("external_name")
+  externalCategory     String?   @map("external_category")
+  lastKnownStock       Decimal?  @map("last_known_stock") @db.Decimal(10, 3)
+  lastKnownPrice       Decimal?  @map("last_known_price") @db.Decimal(10, 2)
+  warehouseAvailableAt DateTime? @map("warehouse_available_at")
+  payloadJson          Json?     @map("payload_json")
+  createdAt            DateTime  @default(now()) @map("created_at")
+
+  syncLog WholesaleSyncLog @relation(fields: [syncLogId], references: [id], onDelete: Cascade)
+
+  @@unique([syncLogId, externalSku])
+  @@index([providerId, externalSku])
+  @@index([tenantId])
+  @@map("wholesale_feed_staging_items")
 }

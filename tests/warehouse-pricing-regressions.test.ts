@@ -59,14 +59,46 @@ function rule(overrides: Record<string, unknown>) {
   };
 }
 
-function state(overrides: { rules?: unknown[]; groups?: Array<{ id: string; name: string; priority: number }>; settings?: Record<string, unknown> } = {}) {
+function state(overrides: {
+  rules?: unknown[];
+  clearances?: unknown[];
+  groups?: Array<{ id: string; name: string; priority: number }>;
+  settings?: Record<string, unknown>;
+} = {}) {
+  const rules = (overrides.rules ?? []) as Array<Record<string, unknown>>;
+  const clearances = (overrides.clearances ?? []) as Array<Record<string, unknown>>;
+  const rulesFor = (level: string, key?: string, value?: string) => {
+    const matching = rules.filter((item) => item.level === level);
+    if (!key || !value) return matching;
+    return matching.filter((item) => item[key] === value);
+  };
+
   return {
     settings: settings(overrides.settings),
-    rules: overrides.rules ?? [],
-    clearances: [],
+    rules,
+    clearances,
     groupsByProduct: new Map([
       ['product-1', overrides.groups ?? [{ id: 'group-1', name: 'Grupa testowa', priority: 100 }]],
     ]),
+    rulesByLevel: {
+      global: rulesFor('GLOBAL'),
+      shopByShopId: new Map([['shop-1', rulesFor('SHOP', 'shopId', 'shop-1')]]),
+      catalogByCatalogId: new Map([['catalog-1', rulesFor('CATALOG', 'catalogId', 'catalog-1')]]),
+      groupByGroupId: new Map([
+        ['group-1', rulesFor('GROUP', 'priceGroupId', 'group-1')],
+        ['group-low', rulesFor('GROUP', 'priceGroupId', 'group-low')],
+        ['group-high', rulesFor('GROUP', 'priceGroupId', 'group-high')],
+      ]),
+      productByProductId: new Map([['product-1', rulesFor('PRODUCT', 'warehouseProductId', 'product-1')]]),
+    },
+    clearancesByScope: {
+      productByProductId: new Map([
+        ['product-1', clearances.filter((item) => item.scope === 'PRODUCT' && item.warehouseProductId === 'product-1')],
+      ]),
+      groupByGroupId: new Map([
+        ['group-1', clearances.filter((item) => item.scope === 'GROUP' && item.priceGroupId === 'group-1')],
+      ]),
+    },
   };
 }
 
@@ -220,12 +252,10 @@ test('active clearance wins before rules and keeps exact price below cost', () =
   const item = __pricingTest.calculatePrice(
     product({ averagePurchaseCost: new Prisma.Decimal('5.00') }),
     shop,
-    {
-      ...state({
-        rules: [rule({ fixedNetPrice: new Prisma.Decimal('7.50'), priceMode: 'FIXED' })],
-      }),
+    state({
+      rules: [rule({ fixedNetPrice: new Prisma.Decimal('7.50'), priceMode: 'FIXED' })],
       clearances: [clearance()],
-    },
+    }),
   );
 
   assert.equal(item.priceSource, 'CLEARANCE');

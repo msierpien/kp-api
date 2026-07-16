@@ -188,72 +188,49 @@ export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
     const csvText = await fetchFeed(provider.feedUrl);
     const records = parseCsv(csvText, config.delimiter ?? ';');
     const limitedRecords = limit ? records.slice(0, limit) : records;
+    assertFeedColumns(limitedRecords, config.fieldMapping);
+    const prepared = prepareWholesaleFeed(limitedRecords, config.fieldMapping);
+    const baseline = limit
+      ? null
+      : await prisma.wholesaleSyncLog.findFirst({
+          where: { providerId, tenantId, id: { not: logId }, status: 'SUCCESS', itemsFetched: { gt: 0 } },
+          orderBy: { finishedAt: 'desc' },
+          select: { itemsFetched: true },
+        });
+    const validation = validateWholesaleFeed({
+      totalItems: limitedRecords.length,
+      uniqueItems: prepared.items.length,
+      invalidItems: prepared.invalidItems,
+      baselineItems: baseline?.itemsFetched ?? null,
+      safety: config.feedSafety!,
+      partial: Boolean(limit),
+    });
 
     await prisma.wholesaleSyncLog.update({
       where: { id: logId },
       data: {
         totalItems: limitedRecords.length,
         itemsFetched: limitedRecords.length,
+        baselineItems: validation.baselineItems,
+        feedDropPercent: validation.dropPercent,
+        validationStatus: validation.ok ? 'PASSED' : 'BLOCKED',
+        skipped: prepared.skipped,
       },
     });
-
-    let created = 0;
-    let updated = 0;
-    let unchanged = 0;
-    let skipped = 0;
-    let processed = 0;
-    let handledMissingFromFeed = 0;
-    let productsRecalculated = 0;
-    let stockSyncEnqueued = 0;
-    let stockSyncSkipped = 0;
-
-    for (let offset = 0; offset < limitedRecords.length; offset += batchSize) {
-      const batch = limitedRecords.slice(offset, offset + batchSize);
-      const result = await processWholesaleSyncBatch({
-        tenantId,
-        providerId,
-        records: batch,
-        fieldMapping: config.fieldMapping,
-      });
-
-      created += result.created;
-      updated += result.updated;
-      unchanged += result.unchanged;
-      skipped += result.skipped;
-      productsRecalculated += result.productsRecalculated;
-      stockSyncEnqueued += result.stockSyncEnqueued;
-      stockSyncSkipped += result.stockSyncSkipped;
-      processed += batch.length;
-
-      await prisma.wholesaleSyncLog.update({
-        where: { id: logId },
-        data: {
-          processedItems: processed,
-          mappingsCreated: created,
-          mappingsUpdated: updated,
-          mappingsUnchanged: unchanged,
-          productsRecalculated,
-          stockSyncEnqueued,
-          stockSyncSkipped,
-          skipped,
-        },
-      });
+    if (!validation.ok) {
+      throw new Error(`Feed hurtowni zablokowany przez walidację: ${validation.errors.join('; ')}`);
     }
 
+    await stageWholesaleFeed({ logId, tenantId, providerId, items: prepared.items, batchSize });
+    const applied = await applyWholesaleFeed({
+      tenantId,
+      providerId,
+      items: prepared.items,
+      fullFeed: !limit,
+      appliedAt: new Date(),
+    });
+    const publication = await enqueueWholesaleAvailabilityStockSync(applied.changedProductIds, tenantId);
     const finishedAt = new Date();
-    if (!limit) {
-      const missing = await markMappingsMissingFromFeed({
-        tenantId,
-        providerId,
-        syncStartedAt,
-        finishedAt,
-      });
-      handledMissingFromFeed = missing.deactivated + missing.zeroedMapped;
-      updated += handledMissingFromFeed;
-      productsRecalculated += missing.productsRecalculated;
-      stockSyncEnqueued += missing.stockSyncEnqueued;
-      stockSyncSkipped += missing.stockSyncSkipped;
-    }
 
     const finishedLog = await prisma.wholesaleSyncLog.update({
       where: { id: logId },
@@ -261,14 +238,14 @@ export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
         status: 'SUCCESS',
         itemsFetched: limitedRecords.length,
         totalItems: limitedRecords.length,
-        processedItems: processed,
-        mappingsCreated: created,
-        mappingsUpdated: updated,
-        mappingsUnchanged: unchanged,
-        productsRecalculated,
-        stockSyncEnqueued,
-        stockSyncSkipped,
-        skipped: skipped + handledMissingFromFeed,
+        processedItems: limitedRecords.length,
+        mappingsCreated: applied.created,
+        mappingsUpdated: applied.updated,
+        mappingsUnchanged: applied.unchanged,
+        productsRecalculated: publication.productsRecalculated,
+        stockSyncEnqueued: publication.enqueued,
+        stockSyncSkipped: publication.skippedUnchangedPublication,
+        skipped: prepared.skipped + applied.missingHandled,
         errorMessage: null,
         finishedAt,
       },
@@ -291,42 +268,119 @@ export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
       },
     });
     throw error;
+  } finally {
+    await prisma.wholesaleFeedStagingItem.deleteMany({ where: { syncLogId: logId } }).catch(() => undefined);
   }
 }
 
-async function processWholesaleSyncBatch(input: {
-  tenantId: string;
-  providerId: string;
-  records: Record<string, string>[];
-  fieldMapping: FieldMapping;
-}) {
-  const mappedBySku = new Map<string, ReturnType<typeof mapCsvRecord> & { payloadJson: Prisma.InputJsonValue }>();
-  let skipped = 0;
+type MappedWholesaleFeedItem = ReturnType<typeof mapCsvRecord> & { payloadJson: Prisma.InputJsonValue };
 
-  for (const record of input.records) {
-    const mapped = mapCsvRecord(record, input.fieldMapping);
+function prepareWholesaleFeed(records: Record<string, string>[], fieldMapping: FieldMapping) {
+  const mappedBySku = new Map<string, MappedWholesaleFeedItem>();
+  let invalidItems = 0;
+  let duplicateItems = 0;
+
+  for (const record of records) {
+    const mapped = mapCsvRecord(record, fieldMapping);
     if (!mapped.externalSku) {
-      skipped++;
+      invalidItems++;
       continue;
     }
+    if (mappedBySku.has(mapped.externalSku)) duplicateItems++;
+    mappedBySku.set(mapped.externalSku, { ...mapped, payloadJson: record as Prisma.InputJsonValue });
+  }
 
-    if (mappedBySku.has(mapped.externalSku)) skipped++;
-    mappedBySku.set(mapped.externalSku, {
-      ...mapped,
-      payloadJson: record as Prisma.InputJsonValue,
+  return {
+    items: Array.from(mappedBySku.values()),
+    invalidItems,
+    duplicateItems,
+    skipped: invalidItems + duplicateItems,
+  };
+}
+
+function assertFeedColumns(records: Record<string, string>[], fieldMapping: FieldMapping) {
+  if (records.length === 0) return;
+  const columns = new Set(Object.keys(records[0] ?? {}));
+  const missing = [fieldMapping.sku, fieldMapping.name].filter((column) => !columns.has(column));
+  if (missing.length > 0) {
+    throw new Error(`Feed hurtowni nie zawiera wymaganych kolumn: ${missing.join(', ')}`);
+  }
+}
+
+export function validateWholesaleFeed(input: {
+  totalItems: number;
+  uniqueItems: number;
+  invalidItems: number;
+  baselineItems: number | null;
+  safety: { minItems: number; maxDropPercent: number; maxInvalidPercent: number };
+  partial?: boolean;
+}) {
+  const errors: string[] = [];
+  const invalidPercent = input.totalItems > 0 ? (input.invalidItems / input.totalItems) * 100 : 100;
+  const dropPercent = input.baselineItems && input.baselineItems > 0
+    ? Math.max(0, ((input.baselineItems - input.totalItems) / input.baselineItems) * 100)
+    : null;
+
+  if (input.uniqueItems === 0) errors.push('feed nie zawiera żadnego poprawnego SKU');
+  if (!input.partial && input.uniqueItems < input.safety.minItems) {
+    errors.push(`liczba poprawnych SKU ${input.uniqueItems} jest mniejsza niż minimum ${input.safety.minItems}`);
+  }
+  if (invalidPercent > input.safety.maxInvalidPercent) {
+    errors.push(`błędne rekordy ${invalidPercent.toFixed(2)}% przekraczają limit ${input.safety.maxInvalidPercent}%`);
+  }
+  if (!input.partial && dropPercent !== null && dropPercent > input.safety.maxDropPercent) {
+    errors.push(`liczba rekordów spadła o ${dropPercent.toFixed(2)}%, limit to ${input.safety.maxDropPercent}%`);
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
+    invalidPercent,
+    dropPercent,
+    baselineItems: input.baselineItems,
+  };
+}
+
+async function stageWholesaleFeed(input: {
+  logId: string;
+  tenantId: string;
+  providerId: string;
+  items: MappedWholesaleFeedItem[];
+  batchSize: number;
+}) {
+  for (let offset = 0; offset < input.items.length; offset += input.batchSize) {
+    const items = input.items.slice(offset, offset + input.batchSize);
+    await prisma.wholesaleFeedStagingItem.createMany({
+      data: items.map((item) => ({
+        syncLogId: input.logId,
+        tenantId: input.tenantId,
+        providerId: input.providerId,
+        externalSku: item.externalSku,
+        externalEan: item.externalEan,
+        externalName: item.externalName,
+        externalCategory: item.externalCategory,
+        lastKnownStock: item.lastKnownStock,
+        lastKnownPrice: item.lastKnownPrice,
+        warehouseAvailableAt: item.warehouseAvailableAt,
+        payloadJson: item.payloadJson,
+      })),
+    });
+    await prisma.wholesaleSyncLog.update({
+      where: { id: input.logId },
+      data: { processedItems: Math.min(offset + items.length, input.items.length) },
     });
   }
+}
 
-  const mappedRecords = Array.from(mappedBySku.values());
-  if (mappedRecords.length === 0) {
-    return { created: 0, updated: 0, unchanged: 0, skipped, productsRecalculated: 0, stockSyncEnqueued: 0, stockSyncSkipped: 0 };
-  }
-
+async function applyWholesaleFeed(input: {
+  tenantId: string;
+  providerId: string;
+  items: MappedWholesaleFeedItem[];
+  fullFeed: boolean;
+  appliedAt: Date;
+}) {
   const existingMappings = await prisma.wholesaleProductMapping.findMany({
-    where: {
-      providerId: input.providerId,
-      externalSku: { in: mappedRecords.map((record) => record.externalSku) },
-    },
+    where: { tenantId: input.tenantId, providerId: input.providerId },
     select: {
       id: true,
       externalSku: true,
@@ -338,14 +392,14 @@ async function processWholesaleSyncBatch(input: {
     },
   });
   const existingBySku = new Map(existingMappings.map((mapping) => [mapping.externalSku, mapping]));
-  const now = new Date();
   const createData: Prisma.WholesaleProductMappingCreateManyInput[] = [];
-  const updateOperations: Prisma.PrismaPromise<unknown>[] = [];
+  const changedMappings: Array<{ id: string; data: Prisma.WholesaleProductMappingUpdateInput }> = [];
   const changedProductIds = new Set<string>();
   const missingCostCandidates = new Map<string, Prisma.Decimal>();
-  let unchanged = 0;
+  const seenSkus = new Set<string>();
 
-  for (const mapped of mappedRecords) {
+  for (const mapped of input.items) {
+    seenSkus.add(mapped.externalSku);
     const existing = existingBySku.get(mapped.externalSku);
     const data = {
       externalEan: mapped.externalEan,
@@ -356,22 +410,17 @@ async function processWholesaleSyncBatch(input: {
       warehouseAvailableAt: mapped.warehouseAvailableAt,
       payloadJson: mapped.payloadJson,
       isActive: true,
-      lastSyncAt: now,
+      lastSyncAt: input.appliedAt,
     };
 
     if (existing) {
       const businessDataChanged = hasWholesaleBusinessDataChanged(existing, mapped);
-      if (existing.warehouseProductId && businessDataChanged) {
-        changedProductIds.add(existing.warehouseProductId);
-      }
+      if (!businessDataChanged) continue;
+      changedMappings.push({ id: existing.id, data });
+      if (existing.warehouseProductId) changedProductIds.add(existing.warehouseProductId);
       if (existing.warehouseProductId && isPositiveDecimal(mapped.lastKnownPrice)) {
         missingCostCandidates.set(existing.warehouseProductId, mapped.lastKnownPrice!);
       }
-      updateOperations.push(prisma.wholesaleProductMapping.update({
-        where: { id: existing.id },
-        data: businessDataChanged ? data : { lastSyncAt: now },
-      }));
-      if (!businessDataChanged) unchanged++;
     } else {
       createData.push({
         tenantId: input.tenantId,
@@ -382,37 +431,51 @@ async function processWholesaleSyncBatch(input: {
     }
   }
 
-  const createOperation = createData.length > 0
-    ? [prisma.wholesaleProductMapping.createMany({ data: createData, skipDuplicates: true })]
+  const missing = input.fullFeed
+    ? existingMappings.filter((mapping) => mapping.isActive && !seenSkus.has(mapping.externalSku))
     : [];
-  const results = await prisma.$transaction([...createOperation, ...updateOperations]);
-  const created = createData.length > 0 ? (results[0] as Prisma.BatchPayload).count : 0;
-
-  const costFillOperations = Array.from(missingCostCandidates.entries()).map(([warehouseProductId, purchasePrice]) =>
-    prisma.warehouseProduct.updateMany({
-      where: {
-        id: warehouseProductId,
-        tenantId: input.tenantId,
-        purchasePrice: null,
-        averagePurchaseCost: null,
-      },
-      data: { purchasePrice },
-    }),
-  );
-  if (costFillOperations.length > 0) {
-    await prisma.$transaction(costFillOperations);
+  const missingMappedIds = missing
+    .filter((mapping) => mapping.warehouseProductId && (!sameNullableDecimal(mapping.lastKnownStock, ZERO) || mapping.warehouseAvailableAt !== null))
+    .map((mapping) => mapping.id);
+  const missingUnmappedIds = missing.filter((mapping) => !mapping.warehouseProductId).map((mapping) => mapping.id);
+  for (const mapping of missing) {
+    if (mapping.warehouseProductId) changedProductIds.add(mapping.warehouseProductId);
   }
 
-  const publication = await enqueueWholesaleAvailabilityStockSync(Array.from(changedProductIds), input.tenantId);
+  const created = await prisma.$transaction(async (tx) => {
+    const createdResult = createData.length > 0
+      ? await tx.wholesaleProductMapping.createMany({ data: createData, skipDuplicates: true })
+      : { count: 0 };
+    for (const mapping of changedMappings) {
+      await tx.wholesaleProductMapping.update({ where: { id: mapping.id }, data: mapping.data });
+    }
+    for (let offset = 0; offset < missingMappedIds.length; offset += 1000) {
+      await tx.wholesaleProductMapping.updateMany({
+        where: { id: { in: missingMappedIds.slice(offset, offset + 1000) } },
+        data: { lastKnownStock: ZERO, warehouseAvailableAt: null, lastSyncAt: input.appliedAt },
+      });
+    }
+    for (let offset = 0; offset < missingUnmappedIds.length; offset += 1000) {
+      await tx.wholesaleProductMapping.updateMany({
+        where: { id: { in: missingUnmappedIds.slice(offset, offset + 1000) } },
+        data: { isActive: false, lastKnownStock: ZERO, warehouseAvailableAt: null, lastSyncAt: input.appliedAt },
+      });
+    }
+    for (const [warehouseProductId, purchasePrice] of missingCostCandidates) {
+      await tx.warehouseProduct.updateMany({
+        where: { id: warehouseProductId, tenantId: input.tenantId, purchasePrice: null, averagePurchaseCost: null },
+        data: { purchasePrice },
+      });
+    }
+    return createdResult.count;
+  });
 
   return {
     created,
-    updated: updateOperations.length - unchanged,
-    unchanged,
-    skipped,
-    productsRecalculated: publication.productsRecalculated,
-    stockSyncEnqueued: publication.enqueued,
-    stockSyncSkipped: publication.skippedUnchangedPublication,
+    updated: changedMappings.length + missingMappedIds.length + missingUnmappedIds.length,
+    unchanged: input.items.length - createData.length - changedMappings.length,
+    missingHandled: missingMappedIds.length + missingUnmappedIds.length,
+    changedProductIds: Array.from(changedProductIds),
   };
 }
 
@@ -443,81 +506,6 @@ async function enqueueWholesaleAvailabilityStockSync(warehouseProductIds: string
   }
 
   return { productsRecalculated: products.length, enqueued, skippedUnchangedPublication };
-}
-
-async function markMappingsMissingFromFeed(input: {
-  tenantId: string;
-  providerId: string;
-  syncStartedAt: Date;
-  finishedAt: Date;
-}) {
-  const staleMappings = await prisma.wholesaleProductMapping.findMany({
-    where: {
-      tenantId: input.tenantId,
-      providerId: input.providerId,
-      isActive: true,
-      OR: [
-        { lastSyncAt: null },
-        { lastSyncAt: { lt: input.syncStartedAt } },
-      ],
-    },
-    select: {
-      id: true,
-      warehouseProductId: true,
-      lastKnownStock: true,
-    },
-  });
-
-  if (staleMappings.length === 0) {
-    return {
-      deactivated: 0,
-      zeroedMapped: 0,
-      productsRecalculated: 0,
-      stockSyncEnqueued: 0,
-      stockSyncSkipped: 0,
-    };
-  }
-
-  const changedProductIds = staleMappings
-    .filter((mapping) => mapping.warehouseProductId && isPositiveDecimal(mapping.lastKnownStock))
-    .map((mapping) => mapping.warehouseProductId as string);
-  const mappedIds = staleMappings
-    .filter((mapping) => mapping.warehouseProductId)
-    .map((mapping) => mapping.id);
-  const unmappedIds = staleMappings
-    .filter((mapping) => !mapping.warehouseProductId)
-    .map((mapping) => mapping.id);
-
-  for (let i = 0; i < mappedIds.length; i += 1000) {
-    await prisma.wholesaleProductMapping.updateMany({
-      where: { id: { in: mappedIds.slice(i, i + 1000) } },
-      data: {
-        lastKnownStock: ZERO,
-        lastSyncAt: input.finishedAt,
-      },
-    });
-  }
-
-  for (let i = 0; i < unmappedIds.length; i += 1000) {
-    await prisma.wholesaleProductMapping.updateMany({
-      where: { id: { in: unmappedIds.slice(i, i + 1000) } },
-      data: {
-        isActive: false,
-        lastKnownStock: ZERO,
-        lastSyncAt: input.finishedAt,
-      },
-    });
-  }
-
-  const publication = await enqueueWholesaleAvailabilityStockSync(changedProductIds, input.tenantId);
-
-  return {
-    deactivated: unmappedIds.length,
-    zeroedMapped: mappedIds.length,
-    productsRecalculated: publication.productsRecalculated,
-    stockSyncEnqueued: publication.enqueued,
-    stockSyncSkipped: publication.skippedUnchangedPublication,
-  };
 }
 
 function hasWholesaleBusinessDataChanged(

@@ -14,6 +14,7 @@ import {
   requireTenantId,
   validateWholesaleSyncInterval,
   type FieldMapping,
+  type WholesaleFeedSafetyConfig,
   type WholesaleAvailabilityRule,
   type WholesalePreset,
 } from './wholesale/shared';
@@ -46,6 +47,7 @@ export interface CreateWholesaleProviderInput {
   delimiter?: string;
   fieldMapping?: FieldMapping;
   availabilityRule?: WholesaleAvailabilityRule;
+  feedSafety?: Partial<WholesaleFeedSafetyConfig>;
   syncEnabled?: boolean;
   syncInterval?: number;
   leadTimeDays?: number | null;
@@ -60,6 +62,7 @@ export interface UpdateWholesaleProviderInput {
   delimiter?: string;
   fieldMapping?: FieldMapping;
   availabilityRule?: WholesaleAvailabilityRule;
+  feedSafety?: Partial<WholesaleFeedSafetyConfig>;
   syncEnabled?: boolean;
   syncInterval?: number;
   leadTimeDays?: number | null;
@@ -411,6 +414,7 @@ export async function updateWholesaleProvider(id: string, input: UpdateWholesale
     input.delimiter !== undefined ||
     input.fieldMapping !== undefined ||
     input.availabilityRule !== undefined
+    || input.feedSafety !== undefined
   ) {
     const currentConfig = parseProviderConfig(provider.configJson);
     const nextConfig = buildProviderConfig({
@@ -418,6 +422,7 @@ export async function updateWholesaleProvider(id: string, input: UpdateWholesale
       delimiter: input.delimiter ?? currentConfig.delimiter,
       fieldMapping: input.fieldMapping ?? currentConfig.fieldMapping,
       availabilityRule: input.availabilityRule ?? currentConfig.availabilityRule,
+      feedSafety: input.feedSafety ?? currentConfig.feedSafety,
       name: provider.name,
       feedUrl: provider.feedUrl,
     });

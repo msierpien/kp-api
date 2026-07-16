@@ -35,6 +35,7 @@ services:
 
   # Fastify API
   api:
+    image: kp-api-app:production
     build:
       context: .
       dockerfile: Dockerfile
@@ -43,8 +44,9 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:${API_PORT:-3001}:3001"  # Tylko localhost - Nginx jest reverse proxy
-    environment:
+    environment: &api-environment
       NODE_ENV: production
+      RUNTIME_ROLE: api
       API_PORT: 3001
       API_HOST: 0.0.0.0
       # Database
@@ -79,8 +81,52 @@ services:
       # Storage
       STORAGE_PATH: /app/storage
       PUBLIC_STORAGE_URL: ${APP_URL}
+      PRICE_SYNC_MAX_AUTO_CHANGE_PERCENT: ${PRICE_SYNC_MAX_AUTO_CHANGE_PERCENT:-20}
+      PRICE_SYNC_MAX_AUTO_BATCH: ${PRICE_SYNC_MAX_AUTO_BATCH:-200}
     volumes:
       - api_storage:/app/storage  # Trwały wolumin dla plików
+    networks:
+      - default
+      - analytics_data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    image: kp-api-app:production
+    container_name: personalization-worker
+    restart: unless-stopped
+    environment:
+      <<: *api-environment
+      RUNTIME_ROLE: worker
+    volumes:
+      - api_storage:/app/storage
+    networks:
+      - default
+      - analytics_data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  scheduler:
+    image: kp-api-app:production
+    container_name: personalization-scheduler
+    restart: unless-stopped
+    environment:
+      <<: *api-environment
+      RUNTIME_ROLE: scheduler
+    volumes:
+      - api_storage:/app/storage
     networks:
       - default
       - analytics_data

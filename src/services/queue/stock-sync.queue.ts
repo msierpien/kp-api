@@ -2,6 +2,9 @@ import { Queue, Job } from 'bullmq';
 import { getBullMqConnection } from './render.queue';
 
 export const STOCK_SYNC_QUEUE_NAME = 'stock-sync';
+const DEFAULT_BATCH_SIZE = 500;
+const SCHEDULED_BATCH_SIZE = 100;
+const SCHEDULED_BATCH_DELAY_MS = 10_000;
 
 export type StockSyncAvailabilityPolicy = 'IN_STOCK' | 'IN_STOCK_WITH_BACKORDER' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
 
@@ -94,12 +97,14 @@ export async function addStockSyncJob(data: StockSyncJobData): Promise<Job<Stock
 export async function addStockSyncBatchJobs(data: Omit<StockSyncBatchJobData, 'items'> & { items: StockSyncBatchItem[] }): Promise<Array<Job<StockSyncJobData>>> {
   const queue = getStockSyncQueue();
   const jobs: Array<Job<StockSyncJobData>> = [];
+  const batchSize = data.triggeredBy === 'SCHEDULED' ? SCHEDULED_BATCH_SIZE : DEFAULT_BATCH_SIZE;
 
-  for (let i = 0; i < data.items.length; i += 500) {
-    const items = data.items.slice(i, i + 500);
-    const batchNumber = Math.floor(i / 500) + 1;
+  for (let i = 0; i < data.items.length; i += batchSize) {
+    const items = data.items.slice(i, i + batchSize);
+    const batchNumber = Math.floor(i / batchSize) + 1;
     jobs.push(await queue.add('sync-stock-batch', { ...data, items }, {
       jobId: buildBatchJobId(data.shopId, items, batchNumber),
+      ...(data.triggeredBy === 'SCHEDULED' ? { delay: (batchNumber - 1) * SCHEDULED_BATCH_DELAY_MS } : {}),
     }));
   }
 

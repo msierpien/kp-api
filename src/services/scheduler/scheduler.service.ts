@@ -459,30 +459,6 @@ async function runDailyInventoryPublication() {
   console.log('[Scheduler] 📦 Starting daily inventory publication...');
 
   try {
-    const providers = await prisma.wholesaleProvider.findMany({
-      where: {
-        isActive: true,
-        syncEnabled: true,
-        platform: 'CSV_FEED',
-      },
-      select: {
-        id: true,
-        tenantId: true,
-        name: true,
-      },
-      orderBy: { name: 'asc' },
-    });
-
-    let providerSyncErrors = 0;
-    for (const provider of providers) {
-      try {
-        await syncWholesaleProviderForTenant(provider.id, provider.tenantId);
-      } catch (error) {
-        providerSyncErrors += 1;
-        console.error(`[Scheduler] ❌ Failed to enqueue wholesale sync for ${provider.name}:`, error);
-      }
-    }
-
     const activeWholesaleSyncs = await waitForWholesaleSyncsToFinish();
     if (activeWholesaleSyncs > 0) {
       const duration = Date.now() - startTime.getTime();
@@ -527,7 +503,6 @@ async function runDailyInventoryPublication() {
     const duration = Date.now() - startTime.getTime();
     console.log(
       `[Scheduler] ✅ Daily inventory publication completed: ` +
-      `${providers.length} providers requested (${providerSyncErrors} errors), ` +
       `${shops.length} shops, ${enqueued} stock jobs (${shopErrors} errors), ` +
       `${duration}ms`
     );

@@ -36,19 +36,19 @@ test('SKU matching does not extract ordinary first words from product names', ()
 
 test('wholesale sync keeps mapped offers missing from feed as zero-stock mappings', () => {
   const source = readFileSync(join(process.cwd(), 'src/services/admin/wholesale-sync.service.ts'), 'utf8');
-  const start = source.indexOf('async function markMappingsMissingFromFeed');
-  const end = source.indexOf('function normalizeSyncLimit', start);
+  const start = source.indexOf('async function applyWholesaleFeed');
+  const end = source.indexOf('async function enqueueWholesaleAvailabilityStockSync', start);
   const body = source.slice(start, end);
   const mappedUpdate = body.slice(
-    body.indexOf('for (let i = 0; i < mappedIds.length'),
-    body.indexOf('for (let i = 0; i < unmappedIds.length'),
+    body.indexOf('for (let offset = 0; offset < missingMappedIds.length'),
+    body.indexOf('for (let offset = 0; offset < missingUnmappedIds.length'),
   );
-  const unmappedUpdate = body.slice(body.indexOf('for (let i = 0; i < unmappedIds.length'));
+  const unmappedUpdate = body.slice(body.indexOf('for (let offset = 0; offset < missingUnmappedIds.length'));
 
-  assert.match(body, /const mappedIds = staleMappings/);
-  assert.match(body, /const unmappedIds = staleMappings/);
+  assert.match(body, /const missingMappedIds = missing/);
+  assert.match(body, /const missingUnmappedIds = missing/);
   assert.match(mappedUpdate, /lastKnownStock: ZERO/);
   assert.doesNotMatch(mappedUpdate, /isActive: false/);
   assert.match(unmappedUpdate, /isActive: false/);
-  assert.match(body, /zeroedMapped: mappedIds\.length/);
+  assert.match(body, /missingHandled: missingMappedIds\.length \+ missingUnmappedIds\.length/);
 });

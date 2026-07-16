@@ -40,6 +40,7 @@ export const TENANT_MODELS = new Set([
   'WholesaleProvider',
   'WholesaleProductMapping',
   'WholesaleSyncLog',
+  'WholesaleFeedStagingItem',
   'ProductChannelSnapshot',
   'ProductChannelSyncConfig',
   'ProductCardOperationLog',

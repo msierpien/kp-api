@@ -64,6 +64,10 @@ const envSchema = z.object({
   RUNTIME_ROLE: z.enum(['all', 'api', 'worker', 'scheduler']).default('all'),
   WORKERS_ENABLED: z.string().optional().transform(val => val === undefined ? undefined : val !== 'false'),
   SCHEDULER_ENABLED: z.string().optional().transform(val => val === undefined ? undefined : val !== 'false'),
+
+  // Price synchronization safety
+  PRICE_SYNC_MAX_AUTO_CHANGE_PERCENT: z.string().transform(Number).pipe(z.number().positive().max(100)).default('20'),
+  PRICE_SYNC_MAX_AUTO_BATCH: z.string().transform(Number).pipe(z.number().int().positive().max(5000)).default('200'),
 });
 
 type Env = z.infer<typeof envSchema>;
@@ -225,6 +229,10 @@ export const config = {
   },
 
   runtime: resolveRuntime(env.RUNTIME_ROLE, env.API_ENABLED, env.WORKERS_ENABLED, env.SCHEDULER_ENABLED),
+  priceSyncSafety: {
+    maxAutoChangePercent: env.PRICE_SYNC_MAX_AUTO_CHANGE_PERCENT,
+    maxAutoBatch: env.PRICE_SYNC_MAX_AUTO_BATCH,
+  },
 } as const;
 
 export type Config = typeof config;

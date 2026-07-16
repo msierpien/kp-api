@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
 import { addStockSyncBatchJobs, addStockSyncJob, getStockSyncQueue, type StockSyncBatchItem } from '../queue/stock-sync.queue';
+import { getQueueStats } from '../queue/queue-stats.service';
 import { getInventoryPublicationDecision, resolvePublishedWarehouseAvailableAt } from '../stock/stock-sync.service';
 
 type StockSyncStatus = 'PENDING' | 'PROCESSING' | 'SUCCESS' | 'FAILED';
@@ -501,6 +502,60 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
     }),
   ]);
 
+  const [wholesaleProviders, queueStats] = await Promise.all([
+    prisma.wholesaleProvider.findMany({
+      where: { tenantId, isActive: true, syncEnabled: true },
+      orderBy: { name: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        syncInterval: true,
+        lastSyncAt: true,
+        syncLogs: {
+          take: 1,
+          orderBy: { startedAt: 'desc' },
+          select: {
+            id: true,
+            status: true,
+            validationStatus: true,
+            itemsFetched: true,
+            mappingsUpdated: true,
+            mappingsUnchanged: true,
+            productsRecalculated: true,
+            stockSyncEnqueued: true,
+            stockSyncSkipped: true,
+            errorMessage: true,
+            startedAt: true,
+            finishedAt: true,
+          },
+        },
+      },
+    }),
+    Promise.all(['wholesaleSync', 'stockSync', 'priceSync'].map(async (name) => {
+      try {
+        return await getQueueStats(name);
+      } catch {
+        return null;
+      }
+    })),
+  ]);
+
+  const now = Date.now();
+  const providerHealth = wholesaleProviders.map((provider) => {
+    const latestLog = provider.syncLogs[0] ?? null;
+    const ageMinutes = provider.lastSyncAt ? Math.floor((now - provider.lastSyncAt.getTime()) / 60_000) : null;
+    const staleAfterMinutes = Math.max(provider.syncInterval * 2, 120);
+    const status = latestLog?.status === 'PROCESSING' || latestLog?.status === 'PENDING'
+      ? 'SYNCING'
+      : latestLog?.status === 'FAILED'
+        ? 'FAILED'
+        : ageMinutes === null || ageMinutes > staleAfterMinutes
+          ? 'STALE'
+          : 'HEALTHY';
+    return { ...provider, syncLogs: undefined, latestLog, ageMinutes, staleAfterMinutes, status };
+  });
+  const staleWholesaleProviders = providerHealth.filter((provider) => provider.status === 'STALE' || provider.status === 'FAILED').length;
+
   return {
     summary: {
       totalProducts,
@@ -515,6 +570,7 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
       failedStockSyncLogs: failedStockSyncLogsCount,
       failedPriceSyncLogs: failedPriceSyncLogsCount,
       failedWholesaleSyncLogs: failedWholesaleSyncLogsCount,
+      staleWholesaleProviders,
       draftDocuments: draftDocumentsCount,
     },
     thresholds: {
@@ -532,6 +588,10 @@ export async function getWarehouseDashboard(query: WarehouseDashboardQuery = {})
       failedStockSyncLogs,
       failedPriceSyncLogs,
       failedWholesaleSyncLogs,
+    },
+    syncHealth: {
+      providers: providerHealth,
+      queues: queueStats.filter((queue) => queue !== null),
     },
   };
 }

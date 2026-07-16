@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import config from '../../config';
+import { config } from '../../config';
 import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
 import { addPriceSyncJob, type PriceSyncTriggeredBy } from '../queue/price-sync.queue';

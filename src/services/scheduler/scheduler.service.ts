@@ -7,6 +7,7 @@ import { syncWholesaleProviderForTenant } from '../admin/wholesale.service';
 import { reconcilePrestaShopForTenant } from '../prestashop/prestashop-reconciliation.service';
 import { syncStockForShop } from '../stock/stock-sync.service';
 import { runCompetitorPriceAutomationForTenant } from '../admin/competitor-analytics.service';
+import { intervalToCron, spreadMinuteOffset } from './cron-schedule';
 // BullMQ Worker automatycznie przetwarza RenderJobs - nie potrzebujemy crona
 
 /**
@@ -21,6 +22,7 @@ const scheduledTasks = new Map<string, ScheduledTask>();
  */
 const scheduledWholesaleTasks = new Map<string, ScheduledTask>();
 const scheduledCompetitorPriceTasks = new Map<string, ScheduledTask>();
+const runningShopSyncs = new Set<string>();
 const ACTIVE_WHOLESALE_SYNC_STATUSES = ['PENDING', 'PROCESSING'] as const;
 const DAILY_INVENTORY_WHOLESALE_WAIT_TIMEOUT_MS = 30 * 60_000;
 const DAILY_INVENTORY_WHOLESALE_WAIT_INTERVAL_MS = 10_000;
@@ -35,22 +37,13 @@ const DAILY_INVENTORY_BLOCKED_WARNING =
  * - 30 minut
  * - 60 minut (co godzinę)
  */
-function intervalToCron(intervalMinutes: number): string {
-  if (intervalMinutes >= 60 && intervalMinutes % 60 === 0) {
-    const hours = intervalMinutes / 60;
-    if (hours === 1) {
-      return '0 * * * *'; // co godzinę
-    }
-    return `0 */${hours} * * *`; // co X godzin
-  }
-  
-  return `*/${intervalMinutes} * * * *`; // co X minut
-}
-
-/**
- * Uruchamia synchronizację dla konkretnego sklepu
- */
 async function runShopSync(shopId: string, shopName: string) {
+  if (runningShopSyncs.has(shopId)) {
+    console.warn(`[Scheduler] ⏭️ Skipping overlapping sync for shop: ${shopName} (${shopId})`);
+    return;
+  }
+
+  runningShopSyncs.add(shopId);
   const startTime = new Date();
   console.log(`[Scheduler] 🔄 Starting automatic sync for shop: ${shopName} (${shopId})`);
   
@@ -69,6 +62,8 @@ async function runShopSync(shopId: string, shopName: string) {
       `[Scheduler] ❌ Sync failed for ${shopName} after ${duration}ms:`,
       error
     );
+  } finally {
+    runningShopSyncs.delete(shopId);
   }
 }
 
@@ -79,7 +74,8 @@ function scheduleShopSync(shopId: string, shopName: string, intervalMinutes: num
   // Usuń istniejące zadanie jeśli istnieje
   stopShopSync(shopId);
   
-  const cronExpression = intervalToCron(intervalMinutes);
+  const minuteOffset = spreadMinuteOffset(`shop:${shopId}`, intervalMinutes, 3, 6);
+  const cronExpression = intervalToCron(intervalMinutes, minuteOffset);
   
   const task = cron.schedule(
     cronExpression,
@@ -136,7 +132,8 @@ async function runWholesaleSync(providerId: string, providerName: string, tenant
 function scheduleWholesaleSync(providerId: string, providerName: string, tenantId: string, intervalMinutes: number) {
   stopWholesaleSync(providerId);
 
-  const cronExpression = intervalToCron(intervalMinutes);
+  const minuteOffset = spreadMinuteOffset(`wholesale:${providerId}`, intervalMinutes, 12, 12);
+  const cronExpression = intervalToCron(intervalMinutes, minuteOffset);
   const task = cron.schedule(
     cronExpression,
     () => {

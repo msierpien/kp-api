@@ -510,14 +510,14 @@ async function runDailyInventoryPublication() {
 
 function scheduleDailyInventoryPublication() {
   cron.schedule(
-    '30 5 * * *',
+    '40 5 * * *',
     () => {
       runDailyInventoryPublication();
     },
     { timezone: 'Europe/Warsaw' },
   );
 
-  console.log('[Scheduler] 📅 Scheduled inventory publication: daily at 5:30 AM');
+  console.log('[Scheduler] 📅 Scheduled inventory publication: daily at 5:40 AM');
 }
 
 /**

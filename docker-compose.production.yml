@@ -1,9 +1,16 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # PostgreSQL Database
   postgres:
     image: postgres:16-alpine
     container_name: personalization-db
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_DB: ${DB_NAME:-personalization}
       POSTGRES_USER: ${DB_USER:-postgres}
@@ -23,6 +30,7 @@ services:
     image: redis:7-alpine
     container_name: personalization-redis
     restart: unless-stopped
+    logging: *default-logging
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
     volumes:
       - redis_data:/data
@@ -42,6 +50,7 @@ services:
       target: production
     container_name: personalization-api
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "127.0.0.1:${API_PORT:-3001}:3001"  # Tylko localhost - Nginx jest reverse proxy
     environment: &api-environment
@@ -104,6 +113,7 @@ services:
     image: kp-api-app:production
     container_name: personalization-worker
     restart: unless-stopped
+    logging: *default-logging
     environment:
       <<: *api-environment
       RUNTIME_ROLE: worker
@@ -122,6 +132,7 @@ services:
     image: kp-api-app:production
     container_name: personalization-scheduler
     restart: unless-stopped
+    logging: *default-logging
     environment:
       <<: *api-environment
       RUNTIME_ROLE: scheduler

@@ -135,9 +135,14 @@ export async function casesRoutes(fastify: FastifyInstance) {
         params: { type: 'object', properties: { id: { type: 'string' } } },
         body: {
           type: 'object',
-          required: ['answers'],
           properties: {
-            answers: { type: 'object', description: 'Mapa klucz pola → wartość' },
+            answers: { type: 'object', description: 'Stara płaska mapa klucz pola → wartość' },
+            sharedAnswers: { type: 'object', description: 'Odpowiedzi wspólne dla całej pozycji' },
+            items: {
+              type: 'array',
+              description: 'Odpowiedzi indywidualne per sztuka',
+              items: { type: 'object' },
+            },
           },
         },
         response: {
@@ -165,7 +170,7 @@ export async function casesRoutes(fastify: FastifyInstance) {
 
         const updated = await updateCaseAnswers(
           paramsValidation.data.id,
-          bodyValidation.data.answers
+          bodyValidation.data
         );
         return reply.send(updated);
       } catch (error: any) {

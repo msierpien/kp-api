@@ -8,6 +8,13 @@ import { listFonts } from '../../services/admin/fonts.service';
 import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
 import { MAX_PREVIEW_UPLOAD_BYTES, assertAllowedPngUpload, isUploadValidationError } from '../../lib/upload-validation';
 import { RATE_LIMITS } from '../../lib/rate-limits';
+import {
+  flattenCaseAnswers,
+  getFieldScope,
+  hasAnswerValue,
+  mergeCaseAnswers,
+  type PersonalizationAnswerField,
+} from '../../lib/personalization-answers';
 
 interface PersonalizationParams {
   token: string;
@@ -35,14 +42,25 @@ async function saveAnswers(
   caseId: string,
   currentAnswersJson: any,
   answers: Record<string, any>,
-  fieldKeyToId: Map<string, string>
+  fieldKeyToId: Map<string, string>,
+  fields: PersonalizationAnswerField[],
+  quantity = 1
 ) {
-  for (const [fieldKey, value] of Object.entries(answers)) {
-    const fieldId = fieldKeyToId.get(fieldKey);
+  const mergedAnswers = mergeCaseAnswers(currentAnswersJson, { answers }, fields, quantity);
+
+  for (const field of fields) {
+    const fieldId = fieldKeyToId.get(field.key);
     if (!fieldId) {
       // Skip unknown fields to avoid FK errors
       continue;
     }
+
+    const scope = getFieldScope(field);
+    const value = scope === 'INDIVIDUAL'
+      ? mergedAnswers.items.map((item) => item[field.key]).filter(hasAnswerValue)
+      : mergedAnswers.sharedAnswers[field.key];
+
+    if (!hasAnswerValue(value)) continue;
 
     await prisma.personalizationAnswer.upsert({
       where: {
@@ -64,10 +82,7 @@ async function saveAnswers(
     });
   }
 
-  return {
-    ...((currentAnswersJson as any) || {}),
-    ...answers,
-  };
+  return mergedAnswers;
 }
 
 // Helper do dodawania nagłówków bezpieczeństwa
@@ -357,8 +372,12 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
 
         // Zbuduj mapę fieldKey -> fieldId (na podstawie template)
         const fieldKeyToId = new Map<string, string>();
+        const allFields: any[] = [];
         getCaseTemplate(personalizationCase)?.forms?.forEach((form: any) => {
-          form.fields.forEach((f: any) => fieldKeyToId.set(f.key, f.id));
+          form.fields.forEach((f: any) => {
+            fieldKeyToId.set(f.key, f.id);
+            allFields.push(f);
+          });
         });
 
         // Save answers rows + merged JSON for admin panel
@@ -366,7 +385,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           personalizationCase.id,
           personalizationCase.answersJson,
           request.body.answers,
-          fieldKeyToId
+          fieldKeyToId,
+          allFields,
+          personalizationCase.orderItem.quantity
         );
 
         // Update case status
@@ -374,7 +395,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           where: { customerTokenHash: tokenHash },
           data: {
             status: 'WAITING_FOR_CUSTOMER',
-            answersJson: mergedAnswers,
+            answersJson: JSON.parse(JSON.stringify(mergedAnswers)),
             layoutOverrides: request.body.layoutOverrides ? JSON.parse(JSON.stringify(request.body.layoutOverrides)) : undefined,
           },
           include: {
@@ -502,30 +523,30 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
 
         // Zbuduj mapę fieldKey -> fieldId
         const fieldKeyToId = new Map<string, string>();
+        const allFields: any[] = [];
         getCaseTemplate(personalizationCase)?.forms?.forEach((form: any) => {
-          form.fields.forEach((f: any) => fieldKeyToId.set(f.key, f.id));
+          form.fields.forEach((f: any) => {
+            fieldKeyToId.set(f.key, f.id);
+            allFields.push(f);
+          });
         });
 
         // Zapisz odpowiedzi jeśli przyszły w body
-        let mergedAnswers = personalizationCase.answersJson || {};
+        let mergedAnswers: unknown = personalizationCase.answersJson || {};
         const layoutOverrides = request.body?.layoutOverrides ?? personalizationCase.layoutOverrides;
         if (request.body?.answers) {
           mergedAnswers = await saveAnswers(
             personalizationCase.id,
             personalizationCase.answersJson,
             request.body.answers,
-            fieldKeyToId
+            fieldKeyToId,
+            allFields,
+            personalizationCase.orderItem.quantity
           );
         }
 
-        // Pobierz wszystkie pola z template
-        const allFields: any[] = [];
-        getCaseTemplate(personalizationCase)?.forms?.forEach((form: any) => {
-          allFields.push(...form.fields);
-        });
-
         // Walidacja z opentype.js
-        const answersForValidation = mergedAnswers as Record<string, string | number | boolean | undefined>;
+        const answersForValidation = flattenCaseAnswers(mergedAnswers) as Record<string, string | number | boolean | undefined>;
         const validation = await validateAnswers(answersForValidation, allFields.map(f => ({
           key: f.key,
           label: f.label,
@@ -569,7 +590,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         await prisma.personalizationCase.update({
           where: { id: personalizationCase.id },
           data: {
-            answersJson: mergedAnswers,
+            answersJson: JSON.parse(JSON.stringify(mergedAnswers)),
             layoutOverrides: layoutOverrides ? JSON.parse(JSON.stringify(layoutOverrides)) : undefined,
             validationSummary: JSON.parse(JSON.stringify(validation)),
             status: previewUrl ? 'PREVIEW_READY' : 'DRAFT',
@@ -698,24 +719,30 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
 
         // Zbuduj mapę fieldKey -> fieldId (na podstawie template)
         const fieldKeyToId = new Map<string, string>();
+        const allFields: any[] = [];
         getCaseTemplate(personalizationCase)?.forms?.forEach((form: any) => {
-          form.fields.forEach((f: any) => fieldKeyToId.set(f.key, f.id));
+          form.fields.forEach((f: any) => {
+            fieldKeyToId.set(f.key, f.id);
+            allFields.push(f);
+          });
         });
 
         // Jeśli w body przyszły odpowiedzi, zapisz je przed walidacją
-        let mergedAnswers = personalizationCase.answersJson;
+        let mergedAnswers: unknown = personalizationCase.answersJson;
         const layoutOverrides = request.body?.layoutOverrides ?? personalizationCase.layoutOverrides;
         if (request.body?.answers) {
           mergedAnswers = await saveAnswers(
             personalizationCase.id,
             personalizationCase.answersJson,
             request.body.answers,
-            fieldKeyToId
+            fieldKeyToId,
+            allFields,
+            personalizationCase.orderItem.quantity
           );
 
           await prisma.personalizationCase.update({
             where: { id: personalizationCase.id },
-            data: { answersJson: mergedAnswers as object },
+            data: { answersJson: JSON.parse(JSON.stringify(mergedAnswers)) },
           });
         }
 
@@ -754,7 +781,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         // Dodaj job do BullMQ queue
         const bullmqJob = await addFinalPdfJob({
           caseId: personalizationCase.id,
-          answers: mergedAnswers as Record<string, string | number | boolean>,
+          answers: flattenCaseAnswers(mergedAnswers) as Record<string, string | number | boolean>,
           templateName: templateSlug,
           templateVersion,
           layoutConfig,

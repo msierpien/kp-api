@@ -2,6 +2,7 @@ import prisma from '../../lib/prisma';
 import { Prisma } from '@prisma/client';
 import type { TemplateLayoutInput } from '../../schemas/admin.schema';
 import type { TemplateLayoutJson, TemplateAssetItem } from '../../types/template-layout';
+import { normalizeCanvasConfig } from '../../types/template-layout';
 import fs from 'fs/promises';
 import path from 'path';
 import { imageExtensionForMimeType } from '../../lib/upload-validation';
@@ -49,12 +50,17 @@ export async function updateTemplateLayout(
     throw new Error('Szablon nie znaleziony');
   }
 
-  validateLayout(layoutJson, template.forms);
+  const normalizedLayout = {
+    ...layoutJson,
+    canvas: normalizeCanvasConfig(layoutJson.canvas as any),
+  } as TemplateLayoutInput;
+
+  validateLayout(normalizedLayout, template.forms);
 
   const updated = await prisma.personalizationTemplate.update({
     where: { id: templateId },
     data: {
-      layoutJson: layoutJson as any,
+      layoutJson: normalizedLayout as any,
     },
     select: { layoutJson: true },
   });
@@ -207,13 +213,15 @@ function validateLayout(layout: TemplateLayoutInput, forms: Array<{ fields: Arra
   const formKeys = new Set(forms?.flatMap(f => f.fields.map(fl => fl.key)) || []);
   const seenKeys = new Set<string>();
   for (const layer of layout.layers) {
-    if (layer.type === 'text') {
+    if (layer.type === 'text' || layer.type === 'textbox') {
       const fk = (layer.properties as any).fieldKey;
       if (!fk) {
-        throw new Error(`Warstwa tekstowa ${layer.name} nie ma fieldKey`);
+        console.warn(`[layout] Warstwa tekstowa ${layer.name} nie ma fieldKey`);
+        continue;
       }
       if (!formKeys.has(fk)) {
-        throw new Error(`fieldKey ${fk} nie istnieje w formularzu`);
+        console.warn(`[layout] fieldKey ${fk} nie istnieje w formularzu`);
+        continue;
       }
       if (seenKeys.has(fk)) {
         // nie blokujemy, ale ostrzegamy

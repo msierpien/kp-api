@@ -100,6 +100,16 @@ enum IdentifierType {
   EAN // ean13 w PrestaShop
 }
 
+enum FieldScope {
+  SHARED
+  INDIVIDUAL
+}
+
+enum TemplateEditorType {
+  SIMPLE
+  ADVANCED
+}
+
 model Shop {
   id           String       @id @default(cuid())
   tenantId     String       @map("tenant_id")
@@ -655,6 +665,7 @@ model PersonalizationTemplate {
   name         String
   description  String?
   version      Int      @default(1)
+  editorType   TemplateEditorType @default(ADVANCED) @map("editor_type")
   isActive     Boolean  @default(true) @map("is_active")
   layoutJson   Json?    @map("layout_json") // TemplateLayoutJson - pozycje pól, warstwy, czcionki
   thumbnailUrl String?  @map("thumbnail_url") // URL miniatury szablonu
@@ -716,6 +727,7 @@ model FormField {
   key                 String // unikalne w obrębie formularza
   label               String
   type                String // text, textarea, select, checkbox, date, time, repeater, upload
+  scope               FieldScope @default(SHARED)
   required            Boolean  @default(false)
   minLength           Int?     @map("min_length")
   maxLength           Int?     @map("max_length")

@@ -6,6 +6,15 @@ import { emailService } from '../email/email.service';
 import { queuePersonalizationEmail } from '../queue/email.queue';
 import { triggerAutomations, AutomationTrigger } from './automation.service';
 import { generateAccessToken, maskToken } from '../../lib/token';
+import {
+  computeCaseAnswerProgress,
+  getFieldScope,
+  hasAnswerValue,
+  mergeCaseAnswers,
+  normalizeCaseAnswers,
+  type PersonalizationAnswerField,
+  type StructuredCaseAnswers,
+} from '../../lib/personalization-answers';
 
 export async function getCases(query: CasesQueryInput): Promise<PaginatedResponse<CaseListItem>> {
   const { page, limit, status, emailStatus, search, sortBy, sortOrder } = query;
@@ -70,11 +79,24 @@ export async function getCases(query: CasesQueryInput): Promise<PaginatedRespons
         orderItem: {
           select: {
             productNameSnapshot: true,
+            quantity: true,
           },
         },
         template: {
           select: {
             name: true,
+            forms: {
+              select: {
+                fields: {
+                  select: {
+                    key: true,
+                    required: true,
+                    scope: true,
+                    repeaterGroupKey: true,
+                  },
+                },
+              },
+            },
           },
         },
       },
@@ -82,17 +104,30 @@ export async function getCases(query: CasesQueryInput): Promise<PaginatedRespons
     prisma.personalizationCase.count({ where }),
   ]);
 
-  const data: CaseListItem[] = cases.map((c) => ({
-    id: c.id,
-    status: c.status,
-    orderReference: c.order.orderReference,
-    customerEmail: c.order.customerEmail,
-    customerName: c.order.customerName,
-    productName: c.orderItem.productNameSnapshot,
-    templateName: c.template.name,
-    submittedAt: c.submittedAt,
-    createdAt: c.createdAt,
-  }));
+  const data: CaseListItem[] = cases.map((c) => {
+    const fields = c.template.forms.flatMap((form) => form.fields);
+    const answerProgress = computeCaseAnswerProgress(c.answersJson, fields, c.orderItem.quantity);
+
+    return {
+      id: c.id,
+      status: c.status,
+      orderReference: c.order.orderReference,
+      customerEmail: c.order.customerEmail,
+      customerName: c.order.customerName,
+      productName: c.orderItem.productNameSnapshot,
+      templateName: c.template.name,
+      quantity: c.orderItem.quantity,
+      answerProgress,
+      filled: answerProgress.filled,
+      qty: answerProgress.qty,
+      submittedAt: c.submittedAt,
+      createdAt: c.createdAt,
+      emailSentAt: c.emailSentAt,
+      emailFailedAt: c.emailFailedAt,
+      emailError: c.emailError,
+      emailAttempts: c.emailAttempts,
+    } as CaseListItem;
+  });
 
   return {
     data,
@@ -141,9 +176,17 @@ export async function getCaseById(id: string) {
     throw new Error('Case not found');
   }
 
+  const fields = caseItem.template.forms.flatMap((form) => form.fields);
+  const answersJson = normalizeCaseAnswers(caseItem.answersJson, fields, caseItem.orderItem.quantity);
+  const answerProgress = computeCaseAnswerProgress(caseItem.answersJson, fields, caseItem.orderItem.quantity);
+
   // Konwersja Decimal na number dla frontendowych operacji
   return {
     ...caseItem,
+    answersJson,
+    answerProgress,
+    filled: answerProgress.filled,
+    qty: answerProgress.qty,
     order: {
       ...caseItem.order,
       totalPaid: caseItem.order.totalPaid.toNumber(),
@@ -151,7 +194,7 @@ export async function getCaseById(id: string) {
   };
 }
 
-export async function updateCaseAnswers(id: string, answers: any) {
+export async function updateCaseAnswers(id: string, payload: { answers?: any; sharedAnswers?: Record<string, any>; items?: Array<Record<string, any>> }) {
   const caseItem = await prisma.personalizationCase.findUnique({
     where: { id },
     include: {
@@ -161,7 +204,15 @@ export async function updateCaseAnswers(id: string, answers: any) {
         },
       },
       orderItem: true,
-      template: true,
+      template: {
+        include: {
+          forms: {
+            include: {
+              fields: true,
+            },
+          },
+        },
+      },
     },
   });
 
@@ -169,35 +220,44 @@ export async function updateCaseAnswers(id: string, answers: any) {
     throw new Error('Case not found');
   }
 
-  // Merge z istniejącymi odpowiedziami
-  const updatedAnswers = {
-    ...(caseItem.answersJson as any),
-    ...answers,
-  };
+  const fields = caseItem.template.forms.flatMap((form) => form.fields);
+  const updatedAnswers = mergeCaseAnswers(caseItem.answersJson, payload, fields, caseItem.orderItem.quantity);
+  const answerProgress = computeCaseAnswerProgress(updatedAnswers, fields, caseItem.orderItem.quantity);
+  const hasAnyAnswer =
+    Object.values(updatedAnswers.sharedAnswers).some(hasAnswerValue) ||
+    updatedAnswers.items.some((item) => Object.values(item).some(hasAnswerValue));
 
   // Sprawdź czy wszystkie wymagane pola są wypełnione
-  const allFieldsFilled = Object.keys(updatedAnswers).length > 0;
+  const allFieldsFilled =
+    hasAnyAnswer &&
+    answerProgress.filled >= answerProgress.qty &&
+    answerProgress.sharedFilled >= answerProgress.sharedTotal;
   const shouldSubmit = allFieldsFilled && caseItem.status === 'WAITING_FOR_CUSTOMER';
 
-  const updated = await prisma.personalizationCase.update({
-    where: { id },
-    data: {
-      answersJson: updatedAnswers,
-      ...(shouldSubmit ? { 
-        status: 'SUBMITTED', 
-        submittedAt: new Date() 
-      } : {}),
-      updatedAt: new Date(),
-    },
-    include: {
-      order: {
-        include: {
-          shop: true,
-        },
+  const updated = await prisma.$transaction(async (tx) => {
+    await syncAnswerRows(tx, id, fields, updatedAnswers);
+
+    return tx.personalizationCase.update({
+      where: { id },
+      data: {
+        answersJson: JSON.parse(JSON.stringify(updatedAnswers)),
+        validationSummary: JSON.parse(JSON.stringify({ answerProgress })),
+        ...(shouldSubmit ? {
+          status: 'SUBMITTED',
+          submittedAt: new Date()
+        } : {}),
+        updatedAt: new Date(),
       },
-      orderItem: true,
-      template: true,
-    },
+      include: {
+        order: {
+          include: {
+            shop: true,
+          },
+        },
+        orderItem: true,
+        template: true,
+      },
+    });
   });
 
   // Trigger automation if case was submitted
@@ -210,6 +270,43 @@ export async function updateCaseAnswers(id: string, answers: any) {
   }
 
   return updated;
+}
+
+async function syncAnswerRows(
+  tx: Pick<typeof prisma, 'personalizationAnswer'>,
+  caseId: string,
+  fields: PersonalizationAnswerField[] & Array<{ id?: string }>,
+  answers: StructuredCaseAnswers
+) {
+  for (const field of fields) {
+    if (!field.id) continue;
+
+    const scope = getFieldScope(field);
+    const value = scope === 'INDIVIDUAL'
+      ? answers.items.map((item) => item[field.key]).filter(hasAnswerValue)
+      : answers.sharedAnswers[field.key];
+
+    if (!hasAnswerValue(value)) continue;
+
+    await tx.personalizationAnswer.upsert({
+      where: {
+        caseId_fieldId: {
+          caseId,
+          fieldId: field.id,
+        },
+      },
+      update: {
+        valueText: typeof value === 'string' ? value : null,
+        valueJson: typeof value !== 'string' ? value : null,
+      },
+      create: {
+        caseId,
+        fieldId: field.id,
+        valueText: typeof value === 'string' ? value : null,
+        valueJson: typeof value !== 'string' ? value : null,
+      },
+    });
+  }
 }
 
 export async function updateCaseStatus(id: string, status: string) {

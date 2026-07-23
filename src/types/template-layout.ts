@@ -18,13 +18,85 @@ export interface TemplateLayoutJson {
 // ============================================
 
 export interface CanvasConfig {
-  width: number;        // szerokość w px
-  height: number;       // wysokość w px
-  unit: 'px' | 'mm';   // jednostka bazowa
+  width: number;        // pochodna szerokość w px dla kompatybilności renderera
+  height: number;       // pochodna wysokość w px dla kompatybilności renderera
+  unit: 'px' | 'mm';   // dla nowych layoutów źródłem prawdy jest mm
+  widthMm?: number;
+  heightMm?: number;
+  formatPreset?: TemplateFormatPreset;
   dpi: number;          // rozdzielczość (300 dla druku)
-  bleed: number;        // spadówka w px
-  safeArea: number;     // strefa bezpieczna w px
+  bleed: number;        // pochodna spadówka w px
+  safeArea: number;     // pochodna strefa bezpieczna w px
+  bleedMm?: number;
+  safeAreaMm?: number;
   backgroundColor: string;
+}
+
+export type TemplateFormatPreset = 'WINIETKA_90X50' | 'A6_105X148' | 'DL_99X210' | 'THANK_YOU_148X105' | 'CUSTOM';
+
+export interface TemplateFormatOption {
+  key: TemplateFormatPreset;
+  label: string;
+  widthMm: number;
+  heightMm: number;
+}
+
+export const TEMPLATE_FORMAT_PRESETS: TemplateFormatOption[] = [
+  { key: 'WINIETKA_90X50', label: 'Winietka 90 x 50 mm', widthMm: 90, heightMm: 50 },
+  { key: 'A6_105X148', label: 'A6 105 x 148 mm', widthMm: 105, heightMm: 148 },
+  { key: 'DL_99X210', label: 'DL 99 x 210 mm', widthMm: 99, heightMm: 210 },
+  { key: 'THANK_YOU_148X105', label: 'Podziękowania 148 x 105 mm', widthMm: 148, heightMm: 105 },
+  { key: 'CUSTOM', label: 'Własny format', widthMm: 148, heightMm: 105 },
+];
+
+export function mmToPx(mm: number, dpi = 300): number {
+  return Math.round((mm / 25.4) * dpi);
+}
+
+export function pxToMm(px: number, dpi = 300): number {
+  return Number(((px / dpi) * 25.4).toFixed(2));
+}
+
+export function getCanvasWidthMm(canvas: CanvasConfig): number {
+  if (typeof canvas.widthMm === 'number' && canvas.widthMm > 0) return canvas.widthMm;
+  return pxToMm(canvas.width, canvas.dpi || 300);
+}
+
+export function getCanvasHeightMm(canvas: CanvasConfig): number {
+  if (typeof canvas.heightMm === 'number' && canvas.heightMm > 0) return canvas.heightMm;
+  return pxToMm(canvas.height, canvas.dpi || 300);
+}
+
+export function getCanvasWidthPx(canvas: CanvasConfig): number {
+  if (canvas.unit === 'mm' && canvas.widthMm) return mmToPx(canvas.widthMm, canvas.dpi || 300);
+  return canvas.width;
+}
+
+export function getCanvasHeightPx(canvas: CanvasConfig): number {
+  if (canvas.unit === 'mm' && canvas.heightMm) return mmToPx(canvas.heightMm, canvas.dpi || 300);
+  return canvas.height;
+}
+
+export function normalizeCanvasConfig(canvas: CanvasConfig): CanvasConfig {
+  const dpi = canvas.dpi || 300;
+  const widthMm = getCanvasWidthMm(canvas);
+  const heightMm = getCanvasHeightMm(canvas);
+  const bleedMm = typeof canvas.bleedMm === 'number' ? canvas.bleedMm : pxToMm(canvas.bleed || 0, dpi);
+  const safeAreaMm = typeof canvas.safeAreaMm === 'number' ? canvas.safeAreaMm : pxToMm(canvas.safeArea || 0, dpi);
+
+  return {
+    ...canvas,
+    unit: 'mm',
+    widthMm,
+    heightMm,
+    width: mmToPx(widthMm, dpi),
+    height: mmToPx(heightMm, dpi),
+    dpi,
+    bleedMm,
+    safeAreaMm,
+    bleed: mmToPx(bleedMm, dpi),
+    safeArea: mmToPx(safeAreaMm, dpi),
+  };
 }
 
 // ============================================
@@ -240,18 +312,30 @@ export interface TemplateAssetItem {
 /**
  * Tworzy domyślny pusty layout dla nowego szablonu.
  */
-export function createEmptyLayout(width: number, height: number, dpi = 300): TemplateLayoutJson {
+export function createEmptyLayout(
+  widthMm = 148,
+  heightMm = 105,
+  dpi = 300,
+  formatPreset: TemplateFormatPreset = 'THANK_YOU_148X105'
+): TemplateLayoutJson {
+  const canvas = normalizeCanvasConfig({
+    width: mmToPx(widthMm, dpi),
+    height: mmToPx(heightMm, dpi),
+    unit: 'mm',
+    widthMm,
+    heightMm,
+    formatPreset,
+    dpi,
+    bleed: 0,
+    safeArea: 0,
+    bleedMm: 0,
+    safeAreaMm: 0,
+    backgroundColor: '#ffffff',
+  });
+
   return {
     version: 1,
-    canvas: {
-      width,
-      height,
-      unit: 'px',
-      dpi,
-      bleed: 0,
-      safeArea: 0,
-      backgroundColor: '#ffffff',
-    },
+    canvas,
     fonts: [],
     layers: [],
   };

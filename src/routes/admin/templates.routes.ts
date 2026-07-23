@@ -43,6 +43,7 @@ const templateItemResponseSchema = {
     code: { type: 'string' },
     description: { type: ['string', 'null'] },
     version: { type: 'number' },
+    editorType: { type: 'string', enum: ['SIMPLE', 'ADVANCED'] },
     isActive: { type: 'boolean' },
     createdAt: { type: 'string' },
   },
@@ -120,6 +121,7 @@ export async function templatesRoutes(fastify: FastifyInstance) {
             name: { type: 'string' },
             code: { type: 'string' },
             description: { type: 'string' },
+            editorType: { type: 'string', enum: ['SIMPLE', 'ADVANCED'] },
           },
         },
         response: {
@@ -177,6 +179,7 @@ export async function templatesRoutes(fastify: FastifyInstance) {
           properties: {
             name: { type: 'string' },
             description: { type: 'string' },
+            editorType: { type: 'string', enum: ['SIMPLE', 'ADVANCED'] },
           },
         },
         response: {

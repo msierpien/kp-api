@@ -9,7 +9,7 @@ export const paginationSchema = z.object({
 const orderOperationalStatusSchema = z.enum(ORDER_OPERATIONAL_STATUSES);
 
 export const casesQuerySchema = paginationSchema.extend({
-  status: z.enum(['NEW', 'WAITING_FOR_CUSTOMER', 'SUBMITTED', 'READY_FOR_PRINT', 'ARCHIVED', '']).optional(),
+  status: z.enum(['NEW', 'WAITING_FOR_CUSTOMER', 'DRAFT', 'PREVIEW_READY', 'SUBMITTED', 'READY_FOR_PRINT', 'FAILED_RENDER', 'RENDERED', 'ARCHIVED', '']).optional(),
   emailStatus: z.enum(['sent', 'not_sent', 'failed', '']).optional(),
   search: z.string().optional(),
   sortBy: z.enum(['createdAt', 'submittedAt', 'status', 'orderReference']).default('createdAt'),
@@ -151,6 +151,7 @@ export const formFieldInputSchema = z.object({
   key: z.string().min(1),
   label: z.string().min(1),
   type: z.string().min(1),
+  scope: z.enum(['SHARED', 'INDIVIDUAL']).default('SHARED'),
   required: z.boolean().default(false),
   minLength: z.number().int().optional().nullable(),
   maxLength: z.number().int().optional().nullable(),
@@ -185,6 +186,7 @@ export const createTemplateSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(500).optional().nullable(),
   version: z.number().int().positive().default(1),
+  editorType: z.enum(['SIMPLE', 'ADVANCED']).default('ADVANCED'),
   isActive: z.boolean().default(true),
 });
 
@@ -194,6 +196,7 @@ export const updateTemplateMetadataSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   description: z.string().max(500).optional().nullable(),
   version: z.number().int().positive().optional(),
+  editorType: z.enum(['SIMPLE', 'ADVANCED']).optional(),
   isActive: z.boolean().optional(),
 });
 
@@ -232,7 +235,11 @@ export const caseIdParamsSchema = z.object({
 });
 
 export const updateCaseAnswersSchema = z.object({
-  answers: z.any(), // JSON - będzie walidowane względem pól template'a
+  answers: z.any().optional(), // stary płaski JSON
+  sharedAnswers: z.record(z.any()).optional(),
+  items: z.array(z.record(z.any())).optional(),
+}).refine((value) => value.answers !== undefined || value.sharedAnswers !== undefined || value.items !== undefined, {
+  message: 'answers, sharedAnswers albo items są wymagane',
 });
 
 export const updateCaseStatusSchema = z.object({
@@ -427,7 +434,7 @@ const imagePropertiesSchema = z.object({
 
 const textFieldPropertiesSchema = z.object({
   type: z.literal('text'),
-  fieldKey: z.string().min(1),
+  fieldKey: z.string().default(''),
   placeholder: z.string().default(''),
   fontSize: z.number().positive(),
   fontUnit: z.enum(['px', 'pt']).default('pt'),
@@ -535,10 +542,15 @@ const fontConfigSchema = z.object({
 const canvasConfigSchema = z.object({
   width: z.number().positive(),
   height: z.number().positive(),
-  unit: z.enum(['px', 'mm']).default('px'),
+  unit: z.enum(['px', 'mm']).default('mm'),
+  widthMm: z.number().positive().optional(),
+  heightMm: z.number().positive().optional(),
+  formatPreset: z.enum(['WINIETKA_90X50', 'A6_105X148', 'DL_99X210', 'THANK_YOU_148X105', 'CUSTOM']).optional(),
   dpi: z.number().positive().default(300),
   bleed: z.number().min(0).default(0),
   safeArea: z.number().min(0).default(0),
+  bleedMm: z.number().min(0).optional(),
+  safeAreaMm: z.number().min(0).optional(),
   backgroundColor: z.string().default('#ffffff'),
 });
 

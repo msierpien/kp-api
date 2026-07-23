@@ -3,7 +3,7 @@ import type { TemplateFormInput, CreateTemplateInput, UpdateTemplateMetadataInpu
 
 export async function listTemplates() {
   return prisma.personalizationTemplate.findMany({
-    select: { id: true, name: true, code: true, description: true, version: true, isActive: true, createdAt: true },
+    select: { id: true, name: true, code: true, description: true, version: true, editorType: true, isActive: true, createdAt: true },
     orderBy: { name: 'asc' },
   });
 }
@@ -23,6 +23,25 @@ export async function getTemplateForm(templateId: string) {
 }
 
 export async function replaceTemplateForm(templateId: string, input: TemplateFormInput) {
+  const [existingForms, existingTemplate] = await Promise.all([
+    prisma.form.findMany({
+      where: { templateId },
+      orderBy: { sortOrder: 'asc' },
+      include: {
+        fields: {
+          orderBy: { sortOrder: 'asc' },
+        },
+      },
+    }),
+    prisma.personalizationTemplate.findUnique({
+      where: { id: templateId },
+      select: { layoutJson: true },
+    }),
+  ]);
+
+  const renameMap = buildFieldRenameMap(existingForms, input.forms);
+  const migratedLayout = migrateLayoutFieldKeys(existingTemplate?.layoutJson, renameMap);
+
   // replace all forms/fields for this template
   await prisma.$transaction(async (tx) => {
     await tx.formField.deleteMany({
@@ -44,6 +63,7 @@ export async function replaceTemplateForm(templateId: string, input: TemplateFor
               key: f.key,
               label: f.label,
               type: f.type,
+              scope: f.scope ?? (f.repeaterGroupKey ? 'INDIVIDUAL' : 'SHARED'),
               required: f.required,
               minLength: f.minLength ?? null,
               maxLength: f.maxLength ?? null,
@@ -57,6 +77,15 @@ export async function replaceTemplateForm(templateId: string, input: TemplateFor
               validationRulesJson: f.validationRulesJson ?? null,
             })),
           },
+        },
+      });
+    }
+
+    if (migratedLayout) {
+      await tx.personalizationTemplate.update({
+        where: { id: templateId },
+        data: {
+          layoutJson: migratedLayout as any,
         },
       });
     }
@@ -81,10 +110,11 @@ export async function createTemplate(input: CreateTemplateInput) {
       name: input.name,
       description: input.description ?? null,
       version: input.version,
+      editorType: input.editorType,
       isActive: input.isActive,
       // tenantId will be added automatically by Prisma middleware
     } as any,
-    select: { id: true, name: true, code: true, description: true, version: true, isActive: true, createdAt: true },
+    select: { id: true, name: true, code: true, description: true, version: true, editorType: true, isActive: true, createdAt: true },
   });
 
   return template;
@@ -109,9 +139,10 @@ export async function updateTemplateMetadata(templateId: string, input: UpdateTe
       ...(input.name && { name: input.name }),
       ...(input.description !== undefined && { description: input.description }),
       ...(input.version && { version: input.version }),
+      ...(input.editorType && { editorType: input.editorType }),
       ...(input.isActive !== undefined && { isActive: input.isActive }),
     },
-    select: { id: true, name: true, code: true, description: true, version: true, isActive: true, createdAt: true },
+    select: { id: true, name: true, code: true, description: true, version: true, editorType: true, isActive: true, createdAt: true },
   });
 
   return template;
@@ -141,4 +172,54 @@ export async function deleteTemplate(templateId: string) {
   });
 
   return { success: true };
+}
+
+function buildFieldRenameMap(
+  existingForms: Array<{ fields: Array<{ key: string; label: string; sortOrder: number }> }>,
+  nextForms: TemplateFormInput['forms']
+) {
+  const renameMap = new Map<string, string>();
+
+  nextForms.forEach((nextForm, formIndex) => {
+    const existingForm = existingForms[formIndex];
+    if (!existingForm) return;
+
+    nextForm.fields.forEach((nextField, fieldIndex) => {
+      const existingByPosition = existingForm.fields[fieldIndex];
+      const existingByLabel = existingForm.fields.find(
+        (field) => field.label.trim().toLowerCase() === nextField.label.trim().toLowerCase()
+      );
+      const existingField = existingByPosition || existingByLabel;
+
+      if (existingField && existingField.key !== nextField.key) {
+        renameMap.set(existingField.key, nextField.key);
+      }
+    });
+  });
+
+  return renameMap;
+}
+
+function migrateLayoutFieldKeys(layoutJson: unknown, renameMap: Map<string, string>) {
+  if (!layoutJson || renameMap.size === 0 || typeof layoutJson !== 'object') return null;
+
+  const layout = layoutJson as any;
+  if (!Array.isArray(layout.layers)) return null;
+
+  let changed = false;
+  const layers = layout.layers.map((layer: any) => {
+    const fieldKey = layer?.properties?.fieldKey;
+    if (!fieldKey || !renameMap.has(fieldKey)) return layer;
+
+    changed = true;
+    return {
+      ...layer,
+      properties: {
+        ...layer.properties,
+        fieldKey: renameMap.get(fieldKey),
+      },
+    };
+  });
+
+  return changed ? { ...layout, layers } : null;
 }

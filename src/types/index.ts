@@ -102,8 +102,23 @@ export interface CaseListItem {
   customerName: string | null;
   productName: string;
   templateName: string;
+  quantity: number;
+  filled: number;
+  qty: number;
+  answerProgress: {
+    filled: number;
+    qty: number;
+    sharedFilled: number;
+    sharedTotal: number;
+    itemFilled: number;
+    itemTotal: number;
+  };
   submittedAt: Date | null;
   createdAt: Date;
+  emailSentAt: Date | null;
+  emailFailedAt: Date | null;
+  emailError: string | null;
+  emailAttempts: number;
 }
 
 export interface SyncLogItem {

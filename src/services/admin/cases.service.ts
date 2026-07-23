@@ -411,7 +411,7 @@ export async function updateCaseAnswers(id: string, payload: { answers?: any; sh
     });
   }
 
-  return updated;
+  return getCaseById(updated.id);
 }
 
 export async function validateCaseAnswers(id: string, payload: { answers?: any; sharedAnswers?: Record<string, any>; items?: Array<Record<string, any>> }) {

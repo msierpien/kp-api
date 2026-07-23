@@ -3,9 +3,54 @@ import type { TemplateFormInput, CreateTemplateInput, UpdateTemplateMetadataInpu
 import { buildFieldRenameMap, migrateLayoutFieldKeys } from './template-field-key-migration';
 
 export async function listTemplates() {
-  return prisma.personalizationTemplate.findMany({
-    select: { id: true, name: true, code: true, description: true, version: true, editorType: true, isActive: true, createdAt: true },
+  const templates = await prisma.personalizationTemplate.findMany({
+    select: {
+      id: true,
+      name: true,
+      code: true,
+      description: true,
+      version: true,
+      editorType: true,
+      isActive: true,
+      thumbnailUrl: true,
+      layoutJson: true,
+      createdAt: true,
+      forms: {
+        select: {
+          fields: {
+            select: {
+              scope: true,
+            },
+          },
+        },
+      },
+      _count: {
+        select: {
+          personalizedProducts: true,
+        },
+      },
+    },
     orderBy: { name: 'asc' },
+  });
+
+  return templates.map((template) => {
+    const fields = template.forms.flatMap((form) => form.fields);
+
+    return {
+      id: template.id,
+      name: template.name,
+      code: template.code,
+      description: template.description,
+      version: template.version,
+      editorType: template.editorType,
+      isActive: template.isActive,
+      thumbnailUrl: template.thumbnailUrl,
+      layout: summarizeTemplateLayout(template.layoutJson),
+      fieldCount: fields.length,
+      individualFieldCount: fields.filter((field) => field.scope === 'INDIVIDUAL').length,
+      productCount: template._count.personalizedProducts,
+      createdAt: template.createdAt,
+    };
   });
 }
 
@@ -173,4 +218,30 @@ export async function deleteTemplate(templateId: string) {
   });
 
   return { success: true };
+}
+
+function toPositiveNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function summarizeTemplateLayout(layoutJson: unknown) {
+  if (!layoutJson || typeof layoutJson !== 'object') return null;
+
+  const canvas = (layoutJson as any).canvas;
+  if (!canvas || typeof canvas !== 'object') return null;
+
+  const widthMm = toPositiveNumber(canvas.widthMm);
+  const heightMm = toPositiveNumber(canvas.heightMm);
+  const dpi = toPositiveNumber(canvas.dpi);
+  const width = toPositiveNumber(canvas.width);
+  const height = toPositiveNumber(canvas.height);
+
+  return {
+    widthMm,
+    heightMm,
+    dpi,
+    width,
+    height,
+    formatPreset: typeof canvas.formatPreset === 'string' ? canvas.formatPreset : null,
+  };
 }

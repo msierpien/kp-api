@@ -2,10 +2,12 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import {
   getCases,
   getCaseById,
+  generateCasePrintPackage,
   updateCaseAnswers,
   updateCaseStatus,
   addCaseNote,
   resendPersonalizationEmail,
+  CasePackageValidationError,
 } from '../../services/admin/cases.service';
 import {
   casesQuerySchema,
@@ -184,6 +186,57 @@ export async function casesRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           error: 'Internal Server Error',
           message: 'Nie udało się zaktualizować odpowiedzi',
+        });
+      }
+    }
+  );
+
+  // POST /admin/cases/:id/render-package
+  fastify.post<{ Params: CaseIdParams }>(
+    '/:id/render-package',
+    {
+      schema: {
+        tags: ['cases'],
+        summary: 'Generuj paczkę plików do druku dla case\'u',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          200: { type: 'object' },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          422: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' }, validationSummary: { type: 'object' } } },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: CaseIdParams }>, reply: FastifyReply) => {
+      try {
+        const paramsValidation = caseIdParamsSchema.safeParse(request.params);
+
+        if (!paramsValidation.success) {
+          return reply.status(400).send({
+            error: 'Validation Error',
+            message: paramsValidation.error.errors[0].message,
+          });
+        }
+
+        const result = await generateCasePrintPackage(paramsValidation.data.id);
+        return reply.send(result);
+      } catch (error: any) {
+        fastify.log.error(error);
+        if (error.message === 'Case not found') {
+          return reply.status(404).send({
+            error: 'Not Found',
+            message: 'Case o podanym ID nie istnieje',
+          });
+        }
+        if (error instanceof CasePackageValidationError) {
+          return reply.status(422).send({
+            error: 'Validation Error',
+            message: 'Odpowiedzi wymagają poprawy przed generowaniem paczki',
+            validationSummary: error.validationSummary,
+          });
+        }
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Nie udało się wygenerować paczki do druku',
         });
       }
     }

@@ -1,5 +1,6 @@
 import prisma from '../../lib/prisma';
 import type { TemplateFormInput, CreateTemplateInput, UpdateTemplateMetadataInput } from '../../schemas/admin.schema';
+import { canonicalizeTemplateForms } from '../../lib/personalization-answers';
 import { normalizeCanvasConfig } from '../../types/template-layout';
 import { buildDeletedFieldKeySet, buildFieldRenameMap, migrateLayoutFieldKeys, removeDeletedFieldLayers } from './template-field-key-migration';
 
@@ -66,7 +67,7 @@ export async function getTemplateForm(templateId: string) {
     },
   });
 
-  return { forms };
+  return { forms: canonicalizeTemplateForms(forms) };
 }
 
 export async function replaceTemplateForm(templateId: string, input: TemplateFormInput) {
@@ -123,7 +124,7 @@ export async function replaceTemplateForm(templateId: string, input: TemplateFor
               helpText: f.helpText ?? null,
               defaultValue: f.defaultValue ?? null,
               optionsJson: f.optionsJson ?? null,
-              repeaterGroupKey: f.repeaterGroupKey ?? null,
+              repeaterGroupKey: null,
               sortOrder: f.sortOrder ?? 0,
               validationRulesJson: f.validationRulesJson ?? null,
             })),

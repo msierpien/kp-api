@@ -9,6 +9,7 @@ import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/feat
 import { MAX_PREVIEW_UPLOAD_BYTES, assertAllowedPngUpload, isUploadValidationError } from '../../lib/upload-validation';
 import { RATE_LIMITS } from '../../lib/rate-limits';
 import {
+  canonicalizeTemplateForms,
   flattenCaseAnswers,
   getFieldScope,
   hasAnswerValue,
@@ -92,13 +93,20 @@ function addSecurityHeaders(reply: FastifyReply) {
 }
 
 async function enrichTemplateLayoutWithGlobalFonts(template: any) {
-  if (!template?.layoutJson) return template;
+  if (!template) return template;
+
+  const canonicalTemplate = {
+    ...template,
+    forms: canonicalizeTemplateForms(template.forms || []),
+  };
+
+  if (!template.layoutJson) return canonicalTemplate;
 
   const globalFonts = await listFonts();
   const layoutJson = template.layoutJson as any;
 
   return {
-    ...template,
+    ...canonicalTemplate,
     layoutJson: {
       ...layoutJson,
       fonts: globalFonts.map((font) => ({

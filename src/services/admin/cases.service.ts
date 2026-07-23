@@ -7,6 +7,7 @@ import { queuePersonalizationEmail } from '../queue/email.queue';
 import { triggerAutomations, AutomationTrigger } from './automation.service';
 import { generateAccessToken, maskToken } from '../../lib/token';
 import {
+  canonicalizeTemplateForms,
   computeCaseAnswerProgress,
   flattenCaseAnswers,
   getFieldScope,
@@ -310,10 +311,15 @@ export async function getCaseById(id: string) {
   const fields = caseItem.template.forms.flatMap((form) => form.fields);
   const answersJson = normalizeCaseAnswers(caseItem.answersJson, fields, caseItem.orderItem.quantity);
   const answerProgress = computeCaseAnswerProgress(caseItem.answersJson, fields, caseItem.orderItem.quantity);
+  const template = {
+    ...caseData.template,
+    forms: canonicalizeTemplateForms(caseData.template.forms),
+  };
 
   // Konwersja Decimal na number dla frontendowych operacji
   return {
     ...caseData,
+    template,
     answersJson,
     answerProgress,
     filled: answerProgress.filled,

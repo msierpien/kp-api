@@ -30,6 +30,30 @@ export function getFieldScope(field: PersonalizationAnswerField): FieldScopeValu
   return 'SHARED';
 }
 
+export function canonicalizePersonalizationField<T extends PersonalizationAnswerField & Record<string, any>>(field: T) {
+  const {
+    repeaterGroupKey: _legacyRepeaterGroupKey,
+    scope: _scope,
+    ...rest
+  } = field;
+
+  return {
+    ...rest,
+    scope: getFieldScope(field),
+  };
+}
+
+export function canonicalizeTemplateForms<T extends { fields?: Array<PersonalizationAnswerField & Record<string, any>> }>(
+  forms: T[]
+) {
+  return forms.map((form) => ({
+    ...form,
+    fields: Array.isArray(form.fields)
+      ? form.fields.map((field) => canonicalizePersonalizationField(field))
+      : [],
+  }));
+}
+
 export function normalizeCaseAnswers(
   rawAnswers: unknown,
   fields: PersonalizationAnswerField[] = [],

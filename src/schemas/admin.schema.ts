@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ORDER_OPERATIONAL_STATUSES } from '../lib/order-statuses';
+import { PERSONALIZATION_CASE_STATUSES } from '../lib/personalization-case-statuses';
 
 export const paginationSchema = z.object({
   page: z.coerce.number().int().positive().default(1),
@@ -9,7 +10,7 @@ export const paginationSchema = z.object({
 const orderOperationalStatusSchema = z.enum(ORDER_OPERATIONAL_STATUSES);
 
 export const casesQuerySchema = paginationSchema.extend({
-  status: z.enum(['NEW', 'WAITING_FOR_CUSTOMER', 'DRAFT', 'PREVIEW_READY', 'SUBMITTED', 'READY_FOR_PRINT', 'FAILED_RENDER', 'RENDERED', 'ARCHIVED', '']).optional(),
+  status: z.enum([...PERSONALIZATION_CASE_STATUSES, '']).optional(),
   emailStatus: z.enum(['sent', 'not_sent', 'failed', '']).optional(),
   search: z.string().optional(),
   sortBy: z.enum(['createdAt', 'submittedAt', 'status', 'orderReference']).default('createdAt'),
@@ -243,7 +244,7 @@ export const updateCaseAnswersSchema = z.object({
 });
 
 export const updateCaseStatusSchema = z.object({
-  status: z.enum(['NEW', 'WAITING_FOR_CUSTOMER', 'SUBMITTED', 'READY_FOR_PRINT', 'ARCHIVED']),
+  status: z.enum(PERSONALIZATION_CASE_STATUSES),
 });
 
 export const addCaseNoteSchema = z.object({

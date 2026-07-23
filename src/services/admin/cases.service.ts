@@ -22,6 +22,7 @@ import { renderPreview } from '../renderer/fabric-renderer.service';
 import { validateAnswers } from '../renderer/text-validator.service';
 import { addPrintPackageJob } from '../queue/render.queue';
 import { buildStorageUrl, saveFile } from '../storage/local-storage.service';
+import { isPersonalizationCaseStatus } from '../../lib/personalization-case-statuses';
 
 type FieldValidationConfig = PersonalizationAnswerField & {
   label: string;
@@ -346,6 +347,45 @@ export async function updateCaseAnswers(id: string, payload: { answers?: any; sh
   }
 
   return updated;
+}
+
+export async function validateCaseAnswers(id: string, payload: { answers?: any; sharedAnswers?: Record<string, any>; items?: Array<Record<string, any>> }) {
+  const caseItem = await prisma.personalizationCase.findUnique({
+    where: { id },
+    include: {
+      orderItem: true,
+      template: {
+        include: {
+          forms: {
+            include: {
+              fields: { orderBy: { sortOrder: 'asc' } },
+            },
+            orderBy: { sortOrder: 'asc' },
+          },
+        },
+      },
+    },
+  });
+
+  if (!caseItem) {
+    throw new Error('Case not found');
+  }
+
+  const layout = caseItem.template.layoutJson as unknown as TemplateLayoutJson | null;
+  if (!layout) {
+    throw new Error('Template layout is required for answer validation');
+  }
+
+  const fields = caseItem.template.forms.flatMap((form) => form.fields);
+  const qty = Math.max(1, Number(caseItem.orderItem.quantity) || 1);
+  const answers = mergeCaseAnswers(caseItem.answersJson, payload, fields, qty);
+  const answerProgress = computeCaseAnswerProgress(answers, fields, qty);
+  const validationSummary = await validatePrintPackageAnswers(answers, fields, layout, qty);
+
+  return {
+    answerProgress,
+    validationSummary,
+  };
 }
 
 export async function enqueueCasePrintPackage(id: string) {
@@ -1086,10 +1126,8 @@ async function syncAnswerRows(
 }
 
 export async function updateCaseStatus(id: string, status: string) {
-  const validStatuses = ['NEW', 'WAITING_FOR_CUSTOMER', 'SUBMITTED', 'READY_FOR_PRINT', 'ARCHIVED'];
-  
-  if (!validStatuses.includes(status)) {
-    throw new Error(`Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+  if (!isPersonalizationCaseStatus(status)) {
+    throw new Error('Invalid status');
   }
 
   const caseItem = await prisma.personalizationCase.findUnique({

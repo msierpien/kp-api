@@ -4,6 +4,7 @@ import {
   getCaseById,
   enqueueCasePrintPackage,
   updateCaseAnswers,
+  validateCaseAnswers,
   updateCaseStatus,
   addCaseNote,
   resendPersonalizationEmail,
@@ -24,6 +25,7 @@ import {
 import prisma from '../../lib/prisma';
 import { config } from '../../config';
 import { decrypt } from '../../lib/encryption';
+import { PERSONALIZATION_CASE_STATUSES } from '../../lib/personalization-case-statuses';
 
 export async function casesRoutes(fastify: FastifyInstance) {
   // GET /admin/cases
@@ -191,6 +193,77 @@ export async function casesRoutes(fastify: FastifyInstance) {
     }
   );
 
+  // POST /admin/cases/:id/answers/validate
+  fastify.post<{ Params: CaseIdParams; Body: UpdateCaseAnswersInput }>(
+    '/:id/answers/validate',
+    {
+      schema: {
+        tags: ['cases'],
+        summary: 'Waliduj odpowiedzi case\'u bez generowania paczki',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        body: {
+          type: 'object',
+          properties: {
+            answers: { type: 'object', description: 'Stara płaska mapa klucz pola → wartość' },
+            sharedAnswers: { type: 'object', description: 'Odpowiedzi wspólne dla całej pozycji' },
+            items: {
+              type: 'array',
+              description: 'Odpowiedzi indywidualne per sztuka',
+              items: { type: 'object' },
+            },
+          },
+        },
+        response: {
+          200: { type: 'object' },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          422: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
+    async (
+      request: FastifyRequest<{ Params: CaseIdParams; Body: UpdateCaseAnswersInput }>,
+      reply: FastifyReply
+    ) => {
+      try {
+        const paramsValidation = caseIdParamsSchema.safeParse(request.params);
+        const bodyValidation = updateCaseAnswersSchema.safeParse(request.body);
+
+        if (!paramsValidation.success || !bodyValidation.success) {
+          return reply.status(400).send({
+            error: 'Validation Error',
+            message: !paramsValidation.success
+              ? paramsValidation.error.errors[0].message
+              : (bodyValidation as any).error.errors[0].message,
+          });
+        }
+
+        const result = await validateCaseAnswers(
+          paramsValidation.data.id,
+          bodyValidation.data
+        );
+        return reply.send(result);
+      } catch (error: any) {
+        fastify.log.error(error);
+        if (error.message === 'Case not found') {
+          return reply.status(404).send({
+            error: 'Not Found',
+            message: 'Case o podanym ID nie istnieje',
+          });
+        }
+        if (error.message === 'Template layout is required for answer validation') {
+          return reply.status(422).send({
+            error: 'Validation Error',
+            message: 'Szablon musi mieć layout przed walidacją odpowiedzi',
+          });
+        }
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Nie udało się zwalidować odpowiedzi',
+        });
+      }
+    }
+  );
+
   // POST /admin/cases/:id/render-package
   fastify.post<{ Params: CaseIdParams }>(
     '/:id/render-package',
@@ -256,7 +329,7 @@ export async function casesRoutes(fastify: FastifyInstance) {
           properties: {
             status: {
               type: 'string',
-              enum: ['PENDING', 'WAITING_FOR_CUSTOMER', 'DRAFT', 'PREVIEW_READY', 'SUBMITTED', 'IN_PRODUCTION', 'COMPLETED', 'CANCELLED'],
+              enum: PERSONALIZATION_CASE_STATUSES,
             },
           },
         },

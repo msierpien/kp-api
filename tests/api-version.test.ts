@@ -14,22 +14,23 @@ describe('API version contract', () => {
       getApplicationVersionInfo,
     } = await import('../src/services/ops/version.service');
 
-    assert.equal(API_VERSION, '1.6.1');
-    assert.equal(API_CONTRACT_VERSION, 4);
+    assert.equal(API_VERSION, '1.6.2');
+    assert.equal(API_CONTRACT_VERSION, 5);
     assert.equal(MIN_ADMIN_CONTRACT_VERSION, 3);
     assert.equal(MIN_ADMIN_VERSION, '0.6.0');
     assert.equal(COMPATIBILITY_PROFILE, 'kp-admin-api');
 
     const info = getApplicationVersionInfo('test');
-    assert.equal(info.version, '1.6.1');
+    assert.equal(info.version, '1.6.2');
     assert.equal(info.compatibilityProfile, 'kp-admin-api');
-    assert.equal(info.apiContractVersion, 4);
+    assert.equal(info.apiContractVersion, 5);
     assert.equal(info.minAdminContractVersion, 3);
     assert.equal(info.minAdminVersion, '0.6.0');
     assert.ok(info.features.includes('orders-list-v1'));
     assert.ok(info.features.includes('invoice-prestashop-delivery-v1'));
     assert.ok(info.features.includes('order-status-mapping-v1'));
     assert.ok(info.features.includes('personalization-case-print-package-v1'));
+    assert.ok(info.features.includes('personalization-case-answer-validation-v1'));
     assert.ok(info.features.includes('personalization-structured-answers-v1'));
     assert.ok(info.features.includes('personalization-template-mm-layout-v1'));
     assert.ok(info.features.includes('product-card-content-v1'));
@@ -43,19 +44,19 @@ describe('API version contract', () => {
     assert.ok(info.features.includes('warehouse-stock-tracking-v1'));
 
     const client = readAdminVersionClient({
-      'x-admin-version': '0.7.2',
-      'x-admin-api-contract-version': '4',
+      'x-admin-version': '0.7.5',
+      'x-admin-api-contract-version': '5',
       'x-admin-compatibility-profile': 'kp-admin-api',
     });
     assert.deepEqual(client, {
-      version: '0.7.2',
-      apiContractVersion: 4,
+      version: '0.7.5',
+      apiContractVersion: 5,
       compatibilityProfile: 'kp-admin-api',
     });
     assert.equal(getAdminCompatibility(client, 'test').compatible, true);
 
     assert.equal(
-      getAdminCompatibility({ ...client, apiContractVersion: 5 }, 'test').label,
+      getAdminCompatibility({ ...client, apiContractVersion: 6 }, 'test').label,
       'Niezgodny kontrakt'
     );
     assert.equal(

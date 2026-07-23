@@ -9,17 +9,19 @@ describe('API version contract', () => {
       COMPATIBILITY_PROFILE,
       MIN_ADMIN_CONTRACT_VERSION,
       MIN_ADMIN_VERSION,
+      getAdminCompatibility,
+      readAdminVersionClient,
       getApplicationVersionInfo,
     } = await import('../src/services/ops/version.service');
 
-    assert.equal(API_VERSION, '1.6.0');
+    assert.equal(API_VERSION, '1.6.1');
     assert.equal(API_CONTRACT_VERSION, 4);
     assert.equal(MIN_ADMIN_CONTRACT_VERSION, 3);
     assert.equal(MIN_ADMIN_VERSION, '0.6.0');
     assert.equal(COMPATIBILITY_PROFILE, 'kp-admin-api');
 
     const info = getApplicationVersionInfo('test');
-    assert.equal(info.version, '1.6.0');
+    assert.equal(info.version, '1.6.1');
     assert.equal(info.compatibilityProfile, 'kp-admin-api');
     assert.equal(info.apiContractVersion, 4);
     assert.equal(info.minAdminContractVersion, 3);
@@ -39,5 +41,31 @@ describe('API version contract', () => {
     assert.ok(info.features.includes('warehouse-inventory-scanner-v1'));
     assert.ok(info.features.includes('warehouse-mixed-availability-v1'));
     assert.ok(info.features.includes('warehouse-stock-tracking-v1'));
+
+    const client = readAdminVersionClient({
+      'x-admin-version': '0.7.2',
+      'x-admin-api-contract-version': '4',
+      'x-admin-compatibility-profile': 'kp-admin-api',
+    });
+    assert.deepEqual(client, {
+      version: '0.7.2',
+      apiContractVersion: 4,
+      compatibilityProfile: 'kp-admin-api',
+    });
+    assert.equal(getAdminCompatibility(client, 'test').compatible, true);
+
+    assert.equal(
+      getAdminCompatibility({ ...client, apiContractVersion: 5 }, 'test').label,
+      'Niezgodny kontrakt'
+    );
+    assert.equal(
+      getAdminCompatibility({ ...client, compatibilityProfile: 'admin-local' }, 'test').label,
+      'Niezgodny profil'
+    );
+    assert.equal(readAdminVersionClient({}).apiContractVersion, null);
+    assert.equal(
+      getAdminCompatibility({ ...client, apiContractVersion: null }, 'test').label,
+      'Brak kontraktu'
+    );
   });
 });

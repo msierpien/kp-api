@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { authMiddleware, requireAdminPathAccess, requireTenantFeatureAccess } from '../../middleware/auth.middleware';
+import { requireAdminApiCompatibility } from '../../middleware/admin-compatibility.middleware';
 import { statsRoutes } from './stats.routes';
 import { casesRoutes } from './cases.routes';
 import { emailRoutes } from './email.routes';
@@ -28,6 +29,7 @@ import { competitorAnalyticsRoutes } from './competitor-analytics.routes';
 import { writeAdminAuditLog } from '../../services/audit/audit-log.service';
 
 export async function adminRoutes(fastify: FastifyInstance) {
+  fastify.addHook('preHandler', requireAdminApiCompatibility());
   // Apply auth middleware to all admin routes
   fastify.addHook('preHandler', authMiddleware(fastify));
   fastify.addHook('preHandler', requireAdminPathAccess());

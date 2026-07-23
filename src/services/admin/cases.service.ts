@@ -11,6 +11,7 @@ import {
   computeCaseAnswerProgress,
   flattenCaseAnswers,
   getFieldScope,
+  getStoredAnswerValue,
   hasAnswerValue,
   mergeCaseAnswers,
   normalizeCaseAnswers,
@@ -1139,12 +1140,19 @@ async function syncAnswerRows(
   for (const field of fields) {
     if (!field.id) continue;
 
-    const scope = getFieldScope(field);
-    const value = scope === 'INDIVIDUAL'
-      ? answers.items.map((item) => item[field.key]).filter(hasAnswerValue)
-      : answers.sharedAnswers[field.key];
+    const value = getStoredAnswerValue(field, answers);
 
-    if (!hasAnswerValue(value)) continue;
+    if (!hasAnswerValue(value)) {
+      await tx.personalizationAnswer.deleteMany({
+        where: {
+          caseId,
+          fieldId: field.id,
+        },
+      });
+      continue;
+    }
+    const valueText = typeof value === 'string' ? value : null;
+    const valueJson = valueText === null ? JSON.parse(JSON.stringify(value)) : null;
 
     await tx.personalizationAnswer.upsert({
       where: {
@@ -1154,14 +1162,14 @@ async function syncAnswerRows(
         },
       },
       update: {
-        valueText: typeof value === 'string' ? value : null,
-        valueJson: typeof value !== 'string' ? value : null,
+        valueText,
+        valueJson,
       },
       create: {
         caseId,
         fieldId: field.id,
-        valueText: typeof value === 'string' ? value : null,
-        valueJson: typeof value !== 'string' ? value : null,
+        valueText,
+        valueJson,
       },
     });
   }

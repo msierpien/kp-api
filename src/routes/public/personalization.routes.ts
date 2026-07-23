@@ -11,7 +11,7 @@ import { RATE_LIMITS } from '../../lib/rate-limits';
 import {
   canonicalizeTemplateForms,
   flattenCaseAnswers,
-  getFieldScope,
+  getStoredAnswerValue,
   hasAnswerValue,
   mergeCaseAnswers,
   type PersonalizationAnswerField,
@@ -56,12 +56,19 @@ async function saveAnswers(
       continue;
     }
 
-    const scope = getFieldScope(field);
-    const value = scope === 'INDIVIDUAL'
-      ? mergedAnswers.items.map((item) => item[field.key]).filter(hasAnswerValue)
-      : mergedAnswers.sharedAnswers[field.key];
+    const value = getStoredAnswerValue(field, mergedAnswers);
 
-    if (!hasAnswerValue(value)) continue;
+    if (!hasAnswerValue(value)) {
+      await prisma.personalizationAnswer.deleteMany({
+        where: {
+          caseId,
+          fieldId,
+        },
+      });
+      continue;
+    }
+    const valueText = typeof value === 'string' ? value : null;
+    const valueJson = valueText === null ? JSON.parse(JSON.stringify(value)) : null;
 
     await prisma.personalizationAnswer.upsert({
       where: {
@@ -71,14 +78,14 @@ async function saveAnswers(
         },
       },
       update: {
-        valueText: typeof value === 'string' ? value : null,
-        valueJson: typeof value !== 'string' ? value : null,
+        valueText,
+        valueJson,
       },
       create: {
         caseId,
         fieldId,
-        valueText: typeof value === 'string' ? value : null,
-        valueJson: typeof value !== 'string' ? value : null,
+        valueText,
+        valueJson,
       },
     });
   }

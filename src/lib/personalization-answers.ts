@@ -151,6 +151,17 @@ export function hasAnswerValue(value: unknown): boolean {
   return true;
 }
 
+export function getStoredAnswerValue(
+  field: PersonalizationAnswerField,
+  answers: StructuredCaseAnswers
+): unknown {
+  const value = getFieldScope(field) === 'INDIVIDUAL'
+    ? answers.items.map((item) => item[field.key]).filter(hasAnswerValue)
+    : answers.sharedAnswers[field.key];
+
+  return hasAnswerValue(value) ? value : null;
+}
+
 function countFilledFields(fields: PersonalizationAnswerField[], answers: Record<string, any>): number {
   return fields.filter((field) => hasAnswerValue(answers[field.key])).length;
 }

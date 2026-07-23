@@ -76,6 +76,11 @@ interface GeneratePrintPackageOptions {
   onProgress?: (progress: number) => Promise<void>;
 }
 
+type CasesSummary = ReturnType<typeof buildCasesSummary>;
+type CasesListResponse = PaginatedResponse<CaseListItem> & {
+  summary: CasesSummary;
+};
+
 export class CasePackageValidationError extends Error {
   validationSummary: PrintPackageValidationSummary;
 
@@ -85,44 +90,12 @@ export class CasePackageValidationError extends Error {
   }
 }
 
-export async function getCases(query: CasesQueryInput): Promise<PaginatedResponse<CaseListItem>> {
+export async function getCases(query: CasesQueryInput): Promise<CasesListResponse> {
   const { page, limit, status, emailStatus, search, sortBy, sortOrder } = query;
   const skip = (page - 1) * limit;
 
-  const where: any = {};
-
-  if (status) {
-    where.status = status;
-  }
-
-  // Email status filter
-  if (emailStatus === 'sent') {
-    where.emailSentAt = { not: null };
-  } else if (emailStatus === 'not_sent') {
-    where.emailSentAt = null;
-  } else if (emailStatus === 'failed') {
-    where.emailFailedAt = { not: null };
-  }
-
-  if (search) {
-    where.OR = [
-      {
-        order: {
-          orderReference: { contains: search, mode: 'insensitive' },
-        },
-      },
-      {
-        order: {
-          customerEmail: { contains: search, mode: 'insensitive' },
-        },
-      },
-      {
-        order: {
-          customerName: { contains: search, mode: 'insensitive' },
-        },
-      },
-    ];
-  }
+  const where = buildCasesWhere({ status, emailStatus, search });
+  const summaryWhere = buildCasesWhere({ emailStatus, search });
 
   const orderByMap: Record<string, any> = {
     createdAt: { createdAt: sortOrder },
@@ -131,7 +104,7 @@ export async function getCases(query: CasesQueryInput): Promise<PaginatedRespons
     orderReference: { order: { orderReference: sortOrder } },
   };
 
-  const [cases, total] = await Promise.all([
+  const [cases, total, groupedStatuses] = await Promise.all([
     prisma.personalizationCase.findMany({
       where,
       skip,
@@ -171,6 +144,11 @@ export async function getCases(query: CasesQueryInput): Promise<PaginatedRespons
       },
     }),
     prisma.personalizationCase.count({ where }),
+    prisma.personalizationCase.groupBy({
+      by: ['status'],
+      where: summaryWhere,
+      _count: { _all: true },
+    }),
   ]);
 
   const data: CaseListItem[] = cases.map((c) => {
@@ -204,6 +182,62 @@ export async function getCases(query: CasesQueryInput): Promise<PaginatedRespons
     page,
     limit,
     totalPages: Math.ceil(total / limit),
+    summary: buildCasesSummary(groupedStatuses),
+  };
+}
+
+function buildCasesWhere(input: Pick<CasesQueryInput, 'status' | 'emailStatus' | 'search'>) {
+  const where: any = {};
+
+  if (input.status) {
+    where.status = input.status;
+  }
+
+  if (input.emailStatus === 'sent') {
+    where.emailSentAt = { not: null };
+  } else if (input.emailStatus === 'not_sent') {
+    where.emailSentAt = null;
+  } else if (input.emailStatus === 'failed') {
+    where.emailFailedAt = { not: null };
+  }
+
+  if (input.search) {
+    where.OR = [
+      {
+        order: {
+          orderReference: { contains: input.search, mode: 'insensitive' },
+        },
+      },
+      {
+        order: {
+          customerEmail: { contains: input.search, mode: 'insensitive' },
+        },
+      },
+      {
+        order: {
+          customerName: { contains: input.search, mode: 'insensitive' },
+        },
+      },
+    ];
+  }
+
+  return where;
+}
+
+function buildCasesSummary(groupedStatuses: Array<{ status: string; _count: { _all: number } }>) {
+  const byStatus = groupedStatuses.reduce<Record<string, number>>((acc, item) => {
+    acc[item.status] = item._count._all;
+    return acc;
+  }, {});
+  const get = (status: string) => byStatus[status] ?? 0;
+
+  return {
+    total: Object.values(byStatus).reduce((sum, value) => sum + value, 0),
+    byStatus,
+    waitingForCustomer: get('WAITING_FOR_CUSTOMER'),
+    submitted: get('SUBMITTED'),
+    readyForPrint: get('READY_FOR_PRINT'),
+    failedRender: get('FAILED_RENDER'),
   };
 }
 

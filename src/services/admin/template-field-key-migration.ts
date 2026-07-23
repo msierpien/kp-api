@@ -71,6 +71,24 @@ export function buildFieldRenameMap(
   return renameMap;
 }
 
+export function buildDeletedFieldKeySet(
+  existingForms: ExistingTemplateForm[],
+  nextForms: TemplateFormInput['forms'],
+  renameMap: Map<string, string>
+) {
+  const nextKeys = new Set(nextForms.flatMap((form) => form.fields.map((field) => field.key)));
+  const renamedKeys = new Set(renameMap.keys());
+  const deletedKeys = new Set<string>();
+
+  for (const field of existingForms.flatMap((form) => form.fields)) {
+    if (!nextKeys.has(field.key) && !renamedKeys.has(field.key)) {
+      deletedKeys.add(field.key);
+    }
+  }
+
+  return deletedKeys;
+}
+
 export function migrateLayoutFieldKeys(layoutJson: unknown, renameMap: Map<string, string>) {
   if (!layoutJson || renameMap.size === 0 || typeof layoutJson !== 'object') return null;
 
@@ -90,6 +108,27 @@ export function migrateLayoutFieldKeys(layoutJson: unknown, renameMap: Map<strin
         fieldKey: renameMap.get(fieldKey),
       },
     };
+  });
+
+  return changed ? { ...layout, layers } : null;
+}
+
+export function removeDeletedFieldLayers(layoutJson: unknown, deletedKeys: Set<string>) {
+  if (!layoutJson || deletedKeys.size === 0 || typeof layoutJson !== 'object') return null;
+
+  const layout = layoutJson as any;
+  if (!Array.isArray(layout.layers)) return null;
+
+  let changed = false;
+  const layers = layout.layers.filter((layer: any) => {
+    const fieldKey = layer?.properties?.fieldKey;
+    const isFieldLayer = layer?.type === 'text' || layer?.type === 'textbox';
+    if (isFieldLayer && fieldKey && deletedKeys.has(fieldKey)) {
+      changed = true;
+      return false;
+    }
+
+    return true;
   });
 
   return changed ? { ...layout, layers } : null;

@@ -1,6 +1,6 @@
 import prisma from '../../lib/prisma';
 import type { TemplateFormInput, CreateTemplateInput, UpdateTemplateMetadataInput } from '../../schemas/admin.schema';
-import { buildFieldRenameMap, migrateLayoutFieldKeys } from './template-field-key-migration';
+import { buildDeletedFieldKeySet, buildFieldRenameMap, migrateLayoutFieldKeys, removeDeletedFieldLayers } from './template-field-key-migration';
 
 export async function listTemplates() {
   const templates = await prisma.personalizationTemplate.findMany({
@@ -86,7 +86,11 @@ export async function replaceTemplateForm(templateId: string, input: TemplateFor
   ]);
 
   const renameMap = buildFieldRenameMap(existingForms, input.forms);
+  const deletedKeys = buildDeletedFieldKeySet(existingForms, input.forms, renameMap);
   const migratedLayout = migrateLayoutFieldKeys(existingTemplate?.layoutJson, renameMap);
+  const layoutAfterRename = migratedLayout ?? existingTemplate?.layoutJson;
+  const prunedLayout = removeDeletedFieldLayers(layoutAfterRename, deletedKeys);
+  const changedLayout = prunedLayout ?? migratedLayout;
 
   // replace all forms/fields for this template
   await prisma.$transaction(async (tx) => {
@@ -127,11 +131,11 @@ export async function replaceTemplateForm(templateId: string, input: TemplateFor
       });
     }
 
-    if (migratedLayout) {
+    if (changedLayout) {
       await tx.personalizationTemplate.update({
         where: { id: templateId },
         data: {
-          layoutJson: migratedLayout as any,
+          layoutJson: changedLayout as any,
         },
       });
     }

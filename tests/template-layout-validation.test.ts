@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { templateLayoutSchema } from '../src/schemas/admin.schema';
+import { createTemplateSchema, templateLayoutSchema } from '../src/schemas/admin.schema';
 import { collectTemplateLayoutWarnings, validateTemplateLayoutStructure } from '../src/services/admin/template-layout-validation';
 import { mmToPx, normalizeCanvasConfig } from '../src/types/template-layout';
 
@@ -119,6 +119,37 @@ test('accepts mm-only canvas payloads and derives px dimensions from millimeters
 
   const normalized = normalizeCanvasConfig(parsed.canvas);
 
+  assert.equal(normalized.unit, 'mm');
+  assert.equal(normalized.widthMm, 90);
+  assert.equal(normalized.heightMm, 50);
+  assert.equal(normalized.width, mmToPx(90, 300));
+  assert.equal(normalized.height, mmToPx(50, 300));
+});
+
+test('accepts initial layout in create template payload', () => {
+  const parsed = createTemplateSchema.parse({
+    code: 'WINIETKA_TEST',
+    name: 'Winietka test',
+    editorType: 'SIMPLE',
+    layout: {
+      version: 1,
+      canvas: {
+        unit: 'mm',
+        widthMm: 90,
+        heightMm: 50,
+        formatPreset: 'WINIETKA_90X50',
+        dpi: 300,
+        backgroundColor: '#ffffff',
+      },
+      fonts: [],
+      layers: [],
+    },
+  });
+
+  const layout = templateLayoutSchema.parse(parsed.layout);
+  const normalized = normalizeCanvasConfig(layout.canvas);
+
+  assert.equal(parsed.editorType, 'SIMPLE');
   assert.equal(normalized.unit, 'mm');
   assert.equal(normalized.widthMm, 90);
   assert.equal(normalized.heightMm, 50);

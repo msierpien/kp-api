@@ -190,6 +190,7 @@ export const createTemplateSchema = z.object({
   version: z.number().int().positive().default(1),
   editorType: z.enum(['SIMPLE', 'ADVANCED']).default('ADVANCED'),
   isActive: z.boolean().default(true),
+  layout: z.any().optional(),
 });
 
 // Template metadata update (not forms)

@@ -1,5 +1,5 @@
 import prisma from '../../lib/prisma';
-import type { TemplateFormInput, CreateTemplateInput, UpdateTemplateMetadataInput } from '../../schemas/admin.schema';
+import { templateLayoutSchema, type TemplateFormInput, type CreateTemplateInput, type UpdateTemplateMetadataInput } from '../../schemas/admin.schema';
 import { canonicalizeTemplateForms } from '../../lib/personalization-answers';
 import { normalizeCanvasConfig } from '../../types/template-layout';
 import { buildDeletedFieldKeySet, buildFieldRenameMap, migrateLayoutFieldKeys, removeDeletedFieldLayers } from './template-field-key-migration';
@@ -156,6 +156,10 @@ export async function createTemplate(input: CreateTemplateInput) {
     throw new Error(`Szablon o kodzie "${input.code}" już istnieje`);
   }
 
+  const layoutJson = input.layout !== undefined
+    ? normalizeCreateTemplateLayout(input.layout)
+    : undefined;
+
   const template = await prisma.personalizationTemplate.create({
     data: {
       code: input.code,
@@ -164,12 +168,25 @@ export async function createTemplate(input: CreateTemplateInput) {
       version: input.version,
       editorType: input.editorType,
       isActive: input.isActive,
+      ...(layoutJson ? { layoutJson: layoutJson as any } : {}),
       // tenantId will be added automatically by Prisma middleware
     } as any,
     select: { id: true, name: true, code: true, description: true, version: true, editorType: true, isActive: true, createdAt: true },
   });
 
   return template;
+}
+
+function normalizeCreateTemplateLayout(layout: unknown) {
+  const parsed = templateLayoutSchema.safeParse(layout);
+  if (!parsed.success) {
+    throw new Error(`Nieprawidłowy layout startowy: ${parsed.error.errors[0]?.message ?? 'walidacja nie powiodła się'}`);
+  }
+
+  return {
+    ...parsed.data,
+    canvas: normalizeCanvasConfig(parsed.data.canvas as any),
+  };
 }
 
 export async function updateTemplateMetadata(templateId: string, input: UpdateTemplateMetadataInput) {

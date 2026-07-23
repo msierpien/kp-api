@@ -145,6 +145,7 @@ export async function templatesRoutes(fastify: FastifyInstance) {
             code: { type: 'string' },
             description: { type: 'string' },
             editorType: { type: 'string', enum: ['SIMPLE', 'ADVANCED'] },
+            layout: { type: 'object', additionalProperties: true },
           },
         },
         response: {

@@ -1,4 +1,4 @@
-export const API_VERSION = process.env.APP_VERSION || '1.6.14';
+export const API_VERSION = process.env.APP_VERSION || '1.6.15';
 export const API_CONTRACT_VERSION = Number(process.env.API_CONTRACT_VERSION || 5);
 export const MIN_ADMIN_CONTRACT_VERSION = Number(process.env.MIN_ADMIN_CONTRACT_VERSION || 3);
 export const MIN_ADMIN_VERSION = process.env.MIN_ADMIN_VERSION || '0.6.0';
@@ -58,6 +58,7 @@ export function getApplicationVersionInfo(environment: string): ApplicationVersi
       'personalization-case-update-detail-response-v1',
       'personalization-field-scope-canonical-v1',
       'personalization-structured-answers-v1',
+      'personalization-template-create-layout-v1',
       'personalization-template-card-summary-v1',
       'personalization-template-layout-warnings-v1',
       'personalization-template-form-layout-cascade-v1',

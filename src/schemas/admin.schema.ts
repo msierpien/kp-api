@@ -434,9 +434,22 @@ const imagePropertiesSchema = z.object({
   fit: z.enum(['cover', 'contain', 'fill']).default('contain'),
 });
 
+const simpleSlotSchema = z.enum([
+  'TOP_LEFT',
+  'TOP_CENTER',
+  'TOP_RIGHT',
+  'MIDDLE_LEFT',
+  'MIDDLE_CENTER',
+  'MIDDLE_RIGHT',
+  'BOTTOM_LEFT',
+  'BOTTOM_CENTER',
+  'BOTTOM_RIGHT',
+]);
+
 const textFieldPropertiesSchema = z.object({
   type: z.literal('text'),
   fieldKey: z.string().default(''),
+  simpleSlot: simpleSlotSchema.optional(),
   placeholder: z.string().default(''),
   fontSize: z.number().positive(),
   fontUnit: z.enum(['px', 'pt']).default('pt'),
@@ -471,6 +484,7 @@ const staticTextPropertiesSchema = z.object({
 const textboxPropertiesSchema = z.object({
   type: z.literal('textbox'),
   fieldKey: z.string().optional(),
+  simpleSlot: simpleSlotSchema.optional(),
   text: z.string().default(''),
   fontSize: z.number().positive(),
   fontUnit: z.enum(['px', 'pt']).default('pt'),

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { templateLayoutSchema } from '../src/schemas/admin.schema';
 import { collectTemplateLayoutWarnings, validateTemplateLayoutStructure } from '../src/services/admin/template-layout-validation';
 
 test('reports unmapped field keys as soft layout warnings', () => {
@@ -53,4 +54,49 @@ test('keeps invalid layer geometry as a blocking validation error', () => {
       },
     ],
   }), /nieprawidłowe wymiary/);
+});
+
+test('preserves simple editor slot metadata in parsed template layouts', () => {
+  const parsed = templateLayoutSchema.parse({
+    version: 1,
+    canvas: {
+      width: 1748,
+      height: 1240,
+      unit: 'mm',
+      widthMm: 148,
+      heightMm: 105,
+      dpi: 300,
+      bleed: 0,
+      safeArea: 0,
+      backgroundColor: '#ffffff',
+    },
+    fonts: [],
+    layers: [
+      {
+        id: 'text_1',
+        name: 'Imię',
+        type: 'text',
+        visible: true,
+        locked: false,
+        opacity: 1,
+        zIndex: 1,
+        x: 874,
+        y: 620,
+        width: 400,
+        height: 80,
+        rotation: 0,
+        properties: {
+          type: 'text',
+          fieldKey: 'imie',
+          simpleSlot: 'MIDDLE_CENTER',
+          placeholder: '{{ imie }}',
+          fontSize: 24,
+          fontFamily: 'Arial',
+        },
+      },
+    ],
+  });
+
+  const properties = parsed.layers[0].properties as { simpleSlot?: string };
+  assert.equal(properties.simpleSlot, 'MIDDLE_CENTER');
 });

@@ -141,6 +141,17 @@ export type Layer =
   | ShapeLayer
   | CutLineLayer;
 
+export type SimpleSlotKey =
+  | 'TOP_LEFT'
+  | 'TOP_CENTER'
+  | 'TOP_RIGHT'
+  | 'MIDDLE_LEFT'
+  | 'MIDDLE_CENTER'
+  | 'MIDDLE_RIGHT'
+  | 'BOTTOM_LEFT'
+  | 'BOTTOM_CENTER'
+  | 'BOTTOM_RIGHT';
+
 // ============================================
 // Layer types
 // ============================================
@@ -203,6 +214,7 @@ export interface ImageProperties {
 export interface TextFieldProperties {
   type: 'text';
   fieldKey: string;           // KLUCZ POWIĄZANIA z FormField.key
+  simpleSlot?: SimpleSlotKey;  // pozycja w trybie SIMPLE
   placeholder: string;
   fontSize: number;
   fontUnit?: 'px' | 'pt';
@@ -246,6 +258,7 @@ export interface StaticTextProperties {
 export interface TextBoxProperties {
   type: 'textbox';
   fieldKey?: string;          // opcjonalny klucz powiązania z FormField.key
+  simpleSlot?: SimpleSlotKey;  // pozycja w trybie SIMPLE
   text: string;               // tekst (może zawierać {{ fieldKey }})
   fontSize: number;
   fontUnit?: 'px' | 'pt';

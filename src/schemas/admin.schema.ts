@@ -150,6 +150,7 @@ export type PersonalizedProductParams = z.infer<typeof personalizedProductParams
 // Templates / forms
 export const formFieldInputSchema = z.object({
   key: z.string().min(1),
+  previousKey: z.string().min(1).optional().nullable(),
   label: z.string().min(1),
   type: z.string().min(1),
   scope: z.enum(['SHARED', 'INDIVIDUAL']).default('SHARED'),

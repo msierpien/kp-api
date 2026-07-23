@@ -80,6 +80,13 @@ const templateLayoutResponseSchema = {
       type: ['object', 'null'],
       additionalProperties: true,
     },
+    warnings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: true,
+      },
+    },
   },
   required: ['layout'],
 } as const;
@@ -324,8 +331,8 @@ export async function templatesRoutes(fastify: FastifyInstance) {
         });
       }
       try {
-        const layout = await updateTemplateLayout(paramsParsed.data.id, bodyParsed.data);
-        return reply.send({ layout });
+        const result = await updateTemplateLayout(paramsParsed.data.id, bodyParsed.data);
+        return reply.send(result);
       } catch (error: any) {
         fastify.log.error(error);
         return reply.status(400).send({ error: 'Update Failed', message: error.message });

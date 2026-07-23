@@ -1,5 +1,6 @@
 import prisma from '../../lib/prisma';
 import type { TemplateFormInput, CreateTemplateInput, UpdateTemplateMetadataInput } from '../../schemas/admin.schema';
+import { buildFieldRenameMap, migrateLayoutFieldKeys } from './template-field-key-migration';
 
 export async function listTemplates() {
   return prisma.personalizationTemplate.findMany({
@@ -172,54 +173,4 @@ export async function deleteTemplate(templateId: string) {
   });
 
   return { success: true };
-}
-
-function buildFieldRenameMap(
-  existingForms: Array<{ fields: Array<{ key: string; label: string; sortOrder: number }> }>,
-  nextForms: TemplateFormInput['forms']
-) {
-  const renameMap = new Map<string, string>();
-
-  nextForms.forEach((nextForm, formIndex) => {
-    const existingForm = existingForms[formIndex];
-    if (!existingForm) return;
-
-    nextForm.fields.forEach((nextField, fieldIndex) => {
-      const existingByPosition = existingForm.fields[fieldIndex];
-      const existingByLabel = existingForm.fields.find(
-        (field) => field.label.trim().toLowerCase() === nextField.label.trim().toLowerCase()
-      );
-      const existingField = existingByPosition || existingByLabel;
-
-      if (existingField && existingField.key !== nextField.key) {
-        renameMap.set(existingField.key, nextField.key);
-      }
-    });
-  });
-
-  return renameMap;
-}
-
-function migrateLayoutFieldKeys(layoutJson: unknown, renameMap: Map<string, string>) {
-  if (!layoutJson || renameMap.size === 0 || typeof layoutJson !== 'object') return null;
-
-  const layout = layoutJson as any;
-  if (!Array.isArray(layout.layers)) return null;
-
-  let changed = false;
-  const layers = layout.layers.map((layer: any) => {
-    const fieldKey = layer?.properties?.fieldKey;
-    if (!fieldKey || !renameMap.has(fieldKey)) return layer;
-
-    changed = true;
-    return {
-      ...layer,
-      properties: {
-        ...layer.properties,
-        fieldKey: renameMap.get(fieldKey),
-      },
-    };
-  });
-
-  return changed ? { ...layout, layers } : null;
 }

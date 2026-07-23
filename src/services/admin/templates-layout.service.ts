@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import type { TemplateLayoutInput } from '../../schemas/admin.schema';
 import type { TemplateLayoutJson, TemplateAssetItem } from '../../types/template-layout';
 import { normalizeCanvasConfig } from '../../types/template-layout';
+import { validateTemplateLayout, type TemplateLayoutWarning } from './template-layout-validation';
 import fs from 'fs/promises';
 import path from 'path';
 import { imageExtensionForMimeType } from '../../lib/upload-validation';
@@ -31,7 +32,7 @@ export async function getTemplateLayout(templateId: string): Promise<TemplateLay
 export async function updateTemplateLayout(
   templateId: string,
   layoutJson: TemplateLayoutInput
-): Promise<TemplateLayoutJson> {
+): Promise<{ layout: TemplateLayoutJson; warnings: TemplateLayoutWarning[] }> {
   const template = await prisma.personalizationTemplate.findUnique({
     where: { id: templateId },
     select: {
@@ -55,7 +56,7 @@ export async function updateTemplateLayout(
     canvas: normalizeCanvasConfig(layoutJson.canvas as any),
   } as TemplateLayoutInput;
 
-  validateLayout(normalizedLayout, template.forms);
+  const warnings = validateTemplateLayout(normalizedLayout, template.forms);
 
   const updated = await prisma.personalizationTemplate.update({
     where: { id: templateId },
@@ -65,7 +66,10 @@ export async function updateTemplateLayout(
     select: { layoutJson: true },
   });
 
-  return updated.layoutJson as unknown as TemplateLayoutJson;
+  return {
+    layout: updated.layoutJson as unknown as TemplateLayoutJson,
+    warnings,
+  };
 }
 
 // ============================================
@@ -194,47 +198,4 @@ function mapAssetToItem(asset: any): TemplateAssetItem {
     sortOrder: asset.sortOrder,
     createdAt: asset.createdAt,
   };
-}
-
-function validateLayout(layout: TemplateLayoutInput, forms: Array<{ fields: Array<{ key: string }> }> | null) {
-  // unikalne id
-  const ids = new Set<string>();
-  for (const layer of layout.layers) {
-    if (ids.has(layer.id)) {
-      throw new Error(`Duplikat id warstwy: ${layer.id}`);
-    }
-    ids.add(layer.id);
-    if (layer.width <= 0 || layer.height <= 0) {
-      throw new Error(`Warstwa ${layer.name} ma nieprawidłowe wymiary`);
-    }
-  }
-
-  // mapowanie pól tekstowych do istniejących fieldKey
-  const formKeys = new Set(forms?.flatMap(f => f.fields.map(fl => fl.key)) || []);
-  const seenKeys = new Set<string>();
-  for (const layer of layout.layers) {
-    if (layer.type === 'text' || layer.type === 'textbox') {
-      const fk = (layer.properties as any).fieldKey;
-      if (!fk) {
-        console.warn(`[layout] Warstwa tekstowa ${layer.name} nie ma fieldKey`);
-        continue;
-      }
-      if (!formKeys.has(fk)) {
-        console.warn(`[layout] fieldKey ${fk} nie istnieje w formularzu`);
-        continue;
-      }
-      if (seenKeys.has(fk)) {
-        // nie blokujemy, ale ostrzegamy
-        console.warn(`[layout] Powielony fieldKey ${fk} w warstwach (dopuszczalne, ale sprawdź)`);
-      } else {
-        seenKeys.add(fk);
-      }
-    }
-  }
-
-  // ostrzeżenie o braku tła
-  const hasBackground = layout.layers.some(l => l.type === 'background');
-  if (!hasBackground) {
-    console.warn('[layout] Brak warstwy background');
-  }
 }

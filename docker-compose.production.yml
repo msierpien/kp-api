@@ -147,6 +147,28 @@ services:
       redis:
         condition: service_healthy
 
+  migrate:
+    image: kp-api-migrate:production
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: migrate
+    container_name: personalization-migrate
+    profiles:
+      - maintenance
+    restart: "no"
+    logging: *default-logging
+    environment:
+      <<: *api-environment
+      RUNTIME_ROLE: migrate
+    networks:
+      - default
+      - analytics_data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: pnpm prisma migrate deploy
+
 networks:
   analytics_data:
     external: true

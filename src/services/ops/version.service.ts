@@ -1,4 +1,4 @@
-export const API_VERSION = process.env.APP_VERSION || '1.6.7';
+export const API_VERSION = process.env.APP_VERSION || '1.6.8';
 export const API_CONTRACT_VERSION = Number(process.env.API_CONTRACT_VERSION || 5);
 export const MIN_ADMIN_CONTRACT_VERSION = Number(process.env.MIN_ADMIN_CONTRACT_VERSION || 3);
 export const MIN_ADMIN_VERSION = process.env.MIN_ADMIN_VERSION || '0.6.0';
@@ -45,6 +45,7 @@ export function getApplicationVersionInfo(environment: string): ApplicationVersi
     builtAt: process.env.BUILD_DATE || null,
     features: [
       'ifirma-invoices-v1',
+      'docker-production-deploy-v1',
       'invoice-prestashop-delivery-v1',
       'order-returns-v1',
       'order-status-mapping-v1',

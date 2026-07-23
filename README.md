@@ -82,6 +82,7 @@ Najwazniejsze skrypty:
 ```bash
 pnpm dev
 pnpm build
+pnpm deploy:prod
 pnpm prisma:migrate
 pnpm prisma:migrate:deploy
 pnpm prisma:seed
@@ -224,10 +225,18 @@ Tworzenie migracji developerskiej:
 pnpm prisma migrate dev --name nazwa_migracji
 ```
 
-Wdrozenie migracji na srodowisku:
+Wdrozenie produkcji przez Docker po pobraniu zmian z git:
 
 ```bash
-pnpm prisma migrate deploy
+pnpm deploy:prod
+```
+
+Skrypt `scripts/deploy.sh` robi `git pull --ff-only`, buduje obrazy `api` i `migrate`, uruchamia migracje Prisma w jednorazowym kontenerze, restartuje `api`, `worker` i `scheduler`, a na koncu sprawdza `/health`.
+
+Jesli zmiany zostaly juz pobrane recznie:
+
+```bash
+SKIP_GIT_PULL=1 pnpm deploy:prod
 ```
 
 Seed:

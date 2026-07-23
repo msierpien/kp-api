@@ -1,6 +1,6 @@
 {
   "name": "personalization-api",
-  "version": "1.6.7",
+  "version": "1.6.8",
   "description": "PrestaShop personalization API with Fastify",
   "main": "dist/index.js",
   "packageManager": "pnpm@9.0.0",
@@ -13,6 +13,7 @@
     "dev:api": "RUNTIME_ROLE=api tsx watch src/index.ts",
     "dev:worker": "RUNTIME_ROLE=worker tsx watch src/index.ts",
     "dev:scheduler": "RUNTIME_ROLE=scheduler tsx watch src/index.ts",
+    "deploy:prod": "bash scripts/deploy.sh",
     "build": "prisma generate && tsc",
     "start": "node dist/index.js",
     "start:api": "RUNTIME_ROLE=api node dist/index.js",

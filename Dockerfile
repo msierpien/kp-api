@@ -34,6 +34,13 @@ COPY . .
 RUN pnpm build
 RUN pnpm prune --prod
 
+# Migration stage
+FROM base AS migrate
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY prisma ./prisma
+CMD ["pnpm", "prisma", "migrate", "deploy"]
+
 # Production stage
 FROM base AS production
 ENV NODE_ENV=production

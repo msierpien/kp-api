@@ -283,6 +283,22 @@ export async function getCaseById(id: string) {
         orderBy: { createdAt: 'desc' },
         take: 25,
       },
+      renderJobs: {
+        orderBy: { createdAt: 'desc' },
+        take: 1,
+        select: {
+          id: true,
+          caseId: true,
+          jobType: true,
+          status: true,
+          attempts: true,
+          error: true,
+          metadata: true,
+          createdAt: true,
+          startedAt: true,
+          completedAt: true,
+        },
+      },
     },
   });
 
@@ -290,17 +306,19 @@ export async function getCaseById(id: string) {
     throw new Error('Case not found');
   }
 
+  const { renderJobs, ...caseData } = caseItem;
   const fields = caseItem.template.forms.flatMap((form) => form.fields);
   const answersJson = normalizeCaseAnswers(caseItem.answersJson, fields, caseItem.orderItem.quantity);
   const answerProgress = computeCaseAnswerProgress(caseItem.answersJson, fields, caseItem.orderItem.quantity);
 
   // Konwersja Decimal na number dla frontendowych operacji
   return {
-    ...caseItem,
+    ...caseData,
     answersJson,
     answerProgress,
     filled: answerProgress.filled,
     qty: answerProgress.qty,
+    latestRenderJob: renderJobs[0] ?? null,
     assets: caseItem.assets.map((asset) => ({
       ...asset,
       fileUrl: buildStorageUrl(asset.filePath),

@@ -14,14 +14,14 @@ describe('API version contract', () => {
       getApplicationVersionInfo,
     } = await import('../src/services/ops/version.service');
 
-    assert.equal(API_VERSION, '1.6.10');
+    assert.equal(API_VERSION, '1.6.11');
     assert.equal(API_CONTRACT_VERSION, 5);
     assert.equal(MIN_ADMIN_CONTRACT_VERSION, 3);
     assert.equal(MIN_ADMIN_VERSION, '0.6.0');
     assert.equal(COMPATIBILITY_PROFILE, 'kp-admin-api');
 
     const info = getApplicationVersionInfo('test');
-    assert.equal(info.version, '1.6.10');
+    assert.equal(info.version, '1.6.11');
     assert.equal(info.compatibilityProfile, 'kp-admin-api');
     assert.equal(info.apiContractVersion, 5);
     assert.equal(info.minAdminContractVersion, 3);
@@ -33,6 +33,7 @@ describe('API version contract', () => {
     assert.ok(info.features.includes('order-status-mapping-v1'));
     assert.ok(info.features.includes('personalization-case-print-package-v1'));
     assert.ok(info.features.includes('personalization-case-answer-validation-v1'));
+    assert.ok(info.features.includes('personalization-case-render-job-status-v1'));
     assert.ok(info.features.includes('personalization-case-queue-summary-v1'));
     assert.ok(info.features.includes('personalization-structured-answers-v1'));
     assert.ok(info.features.includes('personalization-template-card-summary-v1'));

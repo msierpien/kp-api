@@ -236,7 +236,15 @@ Skrypt `scripts/deploy.sh` robi `git pull --ff-only`, buduje obrazy `api` i `mig
 Jesli zmiany zostaly juz pobrane recznie:
 
 ```bash
-SKIP_GIT_PULL=1 pnpm deploy:prod
+pnpm deploy:after-pull
+```
+
+Bez `pnpm` na hoscie:
+
+```bash
+cd /opt/kp-api
+git pull --ff-only
+bash scripts/deploy.sh --after-pull
 ```
 
 Seed:

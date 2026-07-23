@@ -11,6 +11,44 @@ BUILD_SERVICES=(api migrate)
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+usage() {
+  cat <<'USAGE'
+Uzycie:
+  bash scripts/deploy.sh [--after-pull|--no-pull|--skip-git-pull]
+
+Domyslnie skrypt robi git pull --ff-only, build obrazow, migracje Prisma,
+restart api/worker/scheduler i healthcheck /health.
+
+Parametry:
+  --after-pull, --no-pull, --skip-git-pull
+      Pomin git pull, gdy zmiany zostaly juz pobrane recznie.
+  --pull
+      Wymus git pull nawet przy SKIP_GIT_PULL=1.
+  -h, --help
+      Pokaz pomoc.
+USAGE
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    --after-pull|--no-pull|--skip-git-pull)
+      SKIP_GIT_PULL=1
+      ;;
+    --pull)
+      SKIP_GIT_PULL=0
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "BŁĄD: nieznany parametr: $arg"
+      usage
+      exit 1
+      ;;
+  esac
+done
+
 if [[ ! -f "$COMPOSE_FILE" ]]; then
   echo "BŁĄD: brak pliku $COMPOSE_FILE"
   exit 1
@@ -81,7 +119,7 @@ ensure_clean_worktree
 previous_commit="$(git rev-parse --short HEAD)"
 
 if [[ "$SKIP_GIT_PULL" == "1" ]]; then
-  echo "[1/7] Pomijam git pull (SKIP_GIT_PULL=1)"
+  echo "[1/7] Pomijam git pull (zmiany powinny byc juz pobrane)"
 else
   echo "[1/7] Pobieranie zmian z git"
   git pull --ff-only

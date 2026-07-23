@@ -14,20 +14,22 @@ describe('API version contract', () => {
       getApplicationVersionInfo,
     } = await import('../src/services/ops/version.service');
 
-    assert.equal(API_VERSION, '1.6.15');
+    assert.equal(API_VERSION, '1.6.16');
     assert.equal(API_CONTRACT_VERSION, 5);
     assert.equal(MIN_ADMIN_CONTRACT_VERSION, 3);
     assert.equal(MIN_ADMIN_VERSION, '0.6.0');
     assert.equal(COMPATIBILITY_PROFILE, 'kp-admin-api');
 
     const info = getApplicationVersionInfo('test');
-    assert.equal(info.version, '1.6.15');
+    assert.equal(info.version, '1.6.16');
     assert.equal(info.compatibilityProfile, 'kp-admin-api');
     assert.equal(info.apiContractVersion, 5);
     assert.equal(info.minAdminContractVersion, 3);
     assert.equal(info.minAdminVersion, '0.6.0');
     assert.ok(info.features.includes('orders-list-v1'));
     assert.ok(info.features.includes('deployment-build-metadata-v1'));
+    assert.ok(info.features.includes('deployment-after-pull-wrapper-v1'));
+    assert.ok(info.features.includes('deployment-version-check-v1'));
     assert.ok(info.features.includes('docker-production-deploy-v1'));
     assert.ok(info.features.includes('invoice-prestashop-delivery-v1'));
     assert.ok(info.features.includes('order-status-mapping-v1'));

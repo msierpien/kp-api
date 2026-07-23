@@ -153,7 +153,7 @@ fi
 echo "[6/7] Uruchamianie rozdzielonych procesów"
 compose up -d --no-deps --force-recreate "${APP_SERVICES[@]}"
 
-echo "[7/7] Healthcheck"
+echo "[7/7] Healthcheck i wersja"
 for attempt in $(seq 1 30); do
   if curl -fsS "$API_URL/health" >/dev/null; then
     echo "API gotowe"
@@ -167,6 +167,13 @@ for attempt in $(seq 1 30); do
   sleep 2
 done
 
+if ! version_payload="$(curl -fsS "$API_URL/version")"; then
+  echo "BŁĄD: API nie zwróciło informacji o wersji"
+  rollback_app_image
+  exit 1
+fi
+
+echo "Wersja API: ${version_payload}"
 echo "Weryfikacja ról"
 compose ps "${APP_SERVICES[@]}"
 git rev-parse HEAD > .deployed-main-commit

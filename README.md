@@ -244,8 +244,13 @@ Bez `pnpm` na hoscie:
 ```bash
 cd /opt/kp-api
 git pull --ff-only
-bash scripts/deploy.sh --after-pull
+bash scripts/deploy-after-pull.sh
 ```
+
+`scripts/deploy-after-pull.sh` jest tylko wrapperem na produkcyjny deploy bez ponownego `git pull`.
+Po pobraniu zmian wykonuje cala sekwencje z `scripts/deploy.sh`: build obrazow,
+migracje Prisma w kontenerze `migrate`, restart `api/worker/scheduler`, healthcheck,
+odczyt `/version` i zapis ostatnio wdrozonego commita w `.deployed-main-commit`.
 
 Seed:
 

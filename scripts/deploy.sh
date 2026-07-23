@@ -89,6 +89,8 @@ else
 fi
 
 current_commit="$(git rev-parse --short HEAD)"
+export GIT_SHA="${GIT_SHA:-$(git rev-parse --short=12 HEAD)}"
+export BUILD_DATE="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 
 echo "[2/7] Przygotowanie rollbacku obrazu"
 if docker image inspect "$IMAGE" >/dev/null 2>&1; then
@@ -130,4 +132,4 @@ done
 echo "Weryfikacja ról"
 compose ps "${APP_SERVICES[@]}"
 git rev-parse HEAD > .deployed-main-commit
-echo "Deploy OK: ${previous_commit} -> ${current_commit}"
+echo "Deploy OK: ${previous_commit} -> ${current_commit} (${GIT_SHA}, ${BUILD_DATE})"

@@ -1,6 +1,6 @@
 {
   "name": "personalization-api",
-  "version": "1.6.8",
+  "version": "1.6.9",
   "description": "PrestaShop personalization API with Fastify",
   "main": "dist/index.js",
   "packageManager": "pnpm@9.0.0",

@@ -58,6 +58,8 @@ services:
       RUNTIME_ROLE: api
       API_PORT: 3001
       API_HOST: 0.0.0.0
+      GIT_SHA: ${GIT_SHA:-}
+      BUILD_DATE: ${BUILD_DATE:-}
       # Database
       DATABASE_URL: postgresql://${DB_USER:-postgres}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-personalization}?schema=public
       ANALYTICS_MONGO_URI: ${ANALYTICS_MONGO_URI:-}

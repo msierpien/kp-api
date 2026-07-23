@@ -12,21 +12,24 @@ describe('API version contract', () => {
       getApplicationVersionInfo,
     } = await import('../src/services/ops/version.service');
 
-    assert.equal(API_VERSION, '1.5.0');
-    assert.equal(API_CONTRACT_VERSION, 3);
-    assert.equal(MIN_ADMIN_CONTRACT_VERSION, 2);
-    assert.equal(MIN_ADMIN_VERSION, '0.3.0');
+    assert.equal(API_VERSION, '1.6.0');
+    assert.equal(API_CONTRACT_VERSION, 4);
+    assert.equal(MIN_ADMIN_CONTRACT_VERSION, 3);
+    assert.equal(MIN_ADMIN_VERSION, '0.6.0');
     assert.equal(COMPATIBILITY_PROFILE, 'kp-admin-api');
 
     const info = getApplicationVersionInfo('test');
-    assert.equal(info.version, '1.5.0');
+    assert.equal(info.version, '1.6.0');
     assert.equal(info.compatibilityProfile, 'kp-admin-api');
-    assert.equal(info.apiContractVersion, 3);
-    assert.equal(info.minAdminContractVersion, 2);
-    assert.equal(info.minAdminVersion, '0.3.0');
+    assert.equal(info.apiContractVersion, 4);
+    assert.equal(info.minAdminContractVersion, 3);
+    assert.equal(info.minAdminVersion, '0.6.0');
     assert.ok(info.features.includes('orders-list-v1'));
     assert.ok(info.features.includes('invoice-prestashop-delivery-v1'));
     assert.ok(info.features.includes('order-status-mapping-v1'));
+    assert.ok(info.features.includes('personalization-case-print-package-v1'));
+    assert.ok(info.features.includes('personalization-structured-answers-v1'));
+    assert.ok(info.features.includes('personalization-template-mm-layout-v1'));
     assert.ok(info.features.includes('product-card-content-v1'));
     assert.ok(info.features.includes('prestashop-admin-connector-bridge-v1'));
     assert.ok(info.features.includes('prestashop-admin-connector-carrier-restrictions-v1'));

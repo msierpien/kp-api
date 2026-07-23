@@ -1,7 +1,7 @@
-export const API_VERSION = process.env.APP_VERSION || '1.5.0';
-export const API_CONTRACT_VERSION = Number(process.env.API_CONTRACT_VERSION || 3);
-export const MIN_ADMIN_CONTRACT_VERSION = Number(process.env.MIN_ADMIN_CONTRACT_VERSION || 2);
-export const MIN_ADMIN_VERSION = process.env.MIN_ADMIN_VERSION || '0.3.0';
+export const API_VERSION = process.env.APP_VERSION || '1.6.0';
+export const API_CONTRACT_VERSION = Number(process.env.API_CONTRACT_VERSION || 4);
+export const MIN_ADMIN_CONTRACT_VERSION = Number(process.env.MIN_ADMIN_CONTRACT_VERSION || 3);
+export const MIN_ADMIN_VERSION = process.env.MIN_ADMIN_VERSION || '0.6.0';
 export const COMPATIBILITY_PROFILE = 'kp-admin-api';
 
 export type ApplicationVersionInfo = {
@@ -33,6 +33,9 @@ export function getApplicationVersionInfo(environment: string): ApplicationVersi
       'invoice-prestashop-delivery-v1',
       'order-returns-v1',
       'order-status-mapping-v1',
+      'personalization-case-print-package-v1',
+      'personalization-structured-answers-v1',
+      'personalization-template-mm-layout-v1',
       'orders-list-v1',
       'product-card-content-v1',
       'prestashop-admin-connector-bridge-v1',

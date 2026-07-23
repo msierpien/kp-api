@@ -2,7 +2,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import {
   getCases,
   getCaseById,
-  generateCasePrintPackage,
+  enqueueCasePrintPackage,
   updateCaseAnswers,
   updateCaseStatus,
   addCaseNote,
@@ -217,7 +217,7 @@ export async function casesRoutes(fastify: FastifyInstance) {
           });
         }
 
-        const result = await generateCasePrintPackage(paramsValidation.data.id);
+        const result = await enqueueCasePrintPackage(paramsValidation.data.id);
         return reply.send(result);
       } catch (error: any) {
         fastify.log.error(error);

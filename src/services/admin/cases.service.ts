@@ -20,7 +20,8 @@ import { createZipBuffer, type ZipEntry } from '../../lib/zip';
 import type { TemplateLayoutJson, Layer } from '../../types/template-layout';
 import { renderPreview } from '../renderer/fabric-renderer.service';
 import { validateAnswers } from '../renderer/text-validator.service';
-import { saveFile } from '../storage/local-storage.service';
+import { addPrintPackageJob } from '../queue/render.queue';
+import { buildStorageUrl, saveFile } from '../storage/local-storage.service';
 
 type FieldValidationConfig = PersonalizationAnswerField & {
   label: string;
@@ -65,6 +66,13 @@ interface RenderedPackageItem {
   pngFileUrl: string;
   pdfFileSize: number;
   pngFileSize: number;
+}
+
+interface GeneratePrintPackageOptions {
+  renderJobId?: string;
+  bullmqJobId?: string | number;
+  mode?: 'SYNC' | 'BULLMQ';
+  onProgress?: (progress: number) => Promise<void>;
 }
 
 export class CasePackageValidationError extends Error {
@@ -229,6 +237,10 @@ export async function getCaseById(id: string) {
           },
         },
       },
+      assets: {
+        orderBy: { createdAt: 'desc' },
+        take: 25,
+      },
     },
   });
 
@@ -247,6 +259,10 @@ export async function getCaseById(id: string) {
     answerProgress,
     filled: answerProgress.filled,
     qty: answerProgress.qty,
+    assets: caseItem.assets.map((asset) => ({
+      ...asset,
+      fileUrl: buildStorageUrl(asset.filePath),
+    })),
     order: {
       ...caseItem.order,
       totalPaid: caseItem.order.totalPaid.toNumber(),
@@ -332,7 +348,7 @@ export async function updateCaseAnswers(id: string, payload: { answers?: any; sh
   return updated;
 }
 
-export async function generateCasePrintPackage(id: string) {
+export async function enqueueCasePrintPackage(id: string) {
   const caseItem = await prisma.personalizationCase.findUnique({
     where: { id },
     include: {
@@ -355,18 +371,120 @@ export async function generateCasePrintPackage(id: string) {
     throw new Error('Case not found');
   }
 
+  const layout = caseItem.template.layoutJson as unknown as TemplateLayoutJson | null;
+  if (!layout) {
+    throw new Error('Template layout is required for print package rendering');
+  }
+
+  const fields = caseItem.template.forms.flatMap((form) => form.fields);
+  const qty = Math.max(1, Number(caseItem.orderItem.quantity) || 1);
+  const answers = normalizeCaseAnswers(caseItem.answersJson, fields, qty);
+  const validationSummary = await validatePrintPackageAnswers(answers, fields, layout, qty);
+
+  if (!validationSummary.isValid) {
+    await prisma.personalizationCase.update({
+      where: { id },
+      data: {
+        status: 'FAILED_RENDER',
+        validationSummary: JSON.parse(JSON.stringify(validationSummary)),
+      },
+    });
+    throw new CasePackageValidationError(validationSummary);
+  }
+
   const renderJob = await prisma.renderJob.create({
     data: {
       caseId: id,
       jobType: 'PDF_PRINT_PACKAGE',
-      status: 'PROCESSING',
-      startedAt: new Date(),
+      status: 'PENDING',
       metadata: {
-        mode: 'SYNC',
-        quantity: caseItem.orderItem.quantity,
+        mode: 'BULLMQ',
+        templateId: caseItem.templateId,
+        templateVersion: caseItem.templateVersionFrozen,
+        quantity: qty,
       },
     },
   });
+
+  try {
+    const bullmqJob = await addPrintPackageJob({
+      caseId: id,
+      renderJobId: renderJob.id,
+      answers: {},
+      templateName: caseItem.template.name,
+      templateVersion: caseItem.templateVersionFrozen,
+      layoutConfig: layout,
+      layoutOverrides: caseItem.layoutOverrides as any,
+      orderId: caseItem.orderId,
+      orderReference: caseItem.order.orderReference || undefined,
+      productName: caseItem.orderItem.productNameSnapshot,
+    });
+
+    await prisma.$transaction([
+      prisma.renderJob.update({
+        where: { id: renderJob.id },
+        data: {
+          metadata: {
+            ...(renderJob.metadata as object || {}),
+            bullmqJobId: bullmqJob.id,
+          },
+        },
+      }),
+      prisma.personalizationCase.update({
+        where: { id },
+        data: {
+          status: 'SUBMITTED',
+          validationSummary: JSON.parse(JSON.stringify(validationSummary)),
+          updatedAt: new Date(),
+        },
+      }),
+    ]);
+
+    return {
+      success: true,
+      queued: true,
+      status: 'PENDING',
+      renderJobId: renderJob.id,
+      bullmqJobId: bullmqJob.id,
+      validationSummary,
+    };
+  } catch (error) {
+    await prisma.renderJob.update({
+      where: { id: renderJob.id },
+      data: {
+        status: 'FAILED',
+        error: error instanceof Error ? error.message : 'Unknown queue error',
+        completedAt: new Date(),
+      },
+    });
+    throw error;
+  }
+}
+
+export async function generateCasePrintPackage(id: string, options: GeneratePrintPackageOptions = {}) {
+  const caseItem = await prisma.personalizationCase.findUnique({
+    where: { id },
+    include: {
+      order: true,
+      orderItem: true,
+      template: {
+        include: {
+          forms: {
+            include: {
+              fields: { orderBy: { sortOrder: 'asc' } },
+            },
+            orderBy: { sortOrder: 'asc' },
+          },
+        },
+      },
+    },
+  });
+
+  if (!caseItem) {
+    throw new Error('Case not found');
+  }
+
+  let renderJob: { id: string; metadata: unknown } | null = null;
 
   try {
     const layout = caseItem.template.layoutJson as unknown as TemplateLayoutJson | null;
@@ -377,8 +495,43 @@ export async function generateCasePrintPackage(id: string) {
 
     const fields = caseItem.template.forms.flatMap((form) => form.fields);
     const qty = Math.max(1, Number(caseItem.orderItem.quantity) || 1);
+    renderJob = options.renderJobId
+      ? await prisma.renderJob.update({
+        where: { id: options.renderJobId },
+        data: {
+          status: 'PROCESSING',
+          startedAt: new Date(),
+          error: null,
+          metadata: {
+            mode: options.mode || 'BULLMQ',
+            templateId: caseItem.templateId,
+            templateVersion: caseItem.templateVersionFrozen,
+            quantity: qty,
+            bullmqJobId: options.bullmqJobId,
+          },
+        },
+      })
+      : await prisma.renderJob.create({
+        data: {
+          caseId: id,
+          jobType: 'PDF_PRINT_PACKAGE',
+          status: 'PROCESSING',
+          startedAt: new Date(),
+          metadata: {
+            mode: options.mode || 'SYNC',
+            templateId: caseItem.templateId,
+            templateVersion: caseItem.templateVersionFrozen,
+            quantity: qty,
+            bullmqJobId: options.bullmqJobId,
+          },
+        },
+      });
+
+    await options.onProgress?.(10);
+
     const answers = normalizeCaseAnswers(caseItem.answersJson, fields, qty);
     const validationSummary = await validatePrintPackageAnswers(answers, fields, layout, qty);
+    await options.onProgress?.(20);
 
     if (!validationSummary.isValid) {
       await prisma.$transaction([
@@ -411,6 +564,7 @@ export async function generateCasePrintPackage(id: string) {
     const packageBaseName = sanitizeFilePart(`${caseItem.order.orderReference}-${caseItem.template.code}`) || `case-${id}`;
 
     for (let itemIndex = 0; itemIndex < qty; itemIndex += 1) {
+      await options.onProgress?.(20 + Math.round((itemIndex / qty) * 60));
       const flatAnswers = flattenCaseAnswers(answers, itemIndex);
       const itemBaseName = `${packageBaseName}-szt-${String(itemIndex + 1).padStart(2, '0')}`;
       const templateData = {
@@ -506,6 +660,8 @@ export async function generateCasePrintPackage(id: string) {
       });
     }
 
+    await options.onProgress?.(85);
+
     const zipBuffer = createZipBuffer(packageEntries);
     const savedZip = await saveFile(zipBuffer, {
       orderId: caseItem.orderId,
@@ -535,6 +691,8 @@ export async function generateCasePrintPackage(id: string) {
       },
     });
 
+    await options.onProgress?.(92);
+
     await prisma.$transaction([
       prisma.personalizationCase.update({
         where: { id },
@@ -559,9 +717,12 @@ export async function generateCasePrintPackage(id: string) {
       }),
     ]);
 
+    await options.onProgress?.(100);
+
     return {
       success: true,
       renderJobId: renderJob.id,
+      packageAssetId: packageAsset.id,
       asset: {
         id: packageAsset.id,
         assetType: packageAsset.assetType,
@@ -578,31 +739,32 @@ export async function generateCasePrintPackage(id: string) {
       throw error;
     }
 
-    await prisma.$transaction([
-      prisma.personalizationCase.update({
-        where: { id },
-        data: {
-          status: 'FAILED_RENDER',
-          validationSummary: {
-            isValid: false,
-            errors: [{
-              field: '_render',
-              message: error instanceof Error ? error.message : 'Unknown render error',
-              severity: 'error',
-            }],
-            warnings: [],
-          },
+    await prisma.personalizationCase.update({
+      where: { id },
+      data: {
+        status: 'FAILED_RENDER',
+        validationSummary: {
+          isValid: false,
+          errors: [{
+            field: '_render',
+            message: error instanceof Error ? error.message : 'Unknown render error',
+            severity: 'error',
+          }],
+          warnings: [],
         },
-      }),
-      prisma.renderJob.update({
+      },
+    });
+
+    if (renderJob) {
+      await prisma.renderJob.update({
         where: { id: renderJob.id },
         data: {
           status: 'FAILED',
           error: error instanceof Error ? error.message : 'Unknown render error',
           completedAt: new Date(),
         },
-      }),
-    ]);
+      });
+    }
 
     throw error;
   }

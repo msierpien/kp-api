@@ -44,10 +44,11 @@ export function getBullMqConnection() {
 }
 
 // Job types
-export type RenderJobType = 'PNG_PREVIEW' | 'PDF_PRINT';
+export type RenderJobType = 'PNG_PREVIEW' | 'PDF_PRINT' | 'PDF_PRINT_PACKAGE';
 
 export interface RenderJobData {
   caseId: string;
+  renderJobId?: string;
   jobType: RenderJobType;
   answers: Record<string, string | number | boolean>;
   templateName: string;
@@ -76,9 +77,21 @@ export interface RenderJobData {
 export interface RenderJobResult {
   success: boolean;
   assetId?: string;
+  packageAssetId?: string;
   filePath?: string;
   fileUrl?: string;
   fileSize?: number;
+  files?: Array<{
+    itemIndex: number;
+    pdfAssetId: string;
+    pngAssetId: string;
+    pdfFilePath: string;
+    pngFilePath: string;
+    pdfFileUrl: string;
+    pngFileUrl: string;
+    pdfFileSize: number;
+    pngFileSize: number;
+  }>;
   error?: string;
   validationSummary?: {
     isValid: boolean;
@@ -191,6 +204,32 @@ export async function addFinalPdfJob(data: Omit<RenderJobData, 'jobType'>): Prom
   );
 
   console.log(`[RenderQueue] Final PDF job added: ${job.id}`);
+  return job;
+}
+
+/**
+ * Dodaje job do kolejki paczki finalnych plików PDF/PNG.
+ */
+export async function addPrintPackageJob(data: Omit<RenderJobData, 'jobType'>): Promise<Job<RenderJobData, RenderJobResult>> {
+  const queue = getRenderQueue();
+
+  const job = await queue.add(
+    'print-package',
+    {
+      ...data,
+      jobType: 'PDF_PRINT_PACKAGE',
+      renderOptions: {
+        includeWatermark: false,
+        ...data.renderOptions,
+      },
+    },
+    {
+      priority: 5,
+      jobId: `print-package-${data.caseId}-${Date.now()}`,
+    }
+  );
+
+  console.log(`[RenderQueue] Print package job added: ${job.id}`);
   return job;
 }
 

@@ -3,6 +3,7 @@ import prisma from '../../lib/prisma';
 import { renderPreview, renderPDF } from '../renderer/fabric-renderer.service';
 import { validateAnswers } from '../renderer/text-validator.service';
 import { saveFile } from '../storage/local-storage.service';
+import { generateCasePrintPackage } from '../admin/cases.service';
 import {
   getBullMqConnection,
   RENDER_QUEUE_NAME,
@@ -18,7 +19,7 @@ let workerInstance: Worker<RenderJobData, RenderJobResult> | null = null;
 async function processRenderJob(
   job: Job<RenderJobData, RenderJobResult>
 ): Promise<RenderJobResult> {
-  const { caseId, jobType, answers, templateName, templateVersion, orderId, renderOptions, layoutConfig, layoutOverrides } = job.data;
+  const { caseId, renderJobId, jobType, answers, templateName, templateVersion, orderId, renderOptions, layoutConfig, layoutOverrides } = job.data;
 
   console.log(`[RenderWorker] Processing job ${job.id}, type: ${jobType}, case: ${caseId}`);
 
@@ -26,10 +27,12 @@ async function processRenderJob(
     // Update progress
     await job.updateProgress(10);
 
-    const activeRenderJob = await prisma.renderJob.findFirst({
-      where: { caseId, jobType },
-      orderBy: { createdAt: 'desc' },
-    });
+    const activeRenderJob = renderJobId
+      ? await prisma.renderJob.findUnique({ where: { id: renderJobId } })
+      : await prisma.renderJob.findFirst({
+        where: { caseId, jobType },
+        orderBy: { createdAt: 'desc' },
+      });
 
     if (activeRenderJob) {
       await prisma.renderJob.update({
@@ -43,6 +46,26 @@ async function processRenderJob(
           },
         },
       });
+    }
+
+    if (jobType === 'PDF_PRINT_PACKAGE') {
+      const result = await generateCasePrintPackage(caseId, {
+        renderJobId: activeRenderJob?.id,
+        bullmqJobId: job.id,
+        mode: 'BULLMQ',
+        onProgress: (progress) => job.updateProgress(progress),
+      });
+
+      return {
+        success: true,
+        assetId: result.asset.id,
+        packageAssetId: result.packageAssetId,
+        filePath: result.asset.filePath,
+        fileUrl: result.asset.fileUrl,
+        fileSize: result.asset.fileSize,
+        files: result.files,
+        validationSummary: result.validationSummary,
+      };
     }
 
     // Pobierz case z bazy

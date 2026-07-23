@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { templateLayoutSchema } from '../src/schemas/admin.schema';
 import { collectTemplateLayoutWarnings, validateTemplateLayoutStructure } from '../src/services/admin/template-layout-validation';
+import { mmToPx, normalizeCanvasConfig } from '../src/types/template-layout';
 
 test('reports unmapped field keys as soft layout warnings', () => {
   const warnings = collectTemplateLayoutWarnings({
@@ -99,4 +100,49 @@ test('preserves simple editor slot metadata in parsed template layouts', () => {
 
   const properties = parsed.layers[0].properties as { simpleSlot?: string };
   assert.equal(properties.simpleSlot, 'MIDDLE_CENTER');
+});
+
+test('accepts mm-only canvas payloads and derives px dimensions from millimeters', () => {
+  const parsed = templateLayoutSchema.parse({
+    version: 1,
+    canvas: {
+      unit: 'mm',
+      widthMm: 90,
+      heightMm: 50,
+      formatPreset: 'WINIETKA_90X50',
+      dpi: 300,
+      backgroundColor: '#ffffff',
+    },
+    fonts: [],
+    layers: [],
+  });
+
+  const normalized = normalizeCanvasConfig(parsed.canvas);
+
+  assert.equal(normalized.unit, 'mm');
+  assert.equal(normalized.widthMm, 90);
+  assert.equal(normalized.heightMm, 50);
+  assert.equal(normalized.width, mmToPx(90, 300));
+  assert.equal(normalized.height, mmToPx(50, 300));
+});
+
+test('prefers millimeter dimensions over stale pixel dimensions', () => {
+  const normalized = normalizeCanvasConfig({
+    width: 9999,
+    height: 9999,
+    unit: 'mm',
+    widthMm: 105,
+    heightMm: 148,
+    dpi: 300,
+    bleed: 200,
+    bleedMm: 3,
+    safeArea: 500,
+    safeAreaMm: 5,
+    backgroundColor: '#ffffff',
+  });
+
+  assert.equal(normalized.width, mmToPx(105, 300));
+  assert.equal(normalized.height, mmToPx(148, 300));
+  assert.equal(normalized.bleed, mmToPx(3, 300));
+  assert.equal(normalized.safeArea, mmToPx(5, 300));
 });

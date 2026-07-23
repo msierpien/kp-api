@@ -1,4 +1,10 @@
-import type { TemplateLayoutJson, Layer } from '../../types/template-layout';
+import {
+  getCanvasHeightPx,
+  getCanvasWidthPx,
+  normalizeCanvasConfig,
+  type TemplateLayoutJson,
+  type Layer,
+} from '../../types/template-layout';
 
 interface GenerateOptions {
   watermark?: {
@@ -34,6 +40,7 @@ export function generateHTMLFromLayout(
   options: GenerateOptions = {}
 ): string {
   const assetBaseUrl = (options.assetBaseUrl || '').replace(/\/+$/, '') + '/';
+  const canvas = normalizeCanvasConfig(layout.canvas);
 
   const fontsCss = layout.fonts
     .map(
@@ -50,16 +57,16 @@ export function generateHTMLFromLayout(
 
   const containerStyle = `
     position: relative;
-    width: ${px(layout.canvas.width)};
-    height: ${px(layout.canvas.height)};
-    background: ${layout.canvas.backgroundColor || '#fff'};
+    width: ${px(getCanvasWidthPx(canvas))};
+    height: ${px(getCanvasHeightPx(canvas))};
+    background: ${canvas.backgroundColor || '#fff'};
     overflow: hidden;
   `;
 
   const layersHtml = layout.layers
     .filter((l) => l.visible !== false)
     .sort((a, b) => a.zIndex - b.zIndex)
-    .map((layer) => renderLayer(layer, answers, assetBaseUrl, layout.canvas.dpi || 300))
+    .map((layer) => renderLayer(layer, answers, assetBaseUrl, canvas.dpi || 300))
     .join('\n');
 
   const watermarkHtml = options.watermark

@@ -556,8 +556,8 @@ const fontConfigSchema = z.object({
 });
 
 const canvasConfigSchema = z.object({
-  width: z.number().positive(),
-  height: z.number().positive(),
+  width: z.number().positive().optional(),
+  height: z.number().positive().optional(),
   unit: z.enum(['px', 'mm']).default('mm'),
   widthMm: z.number().positive().optional(),
   heightMm: z.number().positive().optional(),

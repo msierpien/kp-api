@@ -17,7 +17,14 @@ import {
   type StructuredCaseAnswers,
 } from '../../lib/personalization-answers';
 import { createZipBuffer, type ZipEntry } from '../../lib/zip';
-import type { TemplateLayoutJson, Layer } from '../../types/template-layout';
+import {
+  getCanvasHeightPx as getLayoutCanvasHeightPx,
+  getCanvasWidthPx as getLayoutCanvasWidthPx,
+  normalizeCanvasConfig,
+  pxToMm,
+  type TemplateLayoutJson,
+  type Layer,
+} from '../../types/template-layout';
 import { renderPreview } from '../renderer/fabric-renderer.service';
 import { validateAnswers } from '../renderer/text-validator.service';
 import { addPrintPackageJob } from '../queue/render.queue';
@@ -854,51 +861,28 @@ function sanitizeFilePart(value: string) {
     .slice(0, 120);
 }
 
-function mmToPx(mm: number, dpi: number) {
-  return Math.round((mm / 25.4) * dpi);
-}
-
-function pxToMm(px: number, dpi: number) {
-  return Number(((px / dpi) * 25.4).toFixed(2));
-}
-
 function getCanvasDpi(layout: TemplateLayoutJson) {
   return Math.max(1, Number(layout.canvas?.dpi || 300));
 }
 
-function getCanvasWidthPx(layout: TemplateLayoutJson) {
-  const dpi = getCanvasDpi(layout);
-  const canvas = layout.canvas as any;
-  if (typeof canvas.width === 'number' && canvas.width > 0) return Math.round(canvas.width);
-  if (typeof canvas.widthMm === 'number' && canvas.widthMm > 0) return mmToPx(canvas.widthMm, dpi);
-  return 800;
-}
-
-function getCanvasHeightPx(layout: TemplateLayoutJson) {
-  const dpi = getCanvasDpi(layout);
-  const canvas = layout.canvas as any;
-  if (typeof canvas.height === 'number' && canvas.height > 0) return Math.round(canvas.height);
-  if (typeof canvas.heightMm === 'number' && canvas.heightMm > 0) return mmToPx(canvas.heightMm, dpi);
-  return 600;
-}
-
 function getBleedPx(layout: TemplateLayoutJson) {
-  const dpi = getCanvasDpi(layout);
-  const canvas = layout.canvas as any;
-  if (typeof canvas.bleed === 'number' && canvas.bleed > 0) return Math.round(canvas.bleed);
-  if (typeof canvas.bleedMm === 'number' && canvas.bleedMm > 0) return mmToPx(canvas.bleedMm, dpi);
-  return 0;
+  const normalizedCanvas = normalizeCanvasConfig(layout.canvas);
+  return Math.max(0, Math.round(normalizedCanvas.bleed || 0));
 }
 
 function buildPrintLayout(layout: TemplateLayoutJson) {
-  const dpi = getCanvasDpi(layout);
-  const widthPx = getCanvasWidthPx(layout);
-  const heightPx = getCanvasHeightPx(layout);
-  const bleedPx = getBleedPx(layout);
+  const normalizedLayout = {
+    ...layout,
+    canvas: normalizeCanvasConfig(layout.canvas),
+  };
+  const dpi = getCanvasDpi(normalizedLayout);
+  const widthPx = getLayoutCanvasWidthPx(normalizedLayout.canvas);
+  const heightPx = getLayoutCanvasHeightPx(normalizedLayout.canvas);
+  const bleedPx = getBleedPx(normalizedLayout);
 
   if (bleedPx <= 0) {
     return {
-      layout,
+      layout: normalizedLayout,
       widthPx,
       heightPx,
       dpi,
@@ -909,13 +893,13 @@ function buildPrintLayout(layout: TemplateLayoutJson) {
 
   const printWidthPx = widthPx + bleedPx * 2;
   const printHeightPx = heightPx + bleedPx * 2;
-  const expandedLayers = layout.layers.map((layer) => expandLayerForBleed(layer, widthPx, heightPx, printWidthPx, printHeightPx, bleedPx));
+  const expandedLayers = normalizedLayout.layers.map((layer) => expandLayerForBleed(layer, widthPx, heightPx, printWidthPx, printHeightPx, bleedPx));
 
   return {
     layout: {
-      ...layout,
+      ...normalizedLayout,
       canvas: {
-        ...layout.canvas,
+        ...normalizedLayout.canvas,
         width: printWidthPx,
         height: printHeightPx,
         unit: 'mm' as const,

@@ -1,5 +1,6 @@
 import prisma from '../../lib/prisma';
 import type { TemplateFormInput, CreateTemplateInput, UpdateTemplateMetadataInput } from '../../schemas/admin.schema';
+import { normalizeCanvasConfig } from '../../types/template-layout';
 import { buildDeletedFieldKeySet, buildFieldRenameMap, migrateLayoutFieldKeys, removeDeletedFieldLayers } from './template-field-key-migration';
 
 export async function listTemplates() {
@@ -234,11 +235,12 @@ function summarizeTemplateLayout(layoutJson: unknown) {
   const canvas = (layoutJson as any).canvas;
   if (!canvas || typeof canvas !== 'object') return null;
 
-  const widthMm = toPositiveNumber(canvas.widthMm);
-  const heightMm = toPositiveNumber(canvas.heightMm);
-  const dpi = toPositiveNumber(canvas.dpi);
-  const width = toPositiveNumber(canvas.width);
-  const height = toPositiveNumber(canvas.height);
+  const normalizedCanvas = normalizeCanvasConfig(canvas);
+  const widthMm = toPositiveNumber(normalizedCanvas.widthMm);
+  const heightMm = toPositiveNumber(normalizedCanvas.heightMm);
+  const dpi = toPositiveNumber(normalizedCanvas.dpi);
+  const width = toPositiveNumber(normalizedCanvas.width);
+  const height = toPositiveNumber(normalizedCanvas.height);
 
   return {
     widthMm,
@@ -246,6 +248,6 @@ function summarizeTemplateLayout(layoutJson: unknown) {
     dpi,
     width,
     height,
-    formatPreset: typeof canvas.formatPreset === 'string' ? canvas.formatPreset : null,
+    formatPreset: typeof normalizedCanvas.formatPreset === 'string' ? normalizedCanvas.formatPreset : null,
   };
 }

@@ -33,6 +33,7 @@ export interface CanvasConfig {
 }
 
 export type TemplateFormatPreset = 'WINIETKA_90X50' | 'A6_105X148' | 'DL_99X210' | 'THANK_YOU_148X105' | 'CUSTOM';
+export type CanvasConfigInput = Partial<CanvasConfig>;
 
 export interface TemplateFormatOption {
   key: TemplateFormatPreset;
@@ -49,6 +50,29 @@ export const TEMPLATE_FORMAT_PRESETS: TemplateFormatOption[] = [
   { key: 'CUSTOM', label: 'Własny format', widthMm: 148, heightMm: 105 },
 ];
 
+const DEFAULT_CANVAS_FORMAT: TemplateFormatPreset = 'THANK_YOU_148X105';
+const DEFAULT_CANVAS_PRESET = TEMPLATE_FORMAT_PRESETS.find((preset) => preset.key === DEFAULT_CANVAS_FORMAT)!;
+
+function toPositiveNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function toNonNegativeNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function resolveFormatPreset(value: unknown): TemplateFormatPreset | undefined {
+  if (typeof value !== 'string') return undefined;
+  return TEMPLATE_FORMAT_PRESETS.some((preset) => preset.key === value)
+    ? value as TemplateFormatPreset
+    : undefined;
+}
+
+function getPresetDimensions(formatPreset?: TemplateFormatPreset): TemplateFormatOption {
+  if (!formatPreset || formatPreset === 'CUSTOM') return DEFAULT_CANVAS_PRESET;
+  return TEMPLATE_FORMAT_PRESETS.find((preset) => preset.key === formatPreset) ?? DEFAULT_CANVAS_PRESET;
+}
+
 export function mmToPx(mm: number, dpi = 300): number {
   return Math.round((mm / 25.4) * dpi);
 }
@@ -57,45 +81,65 @@ export function pxToMm(px: number, dpi = 300): number {
   return Number(((px / dpi) * 25.4).toFixed(2));
 }
 
-export function getCanvasWidthMm(canvas: CanvasConfig): number {
-  if (typeof canvas.widthMm === 'number' && canvas.widthMm > 0) return canvas.widthMm;
-  return pxToMm(canvas.width, canvas.dpi || 300);
+export function getCanvasWidthMm(canvas: CanvasConfigInput): number {
+  const explicitWidthMm = toPositiveNumber(canvas.widthMm);
+  if (explicitWidthMm) return explicitWidthMm;
+
+  const formatPreset = resolveFormatPreset(canvas.formatPreset);
+  if (formatPreset && formatPreset !== 'CUSTOM') return getPresetDimensions(formatPreset).widthMm;
+
+  const widthPx = toPositiveNumber(canvas.width);
+  if (widthPx) return pxToMm(widthPx, toPositiveNumber(canvas.dpi) ?? 300);
+
+  return DEFAULT_CANVAS_PRESET.widthMm;
 }
 
-export function getCanvasHeightMm(canvas: CanvasConfig): number {
-  if (typeof canvas.heightMm === 'number' && canvas.heightMm > 0) return canvas.heightMm;
-  return pxToMm(canvas.height, canvas.dpi || 300);
+export function getCanvasHeightMm(canvas: CanvasConfigInput): number {
+  const explicitHeightMm = toPositiveNumber(canvas.heightMm);
+  if (explicitHeightMm) return explicitHeightMm;
+
+  const formatPreset = resolveFormatPreset(canvas.formatPreset);
+  if (formatPreset && formatPreset !== 'CUSTOM') return getPresetDimensions(formatPreset).heightMm;
+
+  const heightPx = toPositiveNumber(canvas.height);
+  if (heightPx) return pxToMm(heightPx, toPositiveNumber(canvas.dpi) ?? 300);
+
+  return DEFAULT_CANVAS_PRESET.heightMm;
 }
 
-export function getCanvasWidthPx(canvas: CanvasConfig): number {
-  if (canvas.unit === 'mm' && canvas.widthMm) return mmToPx(canvas.widthMm, canvas.dpi || 300);
-  return canvas.width;
+export function getCanvasWidthPx(canvas: CanvasConfigInput): number {
+  const dpi = toPositiveNumber(canvas.dpi) ?? 300;
+  return mmToPx(getCanvasWidthMm(canvas), dpi);
 }
 
-export function getCanvasHeightPx(canvas: CanvasConfig): number {
-  if (canvas.unit === 'mm' && canvas.heightMm) return mmToPx(canvas.heightMm, canvas.dpi || 300);
-  return canvas.height;
+export function getCanvasHeightPx(canvas: CanvasConfigInput): number {
+  const dpi = toPositiveNumber(canvas.dpi) ?? 300;
+  return mmToPx(getCanvasHeightMm(canvas), dpi);
 }
 
-export function normalizeCanvasConfig(canvas: CanvasConfig): CanvasConfig {
-  const dpi = canvas.dpi || 300;
+export function normalizeCanvasConfig(canvas: CanvasConfigInput): CanvasConfig {
+  const dpi = toPositiveNumber(canvas.dpi) ?? 300;
   const widthMm = getCanvasWidthMm(canvas);
   const heightMm = getCanvasHeightMm(canvas);
-  const bleedMm = typeof canvas.bleedMm === 'number' ? canvas.bleedMm : pxToMm(canvas.bleed || 0, dpi);
-  const safeAreaMm = typeof canvas.safeAreaMm === 'number' ? canvas.safeAreaMm : pxToMm(canvas.safeArea || 0, dpi);
+  const bleedMm = toNonNegativeNumber(canvas.bleedMm) ?? pxToMm(toNonNegativeNumber(canvas.bleed) ?? 0, dpi);
+  const safeAreaMm = toNonNegativeNumber(canvas.safeAreaMm) ?? pxToMm(toNonNegativeNumber(canvas.safeArea) ?? 0, dpi);
+  const formatPreset = resolveFormatPreset(canvas.formatPreset);
 
   return {
-    ...canvas,
+    width: mmToPx(widthMm, dpi),
+    height: mmToPx(heightMm, dpi),
     unit: 'mm',
     widthMm,
     heightMm,
-    width: mmToPx(widthMm, dpi),
-    height: mmToPx(heightMm, dpi),
+    ...(formatPreset ? { formatPreset } : {}),
     dpi,
     bleedMm,
     safeAreaMm,
     bleed: mmToPx(bleedMm, dpi),
     safeArea: mmToPx(safeAreaMm, dpi),
+    backgroundColor: typeof canvas.backgroundColor === 'string' && canvas.backgroundColor
+      ? canvas.backgroundColor
+      : '#ffffff',
   };
 }
 

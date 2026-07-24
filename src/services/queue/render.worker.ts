@@ -1,6 +1,6 @@
 import { Worker, Job } from 'bullmq';
 import prisma from '../../lib/prisma';
-import { renderPreview, renderPDF } from '../renderer/fabric-renderer.service';
+import { renderPreview, renderPDF, renderPrintPdf } from '../renderer/fabric-renderer.service';
 import { validateAnswers } from '../renderer/text-validator.service';
 import { saveFile } from '../storage/local-storage.service';
 import { generateCasePrintPackage } from '../admin/cases.service';
@@ -183,10 +183,10 @@ async function processRenderJob(
       assetType = 'PNG_PREVIEW';
     } else {
       console.log(`[RenderWorker] Rendering PDF for case ${caseId}`);
-      buffer = await renderPDF(templateData, {
-        width: renderOptions?.width || 297, // A4 landscape for 2-page spread
-        height: renderOptions?.height || 210,
-      });
+      // renderPrintPdf sam obsluguje jedna lub wiele stron: kazda strone renderuje
+      // osobno i sklada na arkuszu wg print layoutu (lub domyslnego skladania).
+      // Rozmiar wynika z faktycznych wymiarow arkusza, nie ze stalych renderOptions.
+      buffer = await renderPrintPdf(templateData);
       extension = 'pdf';
       mimeType = 'application/pdf';
       assetType = 'PDF_PRINT';

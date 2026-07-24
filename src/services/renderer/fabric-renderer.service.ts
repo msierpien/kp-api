@@ -1,6 +1,7 @@
 import { loadImage, registerFont } from 'canvas';
 import { StaticCanvas, FabricImage, IText, Textbox } from 'fabric/node';
-import type { TemplateLayoutJson, Layer, TextFieldProperties, TextBoxProperties, ImageProperties } from '../../types/template-layout';
+import type { TemplateLayoutJson, TemplatePage, PrintLayout, Layer, TextFieldProperties, TextBoxProperties, ImageProperties } from '../../types/template-layout';
+import { getTemplatePages } from '../../types/template-layout';
 import path from 'path';
 import fs from 'fs/promises';
 import { config } from '../../config';
@@ -513,6 +514,180 @@ export async function renderPDF(
       fit: [pdfWidth, pdfHeight],
     });
 
+    doc.end();
+  });
+}
+
+// ============================================
+// Renderowanie wielu stron i sklad do druku
+// ============================================
+
+const MM_PER_INCH = 25.4;
+
+function canvasPxDimensions(canvas: TemplateLayoutJson['canvas']): { widthPx: number; heightPx: number } {
+  const dpi = Number(canvas.dpi || 300);
+  const widthPx =
+    Number(canvas.width) ||
+    Math.round(((Number(canvas.widthMm) || 100) / MM_PER_INCH) * dpi);
+  const heightPx =
+    Number(canvas.height) ||
+    Math.round(((Number(canvas.heightMm) || 100) / MM_PER_INCH) * dpi);
+  return { widthPx, heightPx };
+}
+
+function canvasMmDimensions(canvas: TemplateLayoutJson['canvas']): { widthMm: number; heightMm: number } {
+  const dpi = Number(canvas.dpi || 300);
+  const { widthPx, heightPx } = canvasPxDimensions(canvas);
+  return {
+    widthMm: Number(canvas.widthMm) || (widthPx / dpi) * MM_PER_INCH,
+    heightMm: Number(canvas.heightMm) || (heightPx / dpi) * MM_PER_INCH,
+  };
+}
+
+/**
+ * Renderuje pojedyncza strone do PNG w natywnej rozdzielczosci canvas
+ * (layer.x jest w pikselach canvas, wiec skala = 1 daje pelne DPI szablonu).
+ */
+async function renderPageToPng(
+  page: TemplatePage,
+  answers: Record<string, any>,
+  layoutOverrides: any
+): Promise<{ buffer: Buffer; widthPx: number; heightPx: number }> {
+  const pageLayout: TemplateLayoutJson = {
+    version: 2,
+    canvas: page.canvas,
+    fonts: [],
+    layers: page.layers,
+  };
+  const merged = mergeLayoutWithOverrides(pageLayout, layoutOverrides);
+  await loadLayoutFonts(merged);
+
+  const { widthPx, heightPx } = canvasPxDimensions(merged.canvas);
+  const dpi = Number(merged.canvas.dpi || 300);
+
+  const fabricCanvas = new StaticCanvas(undefined, {
+    width: widthPx,
+    height: heightPx,
+    backgroundColor: merged.canvas.backgroundColor || '#ffffff',
+  });
+  const nodeCanvas = fabricCanvas.getNodeCanvas();
+
+  const sortedLayers = [...merged.layers]
+    .filter((l) => l.visible !== false)
+    .sort((a, b) => a.zIndex - b.zIndex);
+
+  for (const layer of sortedLayers) {
+    try {
+      const obj = await layerToFabricObject(layer, answers, 1, dpi);
+      if (obj) fabricCanvas.add(obj);
+    } catch (error) {
+      console.error(`[Fabric] Failed to render layer ${layer.id} on page ${page.id}:`, error);
+    }
+  }
+
+  fabricCanvas.renderAll();
+  return { buffer: nodeCanvas.toBuffer('image/png'), widthPx, heightPx };
+}
+
+/**
+ * Domyslny sklad, gdy szablon nie ma wlasnego print layoutu.
+ *
+ * Strony ukladane pionowo, jedna pod druga. Kolejne strony (tyl karty) obrocone
+ * o 180 stopni - to typowy sklad winietki namiotowej, gdzie tyl po zlozeniu
+ * czyta sie poprawnie. Uzytkownik moze to nadpisac edytorem skladania.
+ */
+function defaultPrintLayout(pages: TemplatePage[]): PrintLayout {
+  let yMm = 0;
+  const placements: PrintLayout['placements'] = [];
+  let widthMm = 0;
+
+  for (let i = 0; i < pages.length; i++) {
+    const dims = canvasMmDimensions(pages[i].canvas);
+    widthMm = Math.max(widthMm, dims.widthMm);
+    placements.push({ pageId: pages[i].id, xMm: 0, yMm, rotation: i === 0 ? 0 : 180 });
+    yMm += dims.heightMm;
+  }
+
+  return { sheet: { widthMm, heightMm: yMm }, placements };
+}
+
+/**
+ * Sklada wyrenderowane strony na jeden arkusz wg print layoutu (lub domyslnego).
+ * Zwraca PNG arkusza i jego wymiary w mm.
+ */
+async function composePrintSheet(
+  layout: TemplateLayoutJson,
+  answers: Record<string, any>,
+  layoutOverrides: any
+): Promise<{ buffer: Buffer; widthMm: number; heightMm: number }> {
+  const { createCanvas, Image } = await import('canvas');
+  const pages = getTemplatePages(layout);
+  const print = layout.print && layout.print.placements?.length ? layout.print : defaultPrintLayout(pages);
+  const dpi = Number(layout.canvas.dpi || 300);
+  const mmToPx = (mm: number) => Math.round((mm / MM_PER_INCH) * dpi);
+
+  const rendered = new Map<string, { buffer: Buffer; widthPx: number; heightPx: number }>();
+  for (const page of pages) {
+    rendered.set(page.id, await renderPageToPng(page, answers, layoutOverrides));
+  }
+
+  const sheet = createCanvas(mmToPx(print.sheet.widthMm), mmToPx(print.sheet.heightMm));
+  const ctx = sheet.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, sheet.width, sheet.height);
+
+  for (const placement of print.placements) {
+    const page = pages.find((p) => p.id === placement.pageId);
+    const render = rendered.get(placement.pageId);
+    if (!page || !render) continue;
+
+    const img = new Image();
+    img.src = render.buffer;
+    const wPx = render.widthPx;
+    const hPx = render.heightPx;
+    const x = mmToPx(placement.xMm);
+    const y = mmToPx(placement.yMm);
+
+    ctx.save();
+    if (placement.rotation) {
+      // Obrot wokol srodka strony.
+      ctx.translate(x + wPx / 2, y + hPx / 2);
+      ctx.rotate((placement.rotation * Math.PI) / 180);
+      ctx.drawImage(img, -wPx / 2, -hPx / 2, wPx, hPx);
+    } else {
+      ctx.drawImage(img, x, y, wPx, hPx);
+    }
+    ctx.restore();
+  }
+
+  return { buffer: sheet.toBuffer('image/png'), widthMm: print.sheet.widthMm, heightMm: print.sheet.heightMm };
+}
+
+/**
+ * PDF do druku obejmujacy wszystkie strony zlozone na arkuszu.
+ * Dla szablonu jednostronicowego zachowanie jak renderPDF.
+ */
+export async function renderPrintPdf(data: TemplateData): Promise<Buffer> {
+  if (!data.layoutConfig) throw new Error('Layout config is required');
+
+  const { buffer: sheetPng, widthMm, heightMm } = await composePrintSheet(
+    data.layoutConfig,
+    data.answers,
+    data.layoutOverrides
+  );
+
+  const PDFDocument = (await import('pdfkit')).default;
+  const pdfWidth = (widthMm / MM_PER_INCH) * 72; // punkty PDF
+  const pdfHeight = (heightMm / MM_PER_INCH) * 72;
+
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    const doc = new PDFDocument({ size: [pdfWidth, pdfHeight], margin: 0, autoFirstPage: false });
+    doc.on('data', (chunk) => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+    doc.addPage({ size: [pdfWidth, pdfHeight], margin: 0 });
+    doc.image(sheetPng, 0, 0, { width: pdfWidth, height: pdfHeight, fit: [pdfWidth, pdfHeight] });
     doc.end();
   });
 }

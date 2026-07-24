@@ -571,11 +571,38 @@ const canvasConfigSchema = z.object({
   backgroundColor: z.string().default('#ffffff'),
 });
 
+// Strona projektu (wersja 2). Kazda ma wlasny canvas i warstwy.
+const templatePageSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  canvas: canvasConfigSchema,
+  layers: z.array(layerBaseSchema).default([]),
+});
+
+const printPlacementSchema = z.object({
+  pageId: z.string().min(1),
+  xMm: z.number(),
+  yMm: z.number(),
+  rotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]),
+});
+
+const printLayoutSchema = z.object({
+  sheet: z.object({
+    widthMm: z.number().positive(),
+    heightMm: z.number().positive(),
+  }),
+  placements: z.array(printPlacementSchema).default([]),
+});
+
 export const templateLayoutSchema = z.object({
-  version: z.literal(1),
+  // Wersja 2 wprowadza pages/print. Wersja 1 (canvas + layers) nadal akceptowana.
+  version: z.union([z.literal(1), z.literal(2)]),
   canvas: canvasConfigSchema,
   fonts: z.array(fontConfigSchema).default([]),
   layers: z.array(layerBaseSchema).default([]),
+  // Bez tych pol z.object wycialoby strony przy zapisie (strip nieznanych kluczy).
+  pages: z.array(templatePageSchema).optional(),
+  print: printLayoutSchema.optional(),
 });
 
 export const templateAssetParamsSchema = z.object({

@@ -7,11 +7,94 @@
  * Zapisywana w PersonalizationTemplate.layoutJson
  */
 export interface TemplateLayoutJson {
-  version: 1;
+  version: 1 | 2;
   canvas: CanvasConfig;
   fonts: FontConfig[];
   layers: Layer[];
+  /** Strony projektu. Brak = jedna strona z canvas/layers powyzej. */
+  pages?: TemplatePage[];
+  /** Rozmieszczenie stron na arkuszu drukarskim. */
+  print?: PrintLayout;
 }
+
+// ============================================
+// Strony i sklad do druku (wersja 2)
+// ============================================
+// Wstecznie zgodne: layouty bez `pages` czytamy jako jedna strone zlozona
+// z pol `canvas` i `layers`. Nowe layouty wypelniaja `pages`, a `canvas`/
+// `layers` pozostaja lustrem pierwszej strony dla starych konsumentow.
+
+export interface TemplatePage {
+  id: string;
+  name: string;
+  canvas: CanvasConfig;
+  layers: Layer[];
+}
+
+export type PrintRotation = 0 | 90 | 180 | 270;
+
+export interface PrintPlacement {
+  pageId: string;
+  /** Pozycja lewego-gornego rogu strony na arkuszu, w mm. */
+  xMm: number;
+  yMm: number;
+  /** Obrot strony przy skladaniu do druku (nie dotyczy projektowania). */
+  rotation: PrintRotation;
+}
+
+export interface PrintLayout {
+  sheet: { widthMm: number; heightMm: number };
+  placements: PrintPlacement[];
+}
+
+// ============================================
+// Odczyt stron (wstecznie zgodny)
+// ============================================
+
+/**
+ * Zwraca strony layoutu. Layout bez `pages` (wersja 1) traktujemy jak jedna
+ * strone zlozona z pol `canvas` i `layers`. Kazdy konsument iterujacy strony
+ * powinien uzywac tej funkcji zamiast czytac `pages` wprost.
+ */
+export function getTemplatePages(layout: TemplateLayoutJson | null | undefined): TemplatePage[] {
+  if (!layout) return [];
+  if (Array.isArray(layout.pages) && layout.pages.length > 0) {
+    return layout.pages;
+  }
+  return [
+    {
+      id: 'page-1',
+      name: 'Strona 1',
+      canvas: layout.canvas,
+      layers: layout.layers || [],
+    },
+  ];
+}
+
+/** Czy layout ma wiecej niz jedna strone. */
+export function isMultiPageLayout(layout: TemplateLayoutJson | null | undefined): boolean {
+  return getTemplatePages(layout).length > 1;
+}
+
+/**
+ * Zapisuje strony z powrotem do layoutu, utrzymujac `canvas`/`layers` jako
+ * lustro pierwszej strony (wstecznosc dla starych konsumentow).
+ */
+export function withTemplatePages(
+  layout: TemplateLayoutJson,
+  pages: TemplatePage[]
+): TemplateLayoutJson {
+  const first = pages[0];
+  return {
+    ...layout,
+    version: 2,
+    canvas: first ? first.canvas : layout.canvas,
+    layers: first ? first.layers : layout.layers,
+    pages,
+  };
+}
+
+
 
 // ============================================
 // Canvas

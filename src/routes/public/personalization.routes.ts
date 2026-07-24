@@ -22,7 +22,12 @@ interface PersonalizationParams {
 }
 
 interface SaveDesignBody {
-  answers: Record<string, string | any>;
+  /** Plaska mapa klucz->wartosc. Pola INDIVIDUAL trafiaja do pierwszej pozycji. */
+  answers?: Record<string, string | any>;
+  /** Wartosci wspolne dla calej pozycji zamowienia (pola SHARED). */
+  sharedAnswers?: Record<string, any>;
+  /** Wartosci per sztuka (pola INDIVIDUAL) - np. lista gosci na winietkach. */
+  items?: Array<Record<string, any>>;
   layoutOverrides?: {
     layers: Record<
       string,
@@ -39,15 +44,22 @@ interface SaveDesignBody {
 
 // Helper: upserts answers rows for case and returns merged answersJson.
 // answers keys are FORM FIELD KEYS coming from frontend; we map them to field IDs.
+type AnswersPayload = Pick<SaveDesignBody, 'answers' | 'sharedAnswers' | 'items'>;
+
+/** Czy request niesie jakiekolwiek odpowiedzi (plaskie lub strukturalne). */
+function hasAnswersPayload(body: AnswersPayload | undefined): boolean {
+  return !!(body?.answers || body?.sharedAnswers || body?.items);
+}
+
 async function saveAnswers(
   caseId: string,
   currentAnswersJson: any,
-  answers: Record<string, any>,
+  payload: AnswersPayload,
   fieldKeyToId: Map<string, string>,
   fields: PersonalizationAnswerField[],
   quantity = 1
 ) {
-  const mergedAnswers = mergeCaseAnswers(currentAnswersJson, { answers }, fields, quantity);
+  const mergedAnswers = mergeCaseAnswers(currentAnswersJson, payload, fields, quantity);
 
   for (const field of fields) {
     const fieldId = fieldKeyToId.get(field.key);
@@ -160,7 +172,13 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           },
         },
         response: {
-          200: { type: 'object', description: 'Dane personalizacji wraz z formularzem i layoutem' },
+          // additionalProperties: true jest wymagane - bez niego fast-json-stringify
+          // wycina cala odpowiedz i klient dostaje puste {}.
+          200: {
+            type: 'object',
+            additionalProperties: true,
+            description: 'Dane personalizacji wraz z formularzem i layoutem',
+          },
           403: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
           404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
@@ -260,24 +278,48 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
 
         const enrichedTemplate = await enrichTemplateLayoutWithGlobalFonts(getCaseTemplate(personalizationCase));
 
+        // UWAGA: to jest endpoint publiczny (chroniony tylko tokenem z linku).
+        // Zwracamy WYLACZNIE pola potrzebne portalowi klienta - nie rozpakowujemy
+        // calego rekordu, bo niesie on dane wewnetrzne (customerTokenHash,
+        // customerTokenEncrypted, notesInternal, telemetria e-mail, tenantId)
+        // oraz pelne dane cenowe i payloadJson pozycji zamowienia.
+        const orderItem = personalizationCase.orderItem;
+
+        const personalizedProduct = orderItem?.personalizedProduct
+          ? { id: orderItem.personalizedProduct.id, template: enrichedTemplate }
+          : enrichedTemplate
+            ? { id: `template-${enrichedTemplate.id}`, template: enrichedTemplate }
+            : null;
+
         return reply.send({
-          ...personalizationCase,
-          orderItem: personalizationCase.orderItem
+          id: personalizationCase.id,
+          status: personalizationCase.status,
+          tokenActive: personalizationCase.tokenActive,
+          submittedAt: personalizationCase.submittedAt,
+          layoutOverrides: personalizationCase.layoutOverrides,
+          validationSummary: personalizationCase.validationSummary,
+          answersJson: personalizationCase.answersJson,
+          orderItem: orderItem
             ? {
-                ...personalizationCase.orderItem,
-                personalizedProduct: personalizationCase.orderItem.personalizedProduct
+                id: orderItem.id,
+                productNameSnapshot: orderItem.productNameSnapshot,
+                quantity: orderItem.quantity,
+                order: orderItem.order
                   ? {
-                      ...personalizationCase.orderItem.personalizedProduct,
-                      template: enrichedTemplate,
+                      orderReference: orderItem.order.orderReference,
+                      customerEmail: orderItem.order.customerEmail,
+                      customerName: orderItem.order.customerName,
                     }
-                  : enrichedTemplate
-                    ? {
-                        id: `template-${enrichedTemplate.id}`,
-                        template: enrichedTemplate,
-                      }
-                    : null,
+                  : null,
+                personalizedProduct,
               }
-            : personalizationCase.orderItem,
+            : null,
+          answers: (personalizationCase.answers || []).map((answer: any) => ({
+            id: answer.id,
+            valueText: answer.valueText,
+            valueJson: answer.valueJson,
+            field: answer.field ? { key: answer.field.key } : null,
+          })),
         });
       } catch (error) {
         fastify.log.error(error);
@@ -306,9 +348,16 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         },
         body: {
           type: 'object',
-          required: ['answers'],
+          // Bez required: klient moze przyslac sam strukturalny zapis
+          // (sharedAnswers/items) bez plaskiej mapy answers.
           properties: {
-            answers: { type: 'object', description: 'Mapa klucz pola → wartość' },
+            answers: { type: 'object', description: 'Mapa klucz pola → wartość (pola INDIVIDUAL trafiają do pierwszej pozycji)' },
+            sharedAnswers: { type: 'object', description: 'Wartości wspólne dla całej pozycji (pola SHARED)' },
+            items: {
+              type: 'array',
+              description: 'Wartości per sztuka (pola INDIVIDUAL) - np. lista gości',
+              items: { type: 'object' },
+            },
             layoutOverrides: {
               type: 'object',
               description: 'Opcjonalne przesunięcia warstw layoutu',
@@ -319,7 +368,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           },
         },
         response: {
-          200: { type: 'object' },
+          // Patrz uwaga przy GET /:token - bez additionalProperties odpowiedz
+          // zostaje wyczyszczona do {}.
+          200: { type: 'object', additionalProperties: true },
           403: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
           404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
@@ -399,7 +450,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         const mergedAnswers = await saveAnswers(
           personalizationCase.id,
           personalizationCase.answersJson,
-          request.body.answers,
+          request.body,
           fieldKeyToId,
           allFields,
           personalizationCase.orderItem.quantity
@@ -420,7 +471,16 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           },
         });
 
-        return reply.send(updated);
+        // Endpoint publiczny - odsylamy tylko potwierdzenie zapisu, nie caly
+        // rekord (niesie customerTokenHash, notesInternal, telemetrie e-mail).
+        return reply.send({
+          message: 'Zapisano',
+          id: updated.id,
+          status: updated.status,
+          answersJson: updated.answersJson,
+          layoutOverrides: updated.layoutOverrides,
+          updatedAt: updated.updatedAt,
+        });
       } catch (error) {
         fastify.log.error(error);
         return reply.status(500).send({
@@ -452,6 +512,8 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           type: 'object',
           properties: {
             answers: { type: 'object' },
+            sharedAnswers: { type: 'object' },
+            items: { type: 'array', items: { type: 'object' } },
             layoutOverrides: { type: 'object' },
           },
         },
@@ -460,7 +522,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
             type: 'object',
             properties: {
               previewUrl: { type: 'string', nullable: true },
-              validation: { type: 'object' },
+              validation: { type: 'object', additionalProperties: true },
               status: { type: 'string' },
             },
           },
@@ -549,11 +611,11 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         // Zapisz odpowiedzi jeśli przyszły w body
         let mergedAnswers: unknown = personalizationCase.answersJson || {};
         const layoutOverrides = request.body?.layoutOverrides ?? personalizationCase.layoutOverrides;
-        if (request.body?.answers) {
+        if (hasAnswersPayload(request.body)) {
           mergedAnswers = await saveAnswers(
             personalizationCase.id,
             personalizationCase.answersJson,
-            request.body.answers,
+            request.body,
             fieldKeyToId,
             allFields,
             personalizationCase.orderItem.quantity
@@ -645,6 +707,8 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           type: 'object',
           properties: {
             answers: { type: 'object' },
+            sharedAnswers: { type: 'object' },
+            items: { type: 'array', items: { type: 'object' } },
             layoutOverrides: { type: 'object' },
           },
         },
@@ -745,11 +809,11 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         // Jeśli w body przyszły odpowiedzi, zapisz je przed walidacją
         let mergedAnswers: unknown = personalizationCase.answersJson;
         const layoutOverrides = request.body?.layoutOverrides ?? personalizationCase.layoutOverrides;
-        if (request.body?.answers) {
+        if (hasAnswersPayload(request.body)) {
           mergedAnswers = await saveAnswers(
             personalizationCase.id,
             personalizationCase.answersJson,
-            request.body.answers,
+            request.body,
             fieldKeyToId,
             allFields,
             personalizationCase.orderItem.quantity

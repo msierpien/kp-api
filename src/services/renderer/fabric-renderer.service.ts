@@ -113,6 +113,44 @@ function mergeLayoutWithOverrides(
 }
 
 /**
+ * Wymusza zadeklarowana wysokosc ramki pola tekstowego i wyrownanie pionowe.
+ *
+ * fabric.Textbox wylicza `height` z liczby linii przy kazdym renderze, wiec bez
+ * tej korekty wydruk ignorowalby wysokosc pola oraz verticalAlign - a edytor
+ * (kp-admin) i podglad klienta (kp-client) je respektuja. Rozjazd bylby widoczny
+ * dopiero na gotowym PDF.
+ *
+ * Logika musi pozostac zgodna z odpowiednikiem w edytorze:
+ * src/lib/template-editor/core/layer-factory.ts -> enforceTextboxBox().
+ */
+function enforceTextboxBox(textbox: any, boxHeight: number, verticalAlign?: string): void {
+  if (!textbox || typeof textbox.calcTextHeight !== 'function') return;
+
+  const contentHeight = textbox.calcTextHeight.bind(textbox);
+  const align = String(verticalAlign || 'top');
+
+  textbox.calcTextHeight = function () {
+    return Math.max(contentHeight(), boxHeight || 0);
+  };
+
+  if (typeof textbox._getTopOffset === 'function') {
+    const baseTopOffset = textbox._getTopOffset.bind(textbox);
+
+    textbox._getTopOffset = function () {
+      const base = baseTopOffset();
+      const slack = Math.max(0, (boxHeight || 0) - contentHeight());
+
+      if (align === 'middle') return base + slack / 2;
+      if (align === 'bottom') return base + slack;
+      return base;
+    };
+  }
+
+  textbox.initDimensions();
+  textbox.setCoords();
+}
+
+/**
  * Konwertuje Layer na obiekt Fabric.js
  */
 async function layerToFabricObject(
@@ -209,7 +247,7 @@ async function layerToFabricObject(
       value = String(answers[props.fieldKey]);
     }
     
-    return new Textbox(value, {
+    const textbox = new Textbox(value, {
       ...common,
       fontSize: fontSizeToRenderPx(props.fontSize, getFontUnit(props.fontUnit), dpi, scale),
       fontFamily: props.fontFamily,
@@ -221,7 +259,14 @@ async function layerToFabricObject(
       padding: (props.padding || 10) * scale,
       originX: 'center',
       originY: 'center',
+      // Zawijanie po slowach, tak jak w edytorze. Szablon moze wlaczyc lamanie
+      // znakowe (przydatne dla pisma CJK).
+      splitByGrapheme: (props as any).splitByGrapheme === true,
     });
+
+    enforceTextboxBox(textbox, layer.height * scale, (props as any).verticalAlign);
+
+    return textbox;
   }
 
   return null;

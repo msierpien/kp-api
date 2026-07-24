@@ -100,6 +100,17 @@ function mergeLayoutWithOverrides(
       const override = overrides.layers[layer.id];
       if (!override) return layer;
       
+      // Styl wybrany przez klienta (o ile szablon na to pozwolil) trafia do
+      // properties warstwy. Bez tego wybory z portalu byly widoczne wylacznie
+      // w podgladzie, a wydruk zachowywal ustawienia projektanta.
+      const style: Record<string, unknown> = {};
+      for (const key of ['fontSize', 'fontFamily', 'fill', 'textAlign'] as const) {
+        const value = (override as Record<string, unknown>)[key];
+        if (value !== undefined && value !== null) {
+          style[key] = value;
+        }
+      }
+
       return {
         ...layer,
         x: override.x ?? layer.x,
@@ -107,7 +118,10 @@ function mergeLayoutWithOverrides(
         width: override.width ?? layer.width,
         height: override.height ?? layer.height,
         rotation: override.rotation ?? layer.rotation,
-      };
+        properties: Object.keys(style).length
+          ? { ...(layer.properties as unknown as Record<string, unknown>), ...style }
+          : layer.properties,
+      } as typeof layer;
     })
   };
 }

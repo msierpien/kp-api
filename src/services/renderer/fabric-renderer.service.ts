@@ -4,6 +4,7 @@ import type { TemplateLayoutJson, Layer, TextFieldProperties, TextBoxProperties,
 import path from 'path';
 import fs from 'fs/promises';
 import { config } from '../../config';
+import { listFonts } from '../admin/fonts.service';
 
 interface RenderOptions {
   width: number;
@@ -47,21 +48,46 @@ function fontSizeToRenderPx(
   return baseSize * scale;
 }
 
+// node-canvas potrafi zarejestrowac tylko formaty plikowe TrueType/OpenType.
+// Pliki webowe (woff/woff2) z rejestru sa dla druku bezuzyteczne.
+const RENDERABLE_FONT_FORMATS = ['ttf', 'otf'];
+
 /**
- * Ładuje czcionkę Google Fonts do node-canvas
+ * Rejestruje w node-canvas czcionke o podanej rodzinie.
+ *
+ * Zrodlem jest ten sam rejestr, do ktorego wgrywa je panel admina
+ * (storage/fonts, patrz services/admin/fonts.service). Wczesniej funkcja
+ * szukala pliku w src/fonts wg schematu "Rodzina-waga.ttf" - katalog ten nie
+ * istnieje, wiec KAZDY krój pisma cicho spadal na domyslny systemowy i wydruk
+ * ignorowal ustawienia szablonu.
  */
-async function loadGoogleFont(fontFamily: string, weight: number = 400): Promise<void> {
+async function loadFontFamily(fontFamily: string, weight: number = 400): Promise<void> {
   const fontKey = `${fontFamily}-${weight}`;
   if (loadedFonts.has(fontKey)) return;
 
   try {
-    const fontPath = path.join(__dirname, '../../fonts', `${fontFamily.replace(/\s+/g, '-')}-${weight}.ttf`);
+    const available = await listFonts();
+    const match = available.find(
+      (font) =>
+        font.family.toLowerCase() === fontFamily.toLowerCase() &&
+        RENDERABLE_FONT_FORMATS.includes(font.format.toLowerCase())
+    );
+
+    if (!match) {
+      console.warn(
+        `[Fabric] Brak czcionki "${fontFamily}" w rejestrze - wydruk uzyje kroju systemowego. ` +
+          `Wgraj plik TTF/OTF w panelu (Czcionki).`
+      );
+      return;
+    }
+
+    const fontPath = path.join(process.cwd(), 'storage', match.filePath);
     await fs.access(fontPath);
     registerFont(fontPath, { family: fontFamily, weight: String(weight) });
     loadedFonts.add(fontKey);
-    console.log(`[Fabric] Font loaded: ${fontFamily} (${weight})`);
+    console.log(`[Fabric] Font loaded: ${fontFamily} (${weight}) <- ${match.fileName}`);
   } catch (error) {
-    console.warn(`[Fabric] Font not found: ${fontFamily}, using system default`);
+    console.warn(`[Fabric] Nie udalo sie zaladowac czcionki "${fontFamily}":`, error);
   }
 }
 
@@ -69,19 +95,24 @@ async function loadGoogleFont(fontFamily: string, weight: number = 400): Promise
  * Ładuje wszystkie czcionki z layoutu
  */
 async function loadLayoutFonts(layout: TemplateLayoutJson): Promise<void> {
-  const fonts = new Set<string>();
-  
+  // Mapa zamiast klucza tekstowego: wczesniej rodzina i waga byly sklejane
+  // myslnikiem i rozbijane split('-'), wiec krój z myslnikiem w nazwie
+  // (np. "Noto-Serif") gubil wage i czesc nazwy.
+  const needed = new Map<string, { family: string; weight: number }>();
+
   for (const layer of layout.layers) {
-    if (layer.type === 'text' || layer.type === 'static_text' || layer.type === 'textbox') {
-      const props = layer.properties as any;
-      const weight = props.fontWeight || 400;
-      fonts.add(`${props.fontFamily}-${weight}`);
-    }
+    if (layer.type !== 'text' && layer.type !== 'static_text' && layer.type !== 'textbox') continue;
+
+    const props = layer.properties as any;
+    const family = String(props.fontFamily || '').trim();
+    if (!family) continue;
+
+    const weight = Number(props.fontWeight) || 400;
+    needed.set(`${family}::${weight}`, { family, weight });
   }
-  
-  for (const fontKey of fonts) {
-    const [family, weight] = fontKey.split('-');
-    await loadGoogleFont(family, parseInt(weight));
+
+  for (const { family, weight } of needed.values()) {
+    await loadFontFamily(family, weight);
   }
 }
 

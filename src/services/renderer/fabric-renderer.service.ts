@@ -196,6 +196,32 @@ function enforceTextboxBox(textbox: any, boxHeight: number, verticalAlign?: stri
 }
 
 /**
+ * Kolor tla pola tekstowego, albo pusty string gdy tlo ma byc przezroczyste.
+ * Logika musi byc zgodna z edytorem:
+ * src/lib/template-editor/core/layer-factory.ts -> resolveBackgroundColor().
+ */
+function resolveBackgroundColor(props: Record<string, unknown>): string {
+  const raw = props.backgroundColor;
+  const color = typeof raw === 'string' ? raw.trim() : '';
+
+  if (!color || color === 'transparent' || color === 'none') return '';
+
+  const rawOpacity = props.backgroundOpacity;
+  if (rawOpacity === undefined || rawOpacity === null || rawOpacity === '') return color;
+
+  const ratio = Number(rawOpacity) / 100;
+  if (!Number.isFinite(ratio)) return color;
+  if (ratio >= 1) return color;
+  if (ratio <= 0) return '';
+
+  const hex = /^#([0-9a-f]{6})$/i.exec(color);
+  if (!hex) return color;
+
+  const value = parseInt(hex[1], 16);
+  return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${Math.round(ratio * 100) / 100})`;
+}
+
+/**
  * Konwertuje Layer na obiekt Fabric.js
  */
 async function layerToFabricObject(
@@ -300,7 +326,7 @@ async function layerToFabricObject(
       fontStyle: props.fontStyle || 'normal',
       fill: props.fill,
       textAlign: props.textAlign as any,
-      backgroundColor: props.backgroundColor,
+      backgroundColor: resolveBackgroundColor(props as unknown as Record<string, unknown>),
       padding: (props.padding || 10) * scale,
       originX: 'center',
       originY: 'center',

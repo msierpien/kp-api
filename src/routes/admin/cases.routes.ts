@@ -52,7 +52,7 @@ export async function casesRoutes(fastify: FastifyInstance) {
           200: {
             type: 'object',
             properties: {
-              data: { type: 'array', items: { type: 'object' } },
+              data: { type: 'array', items: { type: 'object', additionalProperties: true } },
               total: { type: 'integer' },
               page: { type: 'integer' },
               limit: { type: 'integer' },
@@ -109,7 +109,7 @@ export async function casesRoutes(fastify: FastifyInstance) {
           properties: { id: { type: 'string' } },
         },
         response: {
-          200: { type: 'object' },
+          200: { type: 'object', additionalProperties: true },
           404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
       },
@@ -164,7 +164,7 @@ export async function casesRoutes(fastify: FastifyInstance) {
           },
         },
         response: {
-          200: { type: 'object' },
+          200: { type: 'object', additionalProperties: true },
           404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
       },
@@ -228,7 +228,7 @@ export async function casesRoutes(fastify: FastifyInstance) {
           },
         },
         response: {
-          200: { type: 'object' },
+          200: { type: 'object', additionalProperties: true },
           404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
           422: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
@@ -287,9 +287,9 @@ export async function casesRoutes(fastify: FastifyInstance) {
         summary: 'Generuj paczkę plików do druku dla case\'u',
         params: { type: 'object', properties: { id: { type: 'string' } } },
         response: {
-          200: { type: 'object' },
+          200: { type: 'object', additionalProperties: true },
           404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
-          422: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' }, validationSummary: { type: 'object' } } },
+          422: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' }, validationSummary: { type: 'object', additionalProperties: true } } },
         },
       },
     },
@@ -348,7 +348,7 @@ export async function casesRoutes(fastify: FastifyInstance) {
           },
         },
         response: {
-          200: { type: 'object' },
+          200: { type: 'object', additionalProperties: true },
           404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
       },
@@ -407,7 +407,7 @@ export async function casesRoutes(fastify: FastifyInstance) {
           },
         },
         response: {
-          200: { type: 'object' },
+          200: { type: 'object', additionalProperties: true },
           404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
       },
@@ -456,7 +456,7 @@ export async function casesRoutes(fastify: FastifyInstance) {
         summary: 'Ponownie wyślij email personalizacji do klienta',
         params: { type: 'object', properties: { id: { type: 'string' } } },
         response: {
-          200: { type: 'object' },
+          200: { type: 'object', additionalProperties: true },
           404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
           503: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },

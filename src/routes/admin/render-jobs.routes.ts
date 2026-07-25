@@ -82,7 +82,33 @@ export async function renderJobsRoutes(fastify: FastifyInstance) {
           take: 100,
         });
 
-        return reply.send(jobs);
+        // Panel pokazuje kolumne "Wyjscie" (outputPath), a wygenerowany plik
+        // jest w tabeli assets - job trzyma tylko jego id w metadata.
+        const assetIds = jobs
+          .map((job) => {
+            const meta = (job.metadata || {}) as Record<string, unknown>;
+            return (meta.packageAssetId || meta.assetId) as string | undefined;
+          })
+          .filter((id): id is string => Boolean(id));
+
+        const assets = assetIds.length
+          ? await prisma.asset.findMany({
+            where: { id: { in: assetIds } },
+            select: { id: true, filePath: true },
+          })
+          : [];
+        const assetPathById = new Map(assets.map((asset) => [asset.id, asset.filePath]));
+
+        const jobsWithOutput = jobs.map((job) => {
+          const meta = (job.metadata || {}) as Record<string, unknown>;
+          const assetId = (meta.packageAssetId || meta.assetId) as string | undefined;
+          return {
+            ...job,
+            outputPath: assetId ? assetPathById.get(assetId) ?? null : null,
+          };
+        });
+
+        return reply.send(jobsWithOutput);
       } catch (error) {
         fastify.log.error(error);
         return reply.status(500).send({

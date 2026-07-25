@@ -5,6 +5,14 @@ const FONTS_DIR = path.join(process.cwd(), 'storage', 'fonts');
 const ALLOWED_EXTENSIONS = ['.ttf', '.otf', '.woff', '.woff2'];
 const FONTS_LIST_CACHE_TTL_MS = Number(process.env.FONTS_LIST_CACHE_TTL_MS ?? 5 * 60_000);
 
+/**
+ * Formaty, ktore node-canvas potrafi zarejestrowac do druku. woff/woff2 sa
+ * przydatne w przegladarce (podglad klienta), ale renderer serwerowy je pomija
+ * i wydruk cicho spada na krój systemowy - dlatego kazdy font niesie flage
+ * `printable`, a panel na jej podstawie ostrzega.
+ */
+export const PRINTABLE_FONT_FORMATS = ['ttf', 'otf'];
+
 export interface FontItem {
   id: string;       // fileName without extension (safe name)
   family: string;   // Display name (original name without extension)
@@ -12,6 +20,8 @@ export interface FontItem {
   filePath: string; // relative from storage/
   fileSize: number;
   format: string;   // ttf | otf | woff | woff2
+  /** Czy krój zadziała w druku (renderer serwerowy rejestruje tylko TTF/OTF). */
+  printable: boolean;
 }
 
 type FontsListCacheEntry = {
@@ -54,6 +64,7 @@ export async function listFonts(): Promise<FontItem[]> {
       filePath: `fonts/${entry.name}`,
       fileSize: stat.size,
       format: ext.replace('.', ''),
+      printable: PRINTABLE_FONT_FORMATS.includes(ext.replace('.', '')),
     };
   }));
 
@@ -97,6 +108,7 @@ export async function uploadFont(
     filePath: `fonts/${fileName}`,
     fileSize: fileBuffer.length,
     format: ext.replace('.', ''),
+    printable: PRINTABLE_FONT_FORMATS.includes(ext.replace('.', '')),
   };
 }
 

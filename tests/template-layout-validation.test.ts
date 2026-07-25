@@ -260,3 +260,12 @@ test('prefers millimeter dimensions over stale pixel dimensions', () => {
   assert.equal(normalized.bleed, mmToPx(3, 300));
   assert.equal(normalized.safeArea, mmToPx(5, 300));
 });
+
+test('fonty webowe sa oznaczone jako niezdatne do druku', async () => {
+  const { PRINTABLE_FONT_FORMATS } = await import('../src/services/admin/fonts.service');
+
+  // Renderer (node-canvas) rejestruje wylacznie formaty plikowe.
+  assert.deepEqual([...PRINTABLE_FONT_FORMATS].sort(), ['otf', 'ttf']);
+  assert.equal(PRINTABLE_FONT_FORMATS.includes('woff'), false);
+  assert.equal(PRINTABLE_FONT_FORMATS.includes('woff2'), false);
+});

@@ -6,7 +6,7 @@ import { drawImageInQuad, quadToPixels, type Quad } from '../../lib/mockup-warp'
 import path from 'path';
 import fs from 'fs/promises';
 import { config } from '../../config';
-import { listFonts } from '../admin/fonts.service';
+import { listFonts, PRINTABLE_FONT_FORMATS } from '../admin/fonts.service';
 
 interface RenderOptions {
   width: number;
@@ -50,9 +50,8 @@ function fontSizeToRenderPx(
   return baseSize * scale;
 }
 
-// node-canvas potrafi zarejestrowac tylko formaty plikowe TrueType/OpenType.
-// Pliki webowe (woff/woff2) z rejestru sa dla druku bezuzyteczne.
-const RENDERABLE_FONT_FORMATS = ['ttf', 'otf'];
+// Lista formatow zdatnych do druku zyje w fonts.service (to samo zrodlo
+// karmi flage `printable` w panelu), zeby renderer i UI nie rozjechaly sie.
 
 /**
  * Rejestruje w node-canvas czcionke o podanej rodzinie.
@@ -72,7 +71,7 @@ async function loadFontFamily(fontFamily: string, weight: number = 400): Promise
     const match = available.find(
       (font) =>
         font.family.toLowerCase() === fontFamily.toLowerCase() &&
-        RENDERABLE_FONT_FORMATS.includes(font.format.toLowerCase())
+        PRINTABLE_FONT_FORMATS.includes(font.format.toLowerCase())
     );
 
     if (!match) {

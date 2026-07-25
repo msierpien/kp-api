@@ -11,6 +11,7 @@ import {
   normalizeOptionalLeadTimeDays,
   parseCsv,
   parseProviderConfig,
+  resolveMinimumStockForSale,
   requireTenantId,
   validateWholesaleSyncInterval,
   type FieldMapping,
@@ -48,6 +49,7 @@ export interface CreateWholesaleProviderInput {
   fieldMapping?: FieldMapping;
   availabilityRule?: WholesaleAvailabilityRule;
   feedSafety?: Partial<WholesaleFeedSafetyConfig>;
+  minimumStockForSale?: number;
   syncEnabled?: boolean;
   syncInterval?: number;
   leadTimeDays?: number | null;
@@ -63,6 +65,7 @@ export interface UpdateWholesaleProviderInput {
   fieldMapping?: FieldMapping;
   availabilityRule?: WholesaleAvailabilityRule;
   feedSafety?: Partial<WholesaleFeedSafetyConfig>;
+  minimumStockForSale?: number;
   syncEnabled?: boolean;
   syncInterval?: number;
   leadTimeDays?: number | null;
@@ -408,13 +411,16 @@ export async function updateWholesaleProvider(id: string, input: UpdateWholesale
   if (input.leadTimeDays !== undefined) data.leadTimeDays = normalizeOptionalLeadTimeDays(input.leadTimeDays);
   if (input.isActive !== undefined) data.isActive = input.isActive;
   const shouldSyncLeadTime = input.leadTimeDays !== undefined && input.leadTimeDays !== provider.leadTimeDays;
+  const shouldSyncAvailability = input.minimumStockForSale !== undefined &&
+    resolveMinimumStockForSale(provider.configJson) !== Number(input.minimumStockForSale);
 
   if (
     input.preset !== undefined ||
     input.delimiter !== undefined ||
     input.fieldMapping !== undefined ||
-    input.availabilityRule !== undefined
-    || input.feedSafety !== undefined
+    input.availabilityRule !== undefined ||
+    input.feedSafety !== undefined ||
+    input.minimumStockForSale !== undefined
   ) {
     const currentConfig = parseProviderConfig(provider.configJson);
     const nextConfig = buildProviderConfig({
@@ -423,6 +429,7 @@ export async function updateWholesaleProvider(id: string, input: UpdateWholesale
       fieldMapping: input.fieldMapping ?? currentConfig.fieldMapping,
       availabilityRule: input.availabilityRule ?? currentConfig.availabilityRule,
       feedSafety: input.feedSafety ?? currentConfig.feedSafety,
+      minimumStockForSale: input.minimumStockForSale ?? currentConfig.minimumStockForSale,
       name: provider.name,
       feedUrl: provider.feedUrl,
     });
@@ -431,7 +438,7 @@ export async function updateWholesaleProvider(id: string, input: UpdateWholesale
 
   const updated = await prisma.wholesaleProvider.update({ where: { id }, data });
 
-  if (shouldSyncLeadTime) {
+  if (shouldSyncLeadTime || shouldSyncAvailability) {
     enqueueWholesaleProviderLeadTimeStockSync(id, tenantId).catch((error) => {
       logger.error({ err: error, providerId: id }, 'Failed to enqueue stock sync for provider lead time change');
     });
@@ -553,12 +560,10 @@ async function enqueueWholesaleProviderLeadTimeStockSync(providerId: string, ten
     where: {
       tenantId,
       isActive: true,
-      currentStock: { lte: new Prisma.Decimal(0) },
       wholesaleMappings: {
         some: {
           providerId,
           isActive: true,
-          lastKnownStock: { gt: new Prisma.Decimal(0) },
         },
       },
     },

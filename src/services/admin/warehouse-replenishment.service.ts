@@ -4,6 +4,7 @@ import { getTenantId } from '../../lib/tenant-context';
 import { createDocument } from './warehouse-documents.service';
 import { STOCK_RESERVATION_ORDER_OPERATIONAL_STATUSES } from '../../lib/order-statuses';
 import { reserveOrder } from './warehouse-reservations.service';
+import { resolveMinimumStockForSale } from './wholesale/shared';
 
 export type ReplenishmentSource = 'order' | 'low' | 'all';
 export type ReplenishmentCsvFormat = 'ean' | 'symbol' | 'full';
@@ -462,7 +463,12 @@ async function loadBestOffersForProducts(tenantId: string, productIds: string[],
     },
   });
 
-  offers.sort((a, b) => {
+  const eligibleOffers = offers.filter((offer) => {
+    const minimumStockForSale = resolveMinimumStockForSale(offer.provider.configJson);
+    return offer.lastKnownStock !== null && toNumber(offer.lastKnownStock) >= Math.max(1, minimumStockForSale);
+  });
+
+  eligibleOffers.sort((a, b) => {
     const priceA = a.lastKnownPrice === null ? Number.POSITIVE_INFINITY : toNumber(a.lastKnownPrice);
     const priceB = b.lastKnownPrice === null ? Number.POSITIVE_INFINITY : toNumber(b.lastKnownPrice);
     if (priceA !== priceB) return priceA - priceB;
@@ -470,7 +476,7 @@ async function loadBestOffersForProducts(tenantId: string, productIds: string[],
   });
 
   const bestByProductId = new Map<string, BestOffer>();
-  for (const offer of offers) {
+  for (const offer of eligibleOffers) {
     if (!offer.warehouseProductId || bestByProductId.has(offer.warehouseProductId)) continue;
     const { warehouseProductId, ...bestOffer } = offer;
     bestByProductId.set(warehouseProductId, bestOffer);

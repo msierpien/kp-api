@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
 import { addStockSyncBatchJobs, type StockSyncBatchItem, type StockSyncTriggeredBy } from '../queue/stock-sync.queue';
-import { resolveWholesaleAvailabilityRule } from '../admin/wholesale/shared';
+import { resolveMinimumStockForSale, resolveWholesaleAvailabilityRule } from '../admin/wholesale/shared';
 
 export type InventoryAvailabilityPolicy = 'IN_STOCK' | 'IN_STOCK_WITH_BACKORDER' | 'BACKORDER_FROM_WHOLESALE' | 'OUT_OF_STOCK';
 export type PrestaShopOutOfStockBehavior = 0 | 1;
@@ -124,7 +124,8 @@ export async function getInventoryPublicationDecisions(
   const futureWholesaleByProductId = new Map<string, typeof wholesaleMappings[number]>();
   for (const mapping of wholesaleMappings) {
     if (!mapping.warehouseProductId) continue;
-    if (isPositiveDecimal(mapping.lastKnownStock)) {
+    const minimumStockForSale = resolveMinimumStockForSale(mapping.provider.configJson);
+    if (isAtLeastMinimumStock(mapping.lastKnownStock, minimumStockForSale)) {
       if (!wholesaleByProductId.has(mapping.warehouseProductId)) {
         wholesaleByProductId.set(mapping.warehouseProductId, mapping);
       }
@@ -133,6 +134,7 @@ export async function getInventoryPublicationDecisions(
 
     if (
       !futureWholesaleByProductId.has(mapping.warehouseProductId) &&
+      minimumStockForSale <= 0 &&
       resolveWholesaleAvailabilityRule(mapping.provider.configJson) === 'STOCK_OR_FUTURE_DELIVERY' &&
       isFutureAvailabilityDate(mapping.warehouseAvailableAt)
     ) {
@@ -637,6 +639,10 @@ function formatWarehouseAvailableAt(value?: Date | null) {
 
 function isBackorderPolicy(value?: string | null) {
   return value === 'BACKORDER_FROM_WHOLESALE' || value === 'IN_STOCK_WITH_BACKORDER';
+}
+
+function isAtLeastMinimumStock(value: Prisma.Decimal | null, minimum: number) {
+  return isPositiveDecimal(value) && Number(value) >= minimum;
 }
 
 function businessDateOnly(value: Date) {

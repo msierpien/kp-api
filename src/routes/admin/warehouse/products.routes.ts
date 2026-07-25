@@ -992,7 +992,7 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
           type: 'object',
           properties: {
             enqueued: { type: 'integer' },
-            logs: { type: 'array', items: { type: 'object' } },
+            logs: { type: 'array', items: { type: 'object', additionalProperties: true } },
           },
         },
       },

@@ -2,6 +2,7 @@ import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
 import { Prisma, WarehouseReservationSource, WarehouseReservationStatus } from '@prisma/client';
 import { syncStockForProducts } from '../stock/stock-sync.service';
+import { resolveMinimumStockForSale } from './wholesale/shared';
 
 type Tx = Prisma.TransactionClient;
 
@@ -236,17 +237,19 @@ function sumReservationQuantity(reservations: Array<{ quantity: Prisma.Decimal }
 }
 
 async function hasWholesaleBackorderAvailability(tx: Tx, productId: string) {
-  const wholesale = await tx.wholesaleProductMapping.findFirst({
+  const wholesale = await tx.wholesaleProductMapping.findMany({
     where: {
       warehouseProductId: productId,
       isActive: true,
-      lastKnownStock: { gt: new Prisma.Decimal(0) },
       provider: { isActive: true },
     },
-    select: { id: true },
+    select: { lastKnownStock: true, provider: { select: { configJson: true } } },
   });
 
-  return Boolean(wholesale);
+  return wholesale.some((mapping) => {
+    const minimumStockForSale = resolveMinimumStockForSale(mapping.provider.configJson);
+    return mapping.lastKnownStock !== null && mapping.lastKnownStock.gt(0) && mapping.lastKnownStock.gte(minimumStockForSale);
+  });
 }
 
 async function planReservationSplit(

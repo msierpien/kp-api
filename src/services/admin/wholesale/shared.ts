@@ -24,6 +24,7 @@ export interface WholesaleProviderConfig {
   delimiter?: string;
   availabilityRule?: WholesaleAvailabilityRule;
   feedSafety?: WholesaleFeedSafetyConfig;
+  minimumStockForSale?: number;
   fieldMapping: FieldMapping;
 }
 
@@ -92,6 +93,7 @@ export function buildProviderConfig(input: {
   fieldMapping?: FieldMapping;
   availabilityRule?: WholesaleAvailabilityRule;
   feedSafety?: Partial<WholesaleFeedSafetyConfig>;
+  minimumStockForSale?: number;
   feedUrl: string;
   name: string;
 }): WholesaleProviderConfig {
@@ -99,6 +101,7 @@ export function buildProviderConfig(input: {
   const presetConfig = preset !== 'CUSTOM' ? PRESET_CONFIGS[preset] : undefined;
   const delimiter = normalizeDelimiter(input.delimiter ?? presetConfig?.delimiter);
   const availabilityRule = normalizeAvailabilityRule(input.availabilityRule ?? presetConfig?.availabilityRule, preset);
+  const minimumStockForSale = normalizeMinimumStockForSale(input.minimumStockForSale);
   const inputFieldMapping = compactFieldMapping(input.fieldMapping);
   const fieldMapping = presetConfig
     ? { ...presetConfig.fieldMapping, ...inputFieldMapping }
@@ -113,6 +116,7 @@ export function buildProviderConfig(input: {
     delimiter,
     availabilityRule,
     feedSafety: normalizeFeedSafety(input.feedSafety),
+    minimumStockForSale,
     fieldMapping: fieldMapping as FieldMapping,
   };
 }
@@ -134,6 +138,7 @@ export function parseProviderConfig(configJson: unknown): WholesaleProviderConfi
     delimiter: normalizeDelimiter(config.delimiter ?? presetConfig?.delimiter),
     availabilityRule: resolveWholesaleAvailabilityRule(configJson),
     feedSafety: normalizeFeedSafety(config.feedSafety),
+    minimumStockForSale: normalizeMinimumStockForSale(config.minimumStockForSale),
     fieldMapping,
   };
 }
@@ -154,6 +159,20 @@ export function normalizeFeedSafety(input?: Partial<WholesaleFeedSafetyConfig>):
   }
 
   return { minItems, maxDropPercent, maxInvalidPercent };
+}
+
+export function resolveMinimumStockForSale(configJson: unknown) {
+  if (!configJson || typeof configJson !== 'object' || Array.isArray(configJson)) return 0;
+  return normalizeMinimumStockForSale((configJson as Partial<WholesaleProviderConfig>).minimumStockForSale);
+}
+
+function normalizeMinimumStockForSale(value: unknown) {
+  if (value === undefined || value === null || value === '') return 0;
+  const threshold = Number(value);
+  if (!Number.isFinite(threshold) || threshold < 0) {
+    throw new Error('Minimalny stan do sprzedaży musi być liczbą nieujemną');
+  }
+  return threshold;
 }
 
 export function resolveWholesaleAvailabilityRule(configJson: unknown): WholesaleAvailabilityRule {

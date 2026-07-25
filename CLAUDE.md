@@ -2,7 +2,7 @@
 
 Wskazówki dla Claude Code (claude.ai/code) podczas pracy z kodem w tym repozytorium.
 
-## 📊 Status projektu (2026-01-30)
+## 📊 Status projektu (2026-07-25)
 
 ### ✅ Zaimplementowane (MVP ~55%)
 
@@ -14,9 +14,9 @@ Wskazówki dla Claude Code (claude.ai/code) podczas pracy z kodem w tym repozyto
 - ✅ Case Management (lista, szczegóły, edycja, statusy, notatki)
 - ✅ Templates & Forms (CRUD)
 - ✅ Public endpoints (personalizacja przez token)
-- ⏳ Cron job do synchronizacji - TODO
-- ⏳ Email service - TODO
-- ⏳ Render PDF worker - TODO
+- ✅ Cron job do synchronizacji (scheduler.service, node-cron per sklep i hurtownia)
+- ✅ Email service (SMTP + kolejka BullMQ z retry)
+- ✅ Render PDF worker (BullMQ + node-canvas/fabric, paczki do druku)
 
 **Admin Panel (80%):**
 - ✅ Dashboard z statystykami
@@ -38,8 +38,8 @@ Wskazówki dla Claude Code (claude.ai/code) podczas pracy z kodem w tym repozyto
 - ✅ PrestaShopClient (REST API)
 - ✅ Sync service (pobieranie zamówień)
 - ✅ Logowanie do sync_logs
-- ⏳ Automatyczny cron job - TODO
-- ⏳ Retry logic - TODO
+- ✅ Automatyczny cron job (potwierdzone w logach produkcji)
+- ✅ Retry logic (odczyty GET/HEAD ponawiane przy 5xx/429 i bledach sieci; zapisy celowo nie)
 
 ## 🎯 Priorytetowe zadania
 
@@ -48,19 +48,16 @@ Wskazówki dla Claude Code (claude.ai/code) podczas pracy z kodem w tym repozyto
    - Izolacja danych per sprzedawca
    - Middleware z `tenantId`
 
-2. **Cron Job** (MVP must-have)
-   - Automatyczna synchronizacja zamówień co X minut
-   - Scheduler (node-cron lub BullMQ)
+2. **Personalizacja — stan na 2026-07-25**
+   - Strony projektu, składanie do druku, paczki per pozycja, ustawienia druku
+     (formaty/zbiorczy PDF/znak wodny), mockup na zdjęciu produktu — wdrożone.
+   - Szczegółowy dziennik: ../STAN-PRAC.md
 
-3. **Email Service** (MVP must-have)
-   - Konfiguracja SMTP
-   - Wysyłka linków do personalizacji
-   - Template e-maili
-
-4. **Render PDF Worker** (Etap 3)
-   - Kolejka BullMQ
-   - Worker z Puppeteer/Playwright
-   - Storage S3-compatible
+3. **Uwaga przy dodawaniu pól do layoutu/odpowiedzi**
+   - Każde nowe pole musi trafić do schematu Zod w `src/schemas/admin.schema.ts`,
+     inaczej zapis po cichu je wytnie.
+   - Każda odpowiedź `type: 'object'` bez `additionalProperties: true` zwraca
+     PUSTY obiekt (fast-json-stringify) — potrafi to wywrócić cały panel.
 
 ## 📚 Dokumentacja
 

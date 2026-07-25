@@ -102,6 +102,89 @@ test('preserves simple editor slot metadata in parsed template layouts', () => {
   assert.equal(properties.simpleSlot, 'MIDDLE_CENTER');
 });
 
+test('preserves panel properties on save (backgroundOpacity + client typography flags)', () => {
+  const parsed = templateLayoutSchema.parse({
+    version: 2,
+    canvas: {
+      unit: 'mm',
+      widthMm: 90,
+      heightMm: 50,
+      dpi: 300,
+      bleed: 0,
+      safeArea: 0,
+      backgroundColor: '#ffffff',
+    },
+    fonts: [],
+    layers: [
+      {
+        id: 'textbox_1',
+        name: 'Imię i nazwisko',
+        type: 'textbox',
+        visible: true,
+        locked: false,
+        opacity: 1,
+        zIndex: 1,
+        x: 10,
+        y: 10,
+        width: 400,
+        height: 80,
+        rotation: 0,
+        properties: {
+          type: 'textbox',
+          text: '{{ imie }}',
+          fontSize: 24,
+          fontFamily: 'Arial',
+          backgroundColor: '#ffffff',
+          backgroundOpacity: 45,
+          splitByGrapheme: true,
+          clientDraggable: true,
+          clientFontSize: true,
+          clientFontFamily: true,
+          clientColor: true,
+          clientTextAlign: true,
+        },
+      },
+      {
+        id: 'text_1',
+        name: 'Imię',
+        type: 'text',
+        visible: true,
+        locked: false,
+        opacity: 1,
+        zIndex: 2,
+        x: 10,
+        y: 100,
+        width: 400,
+        height: 80,
+        rotation: 0,
+        properties: {
+          type: 'text',
+          fieldKey: 'imie',
+          placeholder: '{{ imie }}',
+          fontSize: 24,
+          fontFamily: 'Arial',
+          clientFontSize: true,
+          clientFontFamily: true,
+          clientColor: true,
+          clientTextAlign: true,
+        },
+      },
+    ],
+  });
+
+  const textbox = parsed.layers[0].properties as Record<string, unknown>;
+  assert.equal(textbox.backgroundOpacity, 45);
+  assert.equal(textbox.splitByGrapheme, true);
+  assert.equal(textbox.clientFontSize, true);
+  assert.equal(textbox.clientTextAlign, true);
+
+  const text = parsed.layers[1].properties as Record<string, unknown>;
+  assert.equal(text.clientFontSize, true);
+  assert.equal(text.clientFontFamily, true);
+  assert.equal(text.clientColor, true);
+  assert.equal(text.clientTextAlign, true);
+});
+
 test('accepts mm-only canvas payloads and derives px dimensions from millimeters', () => {
   const parsed = templateLayoutSchema.parse({
     version: 1,

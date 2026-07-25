@@ -466,6 +466,10 @@ const textFieldPropertiesSchema = z.object({
   clientDraggable: z.boolean().optional(),
   clientResizable: z.boolean().optional(),
   clientRotatable: z.boolean().optional(),
+  clientFontSize: z.boolean().optional(),
+  clientFontFamily: z.boolean().optional(),
+  clientColor: z.boolean().optional(),
+  clientTextAlign: z.boolean().optional(),
 });
 
 const staticTextPropertiesSchema = z.object({
@@ -498,12 +502,19 @@ const textboxPropertiesSchema = z.object({
   lineHeight: z.number().positive().default(1.2),
   padding: z.number().min(0).default(0),
   backgroundColor: z.string().default('transparent'),
+  // Krycie tla w procentach (0-100). Brak = pelne krycie.
+  backgroundOpacity: z.number().min(0).max(100).optional(),
   borderColor: z.string().default('transparent'),
   borderWidth: z.number().min(0).default(0),
   editable: z.boolean().default(true),
+  splitByGrapheme: z.boolean().optional(),
   clientDraggable: z.boolean().optional(),
   clientResizable: z.boolean().optional(),
   clientRotatable: z.boolean().optional(),
+  clientFontSize: z.boolean().optional(),
+  clientFontFamily: z.boolean().optional(),
+  clientColor: z.boolean().optional(),
+  clientTextAlign: z.boolean().optional(),
 });
 
 const shapePropertiesSchema = z.object({

@@ -358,6 +358,11 @@ export interface TextFieldProperties {
   clientDraggable?: boolean;  // Czy klient może przesuwać
   clientResizable?: boolean;  // Czy klient może zmieniać rozmiar
   clientRotatable?: boolean;  // Czy klient może obracać
+  // Edycja typografii przez klienta - opt-in, bo wplywa na wyglad druku
+  clientFontSize?: boolean;
+  clientFontFamily?: boolean;
+  clientColor?: boolean;
+  clientTextAlign?: boolean;
 }
 
 /**
@@ -398,13 +403,22 @@ export interface TextBoxProperties {
   lineHeight: number;
   padding: number;
   backgroundColor: string;
+  /** Krycie tla w procentach (0-100). Brak wartosci = pelne krycie. */
+  backgroundOpacity?: number;
   borderColor: string;
   borderWidth: number;
   editable: boolean;          // czy edytowalne przez klienta
+  /** Lamanie po znakach zamiast slowach (pismo CJK). */
+  splitByGrapheme?: boolean;
   // Client interaction settings
   clientDraggable?: boolean;  // Czy klient może przesuwać
   clientResizable?: boolean;  // Czy klient może zmieniać rozmiar
   clientRotatable?: boolean;  // Czy klient może obracać
+  // Edycja typografii przez klienta - opt-in, bo wplywa na wyglad druku
+  clientFontSize?: boolean;
+  clientFontFamily?: boolean;
+  clientColor?: boolean;
+  clientTextAlign?: boolean;
 }
 
 export interface ShapeProperties {

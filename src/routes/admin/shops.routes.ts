@@ -1149,7 +1149,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
         tags: ['shops'],
         summary: 'Włącz auto-synchronizację dla sklepu',
         params: { type: 'object', properties: { id: { type: 'string' } } },
-        response: { 200: { type: 'object' } },
+        response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
     async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
@@ -1167,7 +1167,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
         tags: ['shops'],
         summary: 'Wyłącz auto-synchronizację dla sklepu',
         params: { type: 'object', properties: { id: { type: 'string' } } },
-        response: { 200: { type: 'object' } },
+        response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
     async (request: FastifyRequest<{ Params: ShopIdParamsInput }>, reply: FastifyReply) => {
@@ -1192,7 +1192,7 @@ export async function shopsRoutes(fastify: FastifyInstance) {
             intervalMinutes: { type: 'integer', minimum: 5, maximum: 1440 },
           },
         },
-        response: { 200: { type: 'object' } },
+        response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
     async (

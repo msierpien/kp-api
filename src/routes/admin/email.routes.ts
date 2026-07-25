@@ -108,7 +108,7 @@ export async function emailRoutes(fastify: FastifyInstance) {
             type: 'object',
             properties: {
               success: { type: 'boolean' },
-              summary: { type: 'object' },
+              summary: { type: 'object', additionalProperties: true },
               queuedCaseIds: { type: 'array', items: { type: 'string' } },
             },
           },

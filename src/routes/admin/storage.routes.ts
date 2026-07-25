@@ -21,7 +21,7 @@ export async function storageRoutes(fastify: FastifyInstance) {
             dryRun: { type: 'boolean', description: 'Tylko symulacja — nie usuwa plików' },
           },
         },
-        response: { 200: { type: 'object' } },
+        response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
     async (request: FastifyRequest<{ Body: CleanupOptions }>, reply: FastifyReply) => {
@@ -51,7 +51,7 @@ export async function storageRoutes(fastify: FastifyInstance) {
       schema: {
         tags: ['storage'],
         summary: 'Statystyki storage (SUPER_ADMIN)',
-        response: { 200: { type: 'object' } },
+        response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
     async (_request: FastifyRequest, reply: FastifyReply) => {

@@ -10,7 +10,7 @@ export async function renderJobsRoutes(fastify: FastifyInstance) {
       schema: {
         tags: ['render-jobs'],
         summary: 'Statystyki kolejki renderowania (BullMQ + baza)',
-        response: { 200: { type: 'object' } },
+        response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -52,7 +52,7 @@ export async function renderJobsRoutes(fastify: FastifyInstance) {
       schema: {
         tags: ['render-jobs'],
         summary: 'Lista ostatnich 100 zadań renderowania',
-        response: { 200: { type: 'array', items: { type: 'object' } } },
+        response: { 200: { type: 'array', items: { type: 'object', additionalProperties: true } } },
       },
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -102,7 +102,7 @@ export async function renderJobsRoutes(fastify: FastifyInstance) {
         summary: 'Ponów renderowanie dla pojedynczego joba',
         params: { type: 'object', properties: { id: { type: 'string' } } },
         response: {
-          200: { type: 'object' },
+          200: { type: 'object', additionalProperties: true },
           400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
           404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
@@ -215,7 +215,7 @@ export async function renderJobsRoutes(fastify: FastifyInstance) {
         summary: 'Szczegóły zadania renderowania wraz ze statusem BullMQ',
         params: { type: 'object', properties: { id: { type: 'string' } } },
         response: {
-          200: { type: 'object' },
+          200: { type: 'object', additionalProperties: true },
           404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
       },

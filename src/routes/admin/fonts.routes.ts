@@ -27,7 +27,7 @@ export async function fontsRoutes(fastify: FastifyInstance) {
       description: 'Przyjmuje multipart/form-data z plikiem czcionki',
       consumes: ['multipart/form-data'],
       response: {
-        201: { type: 'object', properties: { font: { type: 'object' } } },
+        201: { type: 'object', properties: { font: { type: 'object', additionalProperties: true } } },
         400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
       },
     },

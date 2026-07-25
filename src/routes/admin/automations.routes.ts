@@ -80,7 +80,7 @@ export async function automationsRoutes(fastify: FastifyInstance) {
     schema: {
       tags: ['automations'],
       summary: 'Lista automatyzacji workflow',
-      response: { 200: { type: 'array', items: { type: 'object' } } },
+      response: { 200: { type: 'array', items: { type: 'object', additionalProperties: true } } },
     },
   }, async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
@@ -104,7 +104,7 @@ export async function automationsRoutes(fastify: FastifyInstance) {
         summary: 'Szczegóły automatyzacji',
         params: { type: 'object', properties: { id: { type: 'string' } } },
         response: {
-          200: { type: 'object' },
+          200: { type: 'object', additionalProperties: true },
           404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
       },
@@ -159,7 +159,7 @@ export async function automationsRoutes(fastify: FastifyInstance) {
           },
         },
         response: {
-          201: { type: 'object' },
+          201: { type: 'object', additionalProperties: true },
         },
       },
     },
@@ -194,7 +194,7 @@ export async function automationsRoutes(fastify: FastifyInstance) {
         summary: 'Zaktualizuj automatyzację',
         params: { type: 'object', properties: { id: { type: 'string' } } },
         body: { type: 'object' },
-        response: { 200: { type: 'object' } },
+        response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
     async (request: FastifyRequest<{ Params: { id: string }; Body: any }>, reply: FastifyReply) => {
@@ -306,7 +306,7 @@ export async function automationsRoutes(fastify: FastifyInstance) {
             isActive: { type: 'boolean' },
           },
         },
-        response: { 200: { type: 'object' } },
+        response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
     async (request: FastifyRequest<{ Params: { id: string }; Body: any }>, reply: FastifyReply) => {

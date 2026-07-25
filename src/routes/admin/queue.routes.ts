@@ -181,7 +181,7 @@ export async function queueRoutes(fastify: FastifyInstance) {
             limit: { type: 'integer', default: 20 },
           },
         },
-        response: { 200: { type: 'object' } },
+        response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
     async (request: FastifyRequest<{
@@ -251,7 +251,7 @@ export async function queueRoutes(fastify: FastifyInstance) {
         tags: ['queues'],
         summary: 'Szczegóły zadania w kolejce',
         params: { type: 'object', properties: { name: { type: 'string' }, id: { type: 'string' } } },
-        response: { 200: { type: 'object' }, 404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
+        response: { 200: { type: 'object', additionalProperties: true }, 404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } } },
       },
     },
     async (request: FastifyRequest<{ Params: { name: string; id: string } }>, reply: FastifyReply) => {
@@ -290,7 +290,7 @@ export async function queueRoutes(fastify: FastifyInstance) {
         tags: ['queues'],
         summary: 'Ponów zadanie w kolejce',
         params: { type: 'object', properties: { name: { type: 'string' }, id: { type: 'string' } } },
-        response: { 200: { type: 'object' } },
+        response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
     async (request: FastifyRequest<{ Params: { name: string; id: string } }>, reply: FastifyReply) => {
@@ -322,7 +322,7 @@ export async function queueRoutes(fastify: FastifyInstance) {
         tags: ['queues'],
         summary: 'Ponów wszystkie nieudane zadania w kolejce',
         params: { type: 'object', properties: { name: { type: 'string' } } },
-        response: { 200: { type: 'object' } },
+        response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
     async (request: FastifyRequest<{ Params: { name: string } }>, reply: FastifyReply) => {
@@ -355,7 +355,7 @@ export async function queueRoutes(fastify: FastifyInstance) {
         tags: ['queues'],
         summary: 'Usuń zadanie z kolejki',
         params: { type: 'object', properties: { name: { type: 'string' }, id: { type: 'string' } } },
-        response: { 200: { type: 'object' } },
+        response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
     async (request: FastifyRequest<{ Params: { name: string; id: string } }>, reply: FastifyReply) => {
@@ -387,7 +387,7 @@ export async function queueRoutes(fastify: FastifyInstance) {
         tags: ['queues'],
         summary: 'Usuń wszystkie oczekujące zadania z kolejki (waiting)',
         params: { type: 'object', properties: { name: { type: 'string' } } },
-        response: { 200: { type: 'object' } },
+        response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
     async (request: FastifyRequest<{ Params: { name: string } }>, reply: FastifyReply) => {
@@ -423,7 +423,7 @@ export async function queueRoutes(fastify: FastifyInstance) {
             type: { type: 'string', enum: ['completed', 'failed'] },
           },
         },
-        response: { 200: { type: 'object' } },
+        response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
     async (request: FastifyRequest<{

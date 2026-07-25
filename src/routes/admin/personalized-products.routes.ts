@@ -18,7 +18,7 @@ export async function personalizedProductsRoutes(fastify: FastifyInstance) {
     schema: {
       tags: ['personalized-products'],
       summary: 'Lista mapowań SKU → szablon',
-      response: { 200: { type: 'array', items: { type: 'object' } } },
+      response: { 200: { type: 'array', items: { type: 'object', additionalProperties: true } } },
     },
   }, async (_req, reply) => {
     const items = await listPersonalizedProducts();
@@ -44,7 +44,7 @@ export async function personalizedProductsRoutes(fastify: FastifyInstance) {
           },
         },
         response: {
-          201: { type: 'object' },
+          201: { type: 'object', additionalProperties: true },
           400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
       },
@@ -68,7 +68,7 @@ export async function personalizedProductsRoutes(fastify: FastifyInstance) {
         summary: 'Zaktualizuj mapowanie',
         params: { type: 'object', properties: { id: { type: 'string' } } },
         body: { type: 'object' },
-        response: { 200: { type: 'object' } },
+        response: { 200: { type: 'object', additionalProperties: true } },
       },
     },
     async (

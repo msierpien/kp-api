@@ -18,7 +18,7 @@ export const emailSettingsRoutes: FastifyPluginAsync = async (server: any) => {
     schema: {
       tags: ['email'],
       summary: 'Lista konfiguracji email SMTP',
-      response: { 200: { type: 'array', items: { type: 'object' } } },
+      response: { 200: { type: 'array', items: { type: 'object', additionalProperties: true } } },
     },
   }, async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
@@ -98,7 +98,7 @@ export const emailSettingsRoutes: FastifyPluginAsync = async (server: any) => {
           isActive: { type: 'boolean' },
         },
       },
-      response: { 201: { type: 'object' } },
+      response: { 201: { type: 'object', additionalProperties: true } },
     },
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
@@ -129,7 +129,7 @@ export const emailSettingsRoutes: FastifyPluginAsync = async (server: any) => {
       summary: 'Szczegóły konfiguracji email SMTP',
       params: { type: 'object', properties: { id: { type: 'string' } } },
       response: {
-        200: { type: 'object' },
+        200: { type: 'object', additionalProperties: true },
         404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
       },
     },
@@ -169,7 +169,7 @@ export const emailSettingsRoutes: FastifyPluginAsync = async (server: any) => {
       params: { type: 'object', properties: { id: { type: 'string' } } },
       body: { type: 'object' },
       response: {
-        200: { type: 'object' },
+        200: { type: 'object', additionalProperties: true },
         404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
       },
     },

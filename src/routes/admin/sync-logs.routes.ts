@@ -17,7 +17,7 @@ export async function syncLogsRoutes(fastify: FastifyInstance) {
             shopId: { type: 'string', description: 'Filtruj po ID sklepu' },
           },
         },
-        response: { 200: { type: 'array', items: { type: 'object' } } },
+        response: { 200: { type: 'array', items: { type: 'object', additionalProperties: true } } },
       },
     },
     async (request: FastifyRequest<{ Querystring: SyncLogsQueryInput }>, reply: FastifyReply) => {

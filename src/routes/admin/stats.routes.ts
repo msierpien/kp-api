@@ -8,7 +8,7 @@ export async function statsRoutes(fastify: FastifyInstance) {
     schema: {
       tags: ['stats'],
       summary: 'Statystyki case\'ów według statusu',
-      response: { 200: { type: 'object' } },
+      response: { 200: { type: 'object', additionalProperties: true } },
     },
   }, async (_request: FastifyRequest, reply: FastifyReply) => {
     try {

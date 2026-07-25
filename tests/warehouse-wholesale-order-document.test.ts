@@ -19,6 +19,7 @@ const ORDERS_ROUTES = readFileSync(join(ROOT, 'src/routes/admin/orders.routes.ts
 const REPLENISHMENT_SERVICE = readFileSync(join(ROOT, 'src/services/admin/warehouse-replenishment.service.ts'), 'utf8');
 const REPLENISHMENT_ROUTES = readFileSync(join(ROOT, 'src/routes/admin/warehouse/replenishment.routes.ts'), 'utf8');
 const RESERVATIONS_SERVICE = readFileSync(join(ROOT, 'src/services/admin/warehouse-reservations.service.ts'), 'utf8');
+const STOCK_SYNC_SERVICE = readFileSync(join(ROOT, 'src/services/stock/stock-sync.service.ts'), 'utf8');
 
 describe('warehouse wholesale order document (ZH)', () => {
   it('schema i migracja dodają typ ZH', () => {
@@ -79,6 +80,15 @@ describe('warehouse wholesale order document (ZH)', () => {
     assert.match(DOCS_SERVICE, /input\.saveAsDraft !== true/);
   });
 
+  it('zamówienie może utworzyć ZH per dostawca z aktywnych backorderów', () => {
+    assert.match(ORDERS_ROUTES, /\/:id\/zh/);
+    assert.match(DOCS_SERVICE, /export async function createZhForOrder/);
+    assert.match(DOCS_SERVICE, /source: 'WHOLESALE_BACKORDER'/);
+    assert.match(DOCS_SERVICE, /source: 'ORDER_BACKORDER'/);
+    assert.match(DOCS_SERVICE, /existingProviderIds/);
+    assert.match(DOCS_SERVICE, /createdCount: createdDocuments\.length/);
+  });
+
   it('eksport CSV ZH zatwierdza robocze zamówienie hurtowe', () => {
     assert.match(DOCS_ROUTES, /\/documents\/:id\/export-csv/);
     assert.match(DOCS_ROUTES, /\/documents\/zh\/providers\/:providerId\/export-csv/);
@@ -125,5 +135,11 @@ describe('warehouse wholesale order document (ZH)', () => {
     assert.match(REPLENISHMENT_SERVICE, /warehouseReservations/);
     assert.match(REPLENISHMENT_SERVICE, /order-item-shortfall/);
     assert.match(REPLENISHMENT_SERVICE, /Brak aktywnej oferty hurtowni dla brakującej części zamówienia/);
+  });
+
+  it('replenishment może wykluczyć oferty poniżej minimalnego stanu hurtowni', () => {
+    assert.match(STOCK_SYNC_SERVICE, /resolveMinimumStockForSale/);
+    assert.match(STOCK_SYNC_SERVICE, /isAtLeastMinimumStock/);
+    assert.match(RESERVATIONS_SERVICE, /resolveMinimumStockForSale/);
   });
 });

@@ -9,7 +9,7 @@ export async function fontsRoutes(fastify: FastifyInstance) {
     schema: {
       tags: ['fonts'],
       summary: 'Lista globalnych czcionek',
-      response: { 200: { type: 'object', properties: { fonts: { type: 'array', items: { type: 'object' } } } } },
+      response: { 200: { type: 'object', properties: { fonts: { type: 'array', items: { type: 'object', additionalProperties: true } } } } },
     },
   }, async (_request: FastifyRequest, reply: FastifyReply) => {
     const fonts = await listFonts();

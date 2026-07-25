@@ -77,6 +77,12 @@ export interface CreateWzForOrderInput {
   forceConfirm?: boolean;
 }
 
+export interface CreateZhForOrderResult {
+  documents: Array<NonNullable<Awaited<ReturnType<typeof getDocumentById>>>>;
+  createdCount: number;
+  skippedReason?: string;
+}
+
 export interface CreatePzFromWholesaleOrderResult {
   document: Awaited<ReturnType<typeof getDocumentById>>;
   created: boolean;
@@ -1022,6 +1028,210 @@ export async function createWzForOrder(orderId: string, input: CreateWzForOrderI
   }
 
   return { document: await withAuditUsers(document), created: true };
+}
+
+export async function createZhForOrder(orderId: string): Promise<CreateZhForOrderResult> {
+  const contextTenantId = getTenantId();
+  const order = await prisma.order.findFirst({
+    where: {
+      id: orderId,
+      ...(contextTenantId ? { shop: { tenantId: contextTenantId } } : {}),
+    },
+    include: {
+      shop: true,
+      items: true,
+    },
+  });
+
+  if (!order) throw new Error('Zamówienie nie znalezione');
+
+  const existingDocuments = await prisma.warehouseDocument.findMany({
+    where: {
+      tenantId: order.shop.tenantId,
+      orderId,
+      type: 'ZH',
+      status: { not: 'CANCELLED' },
+    },
+    include: documentDetailInclude,
+    orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+  });
+
+  let activeReservations = await prisma.warehouseReservation.findMany({
+    where: {
+      tenantId: order.shop.tenantId,
+      orderId: order.id,
+      status: 'ACTIVE',
+      source: 'WHOLESALE_BACKORDER',
+    },
+    include: {
+      orderItem: true,
+      warehouseProduct: {
+        select: {
+          id: true,
+          sku: true,
+          name: true,
+          wholesaleMappings: {
+            where: {
+              isActive: true,
+              lastKnownStock: { gt: new Prisma.Decimal(0) },
+              provider: { isActive: true },
+            },
+            orderBy: [
+              { lastKnownPrice: 'asc' },
+              { lastSyncAt: 'desc' },
+              { updatedAt: 'desc' },
+            ],
+            select: {
+              providerId: true,
+              lastKnownPrice: true,
+              provider: {
+                select: {
+                  id: true,
+                  name: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  if (activeReservations.length === 0) {
+    await reserveOrder(order.id);
+    activeReservations = await prisma.warehouseReservation.findMany({
+      where: {
+        tenantId: order.shop.tenantId,
+        orderId: order.id,
+        status: 'ACTIVE',
+        source: 'WHOLESALE_BACKORDER',
+      },
+      include: {
+        orderItem: true,
+        warehouseProduct: {
+          select: {
+            id: true,
+            sku: true,
+            name: true,
+            wholesaleMappings: {
+              where: {
+                isActive: true,
+                lastKnownStock: { gt: new Prisma.Decimal(0) },
+                provider: { isActive: true },
+              },
+              orderBy: [
+                { lastKnownPrice: 'asc' },
+                { lastSyncAt: 'desc' },
+                { updatedAt: 'desc' },
+              ],
+              select: {
+                providerId: true,
+                lastKnownPrice: true,
+                provider: {
+                  select: {
+                    id: true,
+                    name: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  if (activeReservations.length === 0) {
+    return { documents: [], createdCount: 0, skippedReason: 'Brak pozycji do domówienia w hurcie' };
+  }
+
+  const existingProviderIds = new Set(
+    existingDocuments
+      .map((document) => metadataString(document.metadataJson, 'providerId'))
+      .filter((providerId): providerId is string => Boolean(providerId)),
+  );
+  const providerGroups = new Map<string, {
+    providerName: string;
+    itemsByProductId: Map<string, {
+      productId: string;
+      quantity: number;
+      unitPrice?: number;
+      notes: string;
+    }>;
+  }>();
+  let missingMappings = 0;
+
+  for (const reservation of activeReservations) {
+    const mapping = reservation.warehouseProduct.wholesaleMappings[0];
+    const providerId = mapping?.providerId?.trim();
+    const providerName = mapping?.provider?.name?.trim();
+    if (!providerId || !providerName) {
+      missingMappings += 1;
+      continue;
+    }
+    if (existingProviderIds.has(providerId)) continue;
+
+    const group = providerGroups.get(providerId) ?? {
+      providerName,
+      itemsByProductId: new Map(),
+    };
+    const existingItem = group.itemsByProductId.get(reservation.warehouseProductId);
+    const quantity = numericQuantity(reservation.quantity);
+    const orderRef = order.orderReference || order.externalOrderId;
+    const notes = `Zamówienie ${orderRef}`;
+
+    if (existingItem) {
+      existingItem.quantity += quantity;
+    } else {
+      group.itemsByProductId.set(reservation.warehouseProductId, {
+        productId: reservation.warehouseProductId,
+        quantity,
+        unitPrice: mapping.lastKnownPrice == null ? undefined : Number(mapping.lastKnownPrice),
+        notes,
+      });
+    }
+
+    providerGroups.set(providerId, group);
+  }
+
+  if (providerGroups.size === 0) {
+    const existing = await Promise.all(existingDocuments.map((document) => withAuditUsers(document)));
+    return {
+      documents: existing.filter((document): document is NonNullable<typeof document> => Boolean(document)),
+      createdCount: 0,
+      skippedReason: existingDocuments.length > 0
+        ? 'ZH dla dostawców z tego zamówienia już istnieje'
+        : missingMappings > 0
+          ? 'Brak aktywnego mapowania hurtowego dla pozycji do domówienia'
+          : 'Brak pozycji do domówienia w hurcie',
+    };
+  }
+
+  const createdDocuments = [];
+  for (const [providerId, group] of providerGroups) {
+    const document = await createDocument({
+      type: 'ZH',
+      orderId: order.id,
+      description: `Zamówienie hurtowe dla zamówienia ${order.orderReference} - ${group.providerName}`,
+      metadataJson: {
+        source: 'ORDER_BACKORDER',
+        providerId,
+        providerName: group.providerName,
+        orderReference: order.orderReference,
+        externalOrderId: order.externalOrderId,
+      },
+      items: Array.from(group.itemsByProductId.values()),
+    });
+    createdDocuments.push(document);
+  }
+
+  const documents = await Promise.all(createdDocuments.map((document) => withAuditUsers(document)));
+  return {
+    documents: documents.filter((document): document is NonNullable<typeof document> => Boolean(document)),
+    createdCount: createdDocuments.length,
+  };
 }
 
 export async function updateDocument(id: string, input: UpdateDocumentInput) {

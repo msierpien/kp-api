@@ -7,7 +7,7 @@ import {
   getOrdersList,
 } from '../../services/admin/orders.service';
 import * as reservationService from '../../services/admin/warehouse-reservations.service';
-import { createWzForOrder } from '../../services/admin/warehouse-documents.service';
+import { createWzForOrder, createZhForOrder } from '../../services/admin/warehouse-documents.service';
 import * as invoicesService from '../../services/admin/invoices.service';
 import * as orderShipmentsService from '../../services/admin/order-shipments.service';
 import * as orderReturnsService from '../../services/admin/order-returns.service';
@@ -776,6 +776,28 @@ export async function ordersRoutes(fastify: FastifyInstance) {
   );
 
   fastify.post<{ Params: OrderParams; Body: { saveAsDraft?: boolean } }>(
+    '/:id/zh',
+    {
+      schema: {
+        tags: ['warehouse'],
+        summary: 'Utwórz dokumenty ZH z pozycji backorderowych zamówienia',
+        params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request: FastifyRequest<{ Params: OrderParams }>, reply: FastifyReply) => {
+      try {
+        const result = await createZhForOrder(request.params.id);
+        return reply.send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Błąd tworzenia ZH dla zamówienia';
+        const status = message.includes('nie znalezion') ? 404 : 400;
+        return reply.status(status).send({ error: 'Error', message });
+      }
+    }
+  );
+
+  fastify.post<{ Params: OrderParams; Body: { saveAsDraft?: boolean } }>(
     '/:id/wz',
     {
       schema: {
@@ -828,7 +850,7 @@ export async function ordersRoutes(fastify: FastifyInstance) {
           },
         },
         response: {
-          201: { type: 'object' },
+          201: { type: 'object', additionalProperties: true },
           400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
       },

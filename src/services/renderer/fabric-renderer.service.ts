@@ -1,7 +1,8 @@
 import { loadImage, registerFont } from 'canvas';
 import { StaticCanvas, FabricImage, IText, Textbox } from 'fabric/node';
-import type { TemplateLayoutJson, TemplatePage, PrintLayout, Layer, TextFieldProperties, TextBoxProperties, ImageProperties } from '../../types/template-layout';
+import type { TemplateLayoutJson, TemplatePage, PrintLayout, Layer, TextFieldProperties, TextBoxProperties, ImageProperties, MockupConfig } from '../../types/template-layout';
 import { getTemplatePages } from '../../types/template-layout';
+import { drawImageInQuad, quadToPixels, type Quad } from '../../lib/mockup-warp';
 import path from 'path';
 import fs from 'fs/promises';
 import { config } from '../../config';
@@ -702,6 +703,59 @@ export async function renderPrintSheetPng(
     heightPx: Math.round((heightMm / MM_PER_INCH) * dpi),
     dpi,
   };
+}
+
+/**
+ * Wizualizacja projektu na zdjeciu produktu (mockup).
+ *
+ * Kazda powierzchnia dostaje wskazana strone projektu, naciagnieta na cztery
+ * rogi z korekcja perspektywy. Tryb `multiply` sprawia, ze biel projektu
+ * przepuszcza fakture papieru ze zdjecia - wyglada jak nadruk, nie naklejka.
+ */
+export async function renderMockupPng(
+  layout: TemplateLayoutJson,
+  answers: Record<string, any>,
+  mockup: MockupConfig,
+  layoutOverrides?: any,
+  options: { maxWidthPx?: number } = {}
+): Promise<Buffer> {
+  const { createCanvas, Image } = await import('canvas');
+
+  const photoPath = mockup.imageUrl.startsWith('http')
+    ? mockup.imageUrl
+    : path.join(config.storage.path, mockup.imageUrl);
+  const photo = await loadImage(photoPath);
+
+  const maxWidthPx = options.maxWidthPx;
+  const scale = maxWidthPx && photo.width > maxWidthPx ? maxWidthPx / photo.width : 1;
+  const width = Math.round(photo.width * scale);
+  const height = Math.round(photo.height * scale);
+
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(photo as any, 0, 0, width, height);
+
+  const pages = getTemplatePages(layout);
+
+  for (const surface of mockup.surfaces) {
+    const page = pages.find((item) => item.id === surface.pageId);
+    if (!page) {
+      console.warn(`[Mockup] Strona ${surface.pageId} nie istnieje w szablonie - pomijam powierzchnie`);
+      continue;
+    }
+
+    const rendered = await renderPageToPng(page, answers, layoutOverrides);
+    const design = new Image();
+    design.src = rendered.buffer;
+
+    drawImageInQuad(ctx, design as any, quadToPixels(surface.corners as Quad, width, height), {
+      blendMode: surface.blendMode,
+      opacity: surface.opacity,
+      subdivisions: 16,
+    });
+  }
+
+  return canvas.toBuffer('image/png');
 }
 
 /**

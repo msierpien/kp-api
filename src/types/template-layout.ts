@@ -15,6 +15,45 @@ export interface TemplateLayoutJson {
   pages?: TemplatePage[];
   /** Rozmieszczenie stron na arkuszu drukarskim. */
   print?: PrintLayout;
+  /** Wizualizacje projektu na zdjeciach produktu. */
+  mockups?: MockupConfig[];
+}
+
+// ============================================
+// Mockupy (projekt na zdjeciu produktu)
+// ============================================
+
+export type MockupBlendMode = 'normal' | 'multiply' | 'screen' | 'overlay';
+
+/** Punkt znormalizowany do rozmiaru zdjecia (0..1), niezalezny od rozdzielczosci. */
+export interface MockupPoint {
+  x: number;
+  y: number;
+}
+
+/**
+ * Powierzchnia na zdjeciu, na ktora nakladana jest jedna strona projektu.
+ * Rogi w kolejnosci: lewy-gorny, prawy-gorny, prawy-dolny, lewy-dolny -
+ * liczone wzgledem projektu, nie zdjecia (dzieki temu obrocona winietka
+ * nadal wyglada poprawnie).
+ */
+export interface MockupSurface {
+  id: string;
+  /** Ktora strona projektu ma sie tu renderowac. */
+  pageId: string;
+  corners: [MockupPoint, MockupPoint, MockupPoint, MockupPoint];
+  /** multiply = nadruk na papierze (biel projektu przepuszcza fakture zdjecia). */
+  blendMode: MockupBlendMode;
+  /** Krycie 0..1. */
+  opacity: number;
+}
+
+export interface MockupConfig {
+  id: string;
+  name: string;
+  /** Sciezka zdjecia w storage (asset szablonu). */
+  imageUrl: string;
+  surfaces: MockupSurface[];
 }
 
 // ============================================

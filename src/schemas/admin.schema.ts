@@ -605,6 +605,26 @@ const printLayoutSchema = z.object({
   placements: z.array(printPlacementSchema).default([]),
 });
 
+const mockupPointSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+});
+
+const mockupSurfaceSchema = z.object({
+  id: z.string().min(1),
+  pageId: z.string().min(1),
+  corners: z.tuple([mockupPointSchema, mockupPointSchema, mockupPointSchema, mockupPointSchema]),
+  blendMode: z.enum(['normal', 'multiply', 'screen', 'overlay']).default('multiply'),
+  opacity: z.number().min(0).max(1).default(1),
+});
+
+const mockupConfigSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  imageUrl: z.string().min(1),
+  surfaces: z.array(mockupSurfaceSchema).default([]),
+});
+
 export const templateLayoutSchema = z.object({
   // Wersja 2 wprowadza pages/print. Wersja 1 (canvas + layers) nadal akceptowana.
   version: z.union([z.literal(1), z.literal(2)]),
@@ -614,6 +634,7 @@ export const templateLayoutSchema = z.object({
   // Bez tych pol z.object wycialoby strony przy zapisie (strip nieznanych kluczy).
   pages: z.array(templatePageSchema).optional(),
   print: printLayoutSchema.optional(),
+  mockups: z.array(mockupConfigSchema).optional(),
 });
 
 export const templateAssetParamsSchema = z.object({

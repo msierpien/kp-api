@@ -46,10 +46,21 @@ export function getBullMqConnection() {
 // Job types
 export type RenderJobType = 'PNG_PREVIEW' | 'PDF_PRINT' | 'PDF_PRINT_PACKAGE';
 
+/** Opcje paczki do druku wybierane w panelu przy "Generuj paczkę". */
+export interface PrintPackageOptions {
+  /** Formaty plików per sztuka. Domyślnie oba. */
+  formats?: Array<'pdf' | 'png'>;
+  /** Dodatkowo jeden zbiorczy PDF ze wszystkimi sztukami jako stronami. Domyślnie tak. */
+  combinedPdf?: boolean;
+  /** Tekst znaku wodnego na każdej sztuce. Brak/null = bez znaku wodnego. */
+  watermarkText?: string | null;
+}
+
 export interface RenderJobData {
   caseId: string;
   renderJobId?: string;
   jobType: RenderJobType;
+  packageOptions?: PrintPackageOptions;
   answers: Record<string, string | number | boolean>;
   templateName: string;
   templateVersion: number;
@@ -81,17 +92,24 @@ export interface RenderJobResult {
   filePath?: string;
   fileUrl?: string;
   fileSize?: number;
+  // Pola formatow opcjonalne - paczka moze byc tylko PDF albo tylko PNG.
   files?: Array<{
     itemIndex: number;
-    pdfAssetId: string;
-    pngAssetId: string;
-    pdfFilePath: string;
-    pngFilePath: string;
-    pdfFileUrl: string;
-    pngFileUrl: string;
-    pdfFileSize: number;
-    pngFileSize: number;
+    pdfAssetId?: string;
+    pngAssetId?: string;
+    pdfFilePath?: string;
+    pngFilePath?: string;
+    pdfFileUrl?: string;
+    pngFileUrl?: string;
+    pdfFileSize?: number;
+    pngFileSize?: number;
   }>;
+  combinedPdf?: {
+    assetId: string;
+    filePath: string;
+    fileUrl: string;
+    fileSize: number;
+  } | null;
   error?: string;
   validationSummary?: {
     isValid: boolean;

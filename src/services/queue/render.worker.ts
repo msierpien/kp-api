@@ -53,6 +53,7 @@ async function processRenderJob(
         renderJobId: activeRenderJob?.id,
         bullmqJobId: job.id,
         mode: 'BULLMQ',
+        packageOptions: job.data.packageOptions,
         onProgress: (progress) => job.updateProgress(progress),
       });
 
@@ -64,6 +65,7 @@ async function processRenderJob(
         fileUrl: result.asset.fileUrl,
         fileSize: result.asset.fileSize,
         files: result.files,
+        combinedPdf: result.combinedPdf,
         validationSummary: result.validationSummary,
       };
     }

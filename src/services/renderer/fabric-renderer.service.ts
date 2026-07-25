@@ -618,7 +618,8 @@ function defaultPrintLayout(pages: TemplatePage[]): PrintLayout {
 async function composePrintSheet(
   layout: TemplateLayoutJson,
   answers: Record<string, any>,
-  layoutOverrides: any
+  layoutOverrides: any,
+  watermarkText?: string | null
 ): Promise<{ buffer: Buffer; widthMm: number; heightMm: number }> {
   const { createCanvas, Image } = await import('canvas');
   const pages = getTemplatePages(layout);
@@ -660,6 +661,23 @@ async function composePrintSheet(
     ctx.restore();
   }
 
+  if (watermarkText && watermarkText.trim()) {
+    const text = watermarkText.trim();
+    // Rozmiar dobrany do szerokosci arkusza, zeby napis byl czytelny
+    // niezaleznie od formatu; przekatna, polprzezroczysty.
+    const fontSize = Math.max(24, Math.round(sheet.width / Math.max(6, text.length)));
+    ctx.save();
+    ctx.translate(sheet.width / 2, sheet.height / 2);
+    ctx.rotate(-Math.PI / 6);
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = '#000000';
+    ctx.font = `bold ${fontSize}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 0, 0);
+    ctx.restore();
+  }
+
   return { buffer: sheet.toBuffer('image/png'), widthMm: print.sheet.widthMm, heightMm: print.sheet.heightMm };
 }
 
@@ -671,9 +689,10 @@ async function composePrintSheet(
 export async function renderPrintSheetPng(
   layout: TemplateLayoutJson,
   answers: Record<string, any>,
-  layoutOverrides?: any
+  layoutOverrides?: any,
+  watermarkText?: string | null
 ): Promise<{ buffer: Buffer; widthMm: number; heightMm: number; widthPx: number; heightPx: number; dpi: number }> {
-  const { buffer, widthMm, heightMm } = await composePrintSheet(layout, answers, layoutOverrides);
+  const { buffer, widthMm, heightMm } = await composePrintSheet(layout, answers, layoutOverrides, watermarkText);
   const dpi = Number(layout.canvas.dpi || 300);
   return {
     buffer,

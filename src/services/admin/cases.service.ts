@@ -30,7 +30,8 @@ import {
 } from '../../types/template-layout';
 import { renderPreview, renderPrintSheetPng } from '../renderer/fabric-renderer.service';
 import { validateAnswers } from '../renderer/text-validator.service';
-import { addPrintPackageJob } from '../queue/render.queue';
+import { addPrintPackageJob, type PrintPackageOptions } from '../queue/render.queue';
+import { resolvePrintPackageOptions } from './print-settings.service';
 import { buildStorageUrl, saveFile } from '../storage/local-storage.service';
 import { isPersonalizationCaseStatus } from '../../lib/personalization-case-statuses';
 
@@ -69,14 +70,14 @@ interface PrintPackageValidationSummary {
 
 interface RenderedPackageItem {
   itemIndex: number;
-  pdfAssetId: string;
-  pngAssetId: string;
-  pdfFilePath: string;
-  pngFilePath: string;
-  pdfFileUrl: string;
-  pngFileUrl: string;
-  pdfFileSize: number;
-  pngFileSize: number;
+  pdfAssetId?: string;
+  pngAssetId?: string;
+  pdfFilePath?: string;
+  pngFilePath?: string;
+  pdfFileUrl?: string;
+  pngFileUrl?: string;
+  pdfFileSize?: number;
+  pngFileSize?: number;
 }
 
 interface GeneratePrintPackageOptions {
@@ -84,6 +85,22 @@ interface GeneratePrintPackageOptions {
   bullmqJobId?: string | number;
   mode?: 'SYNC' | 'BULLMQ';
   onProgress?: (progress: number) => Promise<void>;
+  /** Opcje z ustawień druku (formaty, zbiorczy PDF, znak wodny). Brak = domyślne. */
+  packageOptions?: PrintPackageOptions;
+}
+
+/** Znormalizowane opcje paczki z bezpiecznymi domyślnymi. */
+function normalizePrintPackageOptions(input?: PrintPackageOptions) {
+  const formats = new Set<'pdf' | 'png'>(
+    input?.formats && input.formats.length ? input.formats : ['pdf', 'png']
+  );
+  const combinedPdf = input?.combinedPdf ?? true;
+  const watermarkText = input?.watermarkText?.trim() || null;
+
+  // Paczka bez zadnego pliku nie ma sensu - wymuszamy sensowne minimum.
+  if (!formats.size && !combinedPdf) formats.add('pdf');
+
+  return { formats, combinedPdf, watermarkText };
 }
 
 type CasesSummary = ReturnType<typeof buildCasesSummary>;
@@ -499,6 +516,10 @@ export async function enqueueCasePrintPackage(id: string) {
     throw new CasePackageValidationError(validationSummary);
   }
 
+  // Ustawienia druku (formaty, zbiorczy PDF, znak wodny) czytamy tu, bo tylko
+  // request adminowy ma kontekst tenanta - worker dostaje gotowe opcje w jobie.
+  const packageOptions = await resolvePrintPackageOptions();
+
   const renderJob = await prisma.renderJob.create({
     data: {
       caseId: id,
@@ -509,6 +530,7 @@ export async function enqueueCasePrintPackage(id: string) {
         templateId: caseItem.templateId,
         templateVersion: caseItem.templateVersionFrozen,
         quantity: qty,
+        packageOptions: JSON.parse(JSON.stringify(packageOptions)),
       },
     },
   });
@@ -525,6 +547,7 @@ export async function enqueueCasePrintPackage(id: string) {
       orderId: caseItem.orderId,
       orderReference: caseItem.order.orderReference || undefined,
       productName: caseItem.orderItem.productNameSnapshot,
+      packageOptions,
     });
 
     await prisma.$transaction([
@@ -675,6 +698,9 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
     const renderedItems: RenderedPackageItem[] = [];
     const packageBaseName = sanitizeFilePart(`${caseItem.order.orderReference}-${caseItem.template.code}`) || `case-${id}`;
 
+    const pkg = normalizePrintPackageOptions(options.packageOptions);
+    const combinedPages: Array<{ png: Buffer; widthPx: number; heightPx: number; dpi: number }> = [];
+
     for (let itemIndex = 0; itemIndex < qty; itemIndex += 1) {
       await options.onProgress?.(20 + Math.round((itemIndex / qty) * 60));
       const flatAnswers = flattenCaseAnswers(answers, itemIndex);
@@ -685,7 +711,12 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
       let renderHeightPx = printTarget.heightPx;
 
       if (isMultiPage) {
-        const sheet = await renderPrintSheetPng(layout, flatAnswers, caseItem.layoutOverrides || undefined);
+        const sheet = await renderPrintSheetPng(
+          layout,
+          flatAnswers,
+          caseItem.layoutOverrides || undefined,
+          pkg.watermarkText
+        );
         pngBuffer = sheet.buffer;
         renderDpi = sheet.dpi;
         renderWidthPx = sheet.widthPx;
@@ -696,6 +727,9 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
           templateName: caseItem.template.name,
           layoutConfig: printTarget.layout,
           layoutOverrides: caseItem.layoutOverrides || undefined,
+          watermark: pkg.watermarkText
+            ? { text: pkg.watermarkText, opacity: 0.18, angle: -30 }
+            : undefined,
         };
 
         pngBuffer = await renderPreview(templateData as any, {
@@ -704,85 +738,113 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
           scale: 1,
           deviceScaleFactor: 1,
           format: 'png',
-          includeWatermark: false,
+          includeWatermark: Boolean(pkg.watermarkText),
         });
       }
-      const pdfBuffer = await pngToPdfBuffer(pngBuffer, renderWidthPx, renderHeightPx, renderDpi);
 
-      const [savedPng, savedPdf] = await Promise.all([
-        saveFile(pngBuffer, {
+      if (pkg.combinedPdf) {
+        combinedPages.push({ png: pngBuffer, widthPx: renderWidthPx, heightPx: renderHeightPx, dpi: renderDpi });
+      }
+
+      const assetMetadata = {
+        renderJobId: renderJob.id,
+        itemIndex,
+        itemNumber: itemIndex + 1,
+        generatedAt: new Date().toISOString(),
+        dpi: renderDpi,
+        widthPx: renderWidthPx,
+        heightPx: renderHeightPx,
+        bleedPx: isMultiPage ? 0 : printTarget.bleedPx,
+        bleedMm: isMultiPage ? 0 : printTarget.bleedMm,
+        watermark: pkg.watermarkText || undefined,
+      };
+      const renderedItem: RenderedPackageItem = { itemIndex };
+
+      if (pkg.formats.has('png')) {
+        const savedPng = await saveFile(pngBuffer, {
           orderId: caseItem.orderId,
           templateVersion: caseItem.templateVersionFrozen,
           filename: `${itemBaseName}-print`,
           extension: 'png',
-        }),
-        saveFile(pdfBuffer, {
-          orderId: caseItem.orderId,
-          templateVersion: caseItem.templateVersionFrozen,
-          filename: `${itemBaseName}-print`,
-          extension: 'pdf',
-        }),
-      ]);
-
-      const [pngAsset, pdfAsset] = await prisma.$transaction([
-        prisma.asset.create({
+        });
+        const pngAsset = await prisma.asset.create({
           data: {
             caseId: id,
             assetType: 'PNG_PRINT',
             filePath: savedPng.relativePath,
             fileSize: savedPng.size,
             mimeType: 'image/png',
-            metadata: {
-              renderJobId: renderJob.id,
-              itemIndex,
-              itemNumber: itemIndex + 1,
-              generatedAt: new Date().toISOString(),
-              dpi: renderDpi,
-              widthPx: renderWidthPx,
-              heightPx: renderHeightPx,
-              bleedPx: isMultiPage ? 0 : printTarget.bleedPx,
-              bleedMm: isMultiPage ? 0 : printTarget.bleedMm,
-            },
+            metadata: assetMetadata,
           },
-        }),
-        prisma.asset.create({
+        });
+        packageEntries.push({ name: `png/${itemBaseName}.png`, data: pngBuffer });
+        renderedItem.pngAssetId = pngAsset.id;
+        renderedItem.pngFilePath = savedPng.relativePath;
+        renderedItem.pngFileUrl = savedPng.url;
+        renderedItem.pngFileSize = savedPng.size;
+      }
+
+      if (pkg.formats.has('pdf')) {
+        const pdfBuffer = await pngToPdfBuffer(pngBuffer, renderWidthPx, renderHeightPx, renderDpi);
+        const savedPdf = await saveFile(pdfBuffer, {
+          orderId: caseItem.orderId,
+          templateVersion: caseItem.templateVersionFrozen,
+          filename: `${itemBaseName}-print`,
+          extension: 'pdf',
+        });
+        const pdfAsset = await prisma.asset.create({
           data: {
             caseId: id,
             assetType: 'PDF_PRINT',
             filePath: savedPdf.relativePath,
             fileSize: savedPdf.size,
             mimeType: 'application/pdf',
-            metadata: {
-              renderJobId: renderJob.id,
-              itemIndex,
-              itemNumber: itemIndex + 1,
-              generatedAt: new Date().toISOString(),
-              dpi: renderDpi,
-              widthPx: renderWidthPx,
-              heightPx: renderHeightPx,
-              bleedPx: isMultiPage ? 0 : printTarget.bleedPx,
-              bleedMm: isMultiPage ? 0 : printTarget.bleedMm,
-            },
+            metadata: assetMetadata,
           },
-        }),
-      ]);
+        });
+        packageEntries.push({ name: `pdf/${itemBaseName}.pdf`, data: pdfBuffer });
+        renderedItem.pdfAssetId = pdfAsset.id;
+        renderedItem.pdfFilePath = savedPdf.relativePath;
+        renderedItem.pdfFileUrl = savedPdf.url;
+        renderedItem.pdfFileSize = savedPdf.size;
+      }
 
-      packageEntries.push(
-        { name: `png/${itemBaseName}.png`, data: pngBuffer },
-        { name: `pdf/${itemBaseName}.pdf`, data: pdfBuffer }
-      );
+      renderedItems.push(renderedItem);
+    }
 
-      renderedItems.push({
-        itemIndex,
-        pngAssetId: pngAsset.id,
-        pdfAssetId: pdfAsset.id,
-        pngFilePath: savedPng.relativePath,
-        pdfFilePath: savedPdf.relativePath,
-        pngFileUrl: savedPng.url,
-        pdfFileUrl: savedPdf.url,
-        pngFileSize: savedPng.size,
-        pdfFileSize: savedPdf.size,
+    // Zbiorczy PDF: wszystkie sztuki jako kolejne strony jednego pliku.
+    let combinedPdfInfo: { assetId: string; filePath: string; fileUrl: string; fileSize: number } | null = null;
+    if (pkg.combinedPdf && combinedPages.length > 0) {
+      const combinedBuffer = await pngsToPdfBuffer(combinedPages);
+      const savedCombined = await saveFile(combinedBuffer, {
+        orderId: caseItem.orderId,
+        templateVersion: caseItem.templateVersionFrozen,
+        filename: `${packageBaseName}-komplet`,
+        extension: 'pdf',
       });
+      const combinedAsset = await prisma.asset.create({
+        data: {
+          caseId: id,
+          assetType: 'PDF_PRINT',
+          filePath: savedCombined.relativePath,
+          fileSize: savedCombined.size,
+          mimeType: 'application/pdf',
+          metadata: {
+            renderJobId: renderJob.id,
+            combined: true,
+            pages: combinedPages.length,
+            generatedAt: new Date().toISOString(),
+            watermark: pkg.watermarkText || undefined,
+          },
+        },
+      });
+      packageEntries.push({ name: `${packageBaseName}-komplet.pdf`, data: combinedBuffer });
+      combinedPdfInfo = {
+        assetId: combinedAsset.id,
+        filePath: savedCombined.relativePath,
+        fileUrl: savedCombined.url,
+        fileSize: savedCombined.size,
+      };
     }
 
     await options.onProgress?.(85);
@@ -812,6 +874,12 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
           heightPx: printTarget.heightPx,
           bleedPx: printTarget.bleedPx,
           bleedMm: printTarget.bleedMm,
+          packageOptions: {
+            formats: [...pkg.formats],
+            combinedPdf: pkg.combinedPdf,
+            watermarkText: pkg.watermarkText,
+          },
+          combinedPdf: combinedPdfInfo,
         })),
       },
     });
@@ -857,6 +925,7 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
         mimeType: packageAsset.mimeType,
       },
       files: renderedItems,
+      combinedPdf: combinedPdfInfo,
       validationSummary,
     };
   } catch (error) {
@@ -1116,6 +1185,31 @@ async function validatePrintPackageAnswers(
     errors,
     warnings,
   };
+}
+
+/** Jeden wielostronicowy PDF z listy stron PNG (zbiorczy plik paczki). */
+async function pngsToPdfBuffer(
+  pages: Array<{ png: Buffer; widthPx: number; heightPx: number; dpi: number }>
+): Promise<Buffer> {
+  const PDFDocument = (await import('pdfkit')).default;
+
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    const doc = new PDFDocument({ margin: 0, autoFirstPage: false });
+
+    doc.on('data', (chunk) => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    for (const page of pages) {
+      const widthPt = (page.widthPx / page.dpi) * 72;
+      const heightPt = (page.heightPx / page.dpi) * 72;
+      doc.addPage({ size: [widthPt, heightPt], margin: 0 });
+      doc.image(page.png, 0, 0, { width: widthPt, height: heightPt, fit: [widthPt, heightPt] });
+    }
+
+    doc.end();
+  });
 }
 
 async function pngToPdfBuffer(

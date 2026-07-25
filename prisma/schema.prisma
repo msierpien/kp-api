@@ -37,6 +37,7 @@ model Tenant {
   templates             PersonalizationTemplate[]
   emailSettings         EmailSettings[]
   aiSettings            AiSettings?
+  printSettings         PrintSettings?
   aiPromptTemplates     AiPromptTemplate[]
   aiUsageLogs           AiUsageLog[]
   aiBulkContentJobs     AiBulkContentJob[]
@@ -947,6 +948,23 @@ model AiSettings {
 
   @@index([tenantId])
   @@map("ai_settings")
+}
+
+// Domyślne ustawienia generowania paczek do druku (panel: Ustawienia -> Druk).
+model PrintSettings {
+  id               String   @id @default(cuid())
+  tenantId         String   @unique @map("tenant_id")
+  formatPdf        Boolean  @default(true) @map("format_pdf")
+  formatPng        Boolean  @default(true) @map("format_png")
+  combinedPdf      Boolean  @default(true) @map("combined_pdf")
+  watermarkEnabled Boolean  @default(false) @map("watermark_enabled")
+  watermarkText    String   @default("PODGLĄD") @map("watermark_text")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("print_settings")
 }
 
 model AiPromptTemplate {

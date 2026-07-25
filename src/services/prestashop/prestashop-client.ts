@@ -106,6 +106,14 @@ interface PrestaShopCategory {
 
 const DEBUG_SHOP_SYNC = process.env.DEBUG_SHOP_SYNC === 'true';
 
+/** Liczba prob dla ODCZYTOW (zapisy nigdy nie sa ponawiane - patrz nizej). */
+const PRESTASHOP_READ_RETRIES = Number(process.env.PRESTASHOP_READ_RETRIES || 3);
+const PRESTASHOP_RETRY_DELAY_MS = Number(process.env.PRESTASHOP_RETRY_DELAY_MS || 800);
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export interface PrestaShopProductDetails {
   id: string;
   sku: string;
@@ -352,35 +360,79 @@ export class PrestaShopClient {
 
     if (DEBUG_SHOP_SYNC) console.log(`[PrestaShop] Requesting: ${endpoint}`);
 
-    let response = await fetch(url, {
-      ...init,
-      headers: {
-        Authorization: authHeader,
-        ...(options.outputFormat === 'JSON' ? { Accept: 'application/json' } : {}),
-        ...(init.headers || {}),
-      },
-    });
-
-    // Fallback: some hosts strip Authorization header
-    if (!response.ok && response.status === 401) {
-      if (DEBUG_SHOP_SYNC) console.log('[PrestaShop] Auth header failed, trying ws_key parameter');
-      const urlWithKey = `${url}${url.includes('?') ? '&' : '?'}ws_key=${encodeURIComponent(this.apiKey)}`;
-      response = await fetch(urlWithKey, {
+    const sendRequest = async (): Promise<Response> => {
+      let response = await fetch(url, {
         ...init,
         headers: {
+          Authorization: authHeader,
           ...(options.outputFormat === 'JSON' ? { Accept: 'application/json' } : {}),
           ...(init.headers || {}),
         },
       });
+
+      // Fallback: some hosts strip Authorization header
+      if (!response.ok && response.status === 401) {
+        if (DEBUG_SHOP_SYNC) console.log('[PrestaShop] Auth header failed, trying ws_key parameter');
+        const urlWithKey = `${url}${url.includes('?') ? '&' : '?'}ws_key=${encodeURIComponent(this.apiKey)}`;
+        response = await fetch(urlWithKey, {
+          ...init,
+          headers: {
+            ...(options.outputFormat === 'JSON' ? { Accept: 'application/json' } : {}),
+            ...(init.headers || {}),
+          },
+        });
+      }
+
+      return response;
+    };
+
+    // Ponawiamy WYLACZNIE odczyty. Zapisy (POST/PUT/DELETE) moga sie czesciowo
+    // powiesc po stronie sklepu - ponowienie tworzyloby duplikaty zamowien czy
+    // produktow. Chwilowa awaria sieci lub 5xx/429 przy odczycie potrafila
+    // wywrocic caly cykl synchronizacji az do nastepnego crona.
+    const method = (init.method || 'GET').toUpperCase();
+    const isRetryable = method === 'GET' || method === 'HEAD';
+    const maxAttempts = isRetryable ? PRESTASHOP_READ_RETRIES : 1;
+
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const response = await sendRequest();
+
+        if (!response.ok) {
+          const text = await response.text();
+          const isTransient = response.status >= 500 || response.status === 429;
+
+          if (isTransient && attempt < maxAttempts) {
+            console.warn(
+              `[PrestaShop] ${response.status} dla ${endpoint} (proba ${attempt}/${maxAttempts}) - ponawiam`
+            );
+            await delay(PRESTASHOP_RETRY_DELAY_MS * attempt);
+            continue;
+          }
+
+          console.error(`[PrestaShop] Error ${response.status} for ${endpoint}:`, text.slice(0, 300));
+          throw new Error(`PrestaShop API error: ${response.status} ${text.slice(0, 200)}`);
+        }
+
+        return response;
+      } catch (error) {
+        lastError = error;
+        const isApiError = error instanceof Error && error.message.startsWith('PrestaShop API error');
+
+        // Blad sieciowy (fetch rzucil) - ponawiamy; blad HTTP zostal juz
+        // rozstrzygniety wyzej i nie kwalifikuje sie do kolejnej proby.
+        if (isApiError || attempt >= maxAttempts) throw error;
+
+        console.warn(
+          `[PrestaShop] Blad sieci dla ${endpoint} (proba ${attempt}/${maxAttempts}) - ponawiam:`,
+          error instanceof Error ? error.message : error
+        );
+        await delay(PRESTASHOP_RETRY_DELAY_MS * attempt);
+      }
     }
 
-    if (!response.ok) {
-      const text = await response.text();
-      console.error(`[PrestaShop] Error ${response.status} for ${endpoint}:`, text.slice(0, 300));
-      throw new Error(`PrestaShop API error: ${response.status} ${text.slice(0, 200)}`);
-    }
-
-    return response;
+    throw lastError instanceof Error ? lastError : new Error('PrestaShop request failed');
   }
 
   private async fetchWebService<T>(endpoint: string, init: RequestInit = {}): Promise<T> {

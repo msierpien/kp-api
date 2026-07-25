@@ -1,8 +1,12 @@
 # Base stage
 FROM node:20-alpine AS base
 
-# Install OpenSSL for Prisma + Python and build deps for canvas
-RUN apk add --no-cache openssl python3 make g++ cairo-dev jpeg-dev pango-dev giflib-dev
+# Install OpenSSL for Prisma + Python and build deps for canvas.
+# fontconfig + font-liberation: bez zadnego fontu w obrazie node-canvas renderuje
+# kwadraciki (tofu) zamiast tekstu. Liberation Sans jest metrycznym zamiennikiem
+# Arial i fontconfig mapuje "Arial" na niego automatycznie. Czcionki dekoracyjne
+# (np. Montserrat) nadal wgrywa sie przez panel (storage/fonts).
+RUN apk add --no-cache openssl python3 make g++ cairo-dev jpeg-dev pango-dev giflib-dev fontconfig font-liberation
 
 # Install pnpm
 RUN corepack enable && corepack prepare pnpm@latest --activate

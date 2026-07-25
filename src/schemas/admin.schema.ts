@@ -635,6 +635,9 @@ export const templateLayoutSchema = z.object({
   pages: z.array(templatePageSchema).optional(),
   print: printLayoutSchema.optional(),
   mockups: z.array(mockupConfigSchema).optional(),
+  // Kolory proponowane klientowi; pilnujemy formatu hex, bo trafiaja wprost
+  // do stylu tekstu i do wydruku.
+  palette: z.array(z.string().regex(/^#[0-9a-fA-F]{6}$/)).max(24).optional(),
 });
 
 export const templateAssetParamsSchema = z.object({

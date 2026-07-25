@@ -17,6 +17,11 @@ export interface TemplateLayoutJson {
   print?: PrintLayout;
   /** Wizualizacje projektu na zdjeciach produktu. */
   mockups?: MockupConfig[];
+  /**
+   * Kolory zaproponowane klientowi w portalu (hex). Pusta lista lub brak =
+   * klient dostaje swobodny wybornik.
+   */
+  palette?: string[];
 }
 
 // ============================================

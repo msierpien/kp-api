@@ -269,3 +269,19 @@ test('fonty webowe sa oznaczone jako niezdatne do druku', async () => {
   assert.equal(PRINTABLE_FONT_FORMATS.includes('woff'), false);
   assert.equal(PRINTABLE_FONT_FORMATS.includes('woff2'), false);
 });
+
+test('paleta kolorow szablonu przechodzi zapis i odrzuca smieci', () => {
+  const base = {
+    version: 2 as const,
+    canvas: { unit: 'mm' as const, widthMm: 90, heightMm: 50, dpi: 300, bleed: 0, safeArea: 0, backgroundColor: '#ffffff' },
+    fonts: [],
+    layers: [],
+  };
+
+  const parsed = templateLayoutSchema.parse({ ...base, palette: ['#000000', '#C0392B'] });
+  assert.deepEqual(parsed.palette, ['#000000', '#C0392B']);
+
+  // Bez walidacji kolor trafilby wprost do stylu tekstu i do wydruku.
+  assert.throws(() => templateLayoutSchema.parse({ ...base, palette: ['czerwony'] }));
+  assert.throws(() => templateLayoutSchema.parse({ ...base, palette: ['#fff'] }));
+});

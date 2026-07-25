@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import prisma from '../../lib/prisma';
 import { getQueueStats, retryJob, getRenderQueue } from '../../services/queue/render.queue';
+import { buildStorageUrl } from '../../services/storage/local-storage.service';
 
 export async function renderJobsRoutes(fastify: FastifyInstance) {
   // GET /admin/render-jobs/stats - Statystyki RenderJobs (z BullMQ + bazy)
@@ -102,9 +103,11 @@ export async function renderJobsRoutes(fastify: FastifyInstance) {
         const jobsWithOutput = jobs.map((job) => {
           const meta = (job.metadata || {}) as Record<string, unknown>;
           const assetId = (meta.packageAssetId || meta.assetId) as string | undefined;
+          const outputPath = assetId ? assetPathById.get(assetId) ?? null : null;
           return {
             ...job,
-            outputPath: assetId ? assetPathById.get(assetId) ?? null : null,
+            outputPath,
+            outputUrl: outputPath ? buildStorageUrl(outputPath) : null,
           };
         });
 

@@ -91,7 +91,9 @@ services:
       PUBLIC_PORTAL_BASE_URL: ${PUBLIC_PORTAL_BASE_URL}
       # Storage
       STORAGE_PATH: /app/storage
-      PUBLIC_STORAGE_URL: ${APP_URL}
+      # Pliki storage sa serwowane pod prefiksem /storage/ (fastify-static).
+      # Bez niego kazdy publiczny URL pliku (buildStorageUrl) konczy sie 404.
+      PUBLIC_STORAGE_URL: ${PUBLIC_STORAGE_URL:-${APP_URL}/storage}
       PRICE_SYNC_MAX_AUTO_CHANGE_PERCENT: ${PRICE_SYNC_MAX_AUTO_CHANGE_PERCENT:-20}
       PRICE_SYNC_MAX_AUTO_BATCH: ${PRICE_SYNC_MAX_AUTO_BATCH:-200}
     volumes:

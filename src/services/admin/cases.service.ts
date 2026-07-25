@@ -22,12 +22,13 @@ import { createZipBuffer, type ZipEntry } from '../../lib/zip';
 import {
   getCanvasHeightPx as getLayoutCanvasHeightPx,
   getCanvasWidthPx as getLayoutCanvasWidthPx,
+  getTemplatePages,
   normalizeCanvasConfig,
   pxToMm,
   type TemplateLayoutJson,
   type Layer,
 } from '../../types/template-layout';
-import { renderPreview } from '../renderer/fabric-renderer.service';
+import { renderPreview, renderPrintSheetPng } from '../renderer/fabric-renderer.service';
 import { validateAnswers } from '../renderer/text-validator.service';
 import { addPrintPackageJob } from '../queue/render.queue';
 import { buildStorageUrl, saveFile } from '../storage/local-storage.service';
@@ -665,6 +666,11 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
     }
 
     const printTarget = buildPrintLayout(layout);
+    // Szablony wielostronicowe: kazda sztuka to arkusz zlozony ze wszystkich
+    // stron (renderPrintSheetPng). buildPrintLayout zna tylko lustro pierwszej
+    // strony, wiec paczka mialaby sam przod (np. winietki bez tylu).
+    // Ta sciezka nie obsluguje jeszcze spadow (bleed).
+    const isMultiPage = getTemplatePages(layout).length > 1;
     const packageEntries: ZipEntry[] = [];
     const renderedItems: RenderedPackageItem[] = [];
     const packageBaseName = sanitizeFilePart(`${caseItem.order.orderReference}-${caseItem.template.code}`) || `case-${id}`;
@@ -673,22 +679,35 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
       await options.onProgress?.(20 + Math.round((itemIndex / qty) * 60));
       const flatAnswers = flattenCaseAnswers(answers, itemIndex);
       const itemBaseName = `${packageBaseName}-szt-${String(itemIndex + 1).padStart(2, '0')}`;
-      const templateData = {
-        answers: flatAnswers,
-        templateName: caseItem.template.name,
-        layoutConfig: printTarget.layout,
-        layoutOverrides: caseItem.layoutOverrides || undefined,
-      };
+      let pngBuffer: Buffer;
+      let renderDpi = printTarget.dpi;
+      let renderWidthPx = printTarget.widthPx;
+      let renderHeightPx = printTarget.heightPx;
 
-      const pngBuffer = await renderPreview(templateData as any, {
-        width: printTarget.widthPx,
-        height: printTarget.heightPx,
-        scale: 1,
-        deviceScaleFactor: 1,
-        format: 'png',
-        includeWatermark: false,
-      });
-      const pdfBuffer = await pngToPdfBuffer(pngBuffer, printTarget.widthPx, printTarget.heightPx, printTarget.dpi);
+      if (isMultiPage) {
+        const sheet = await renderPrintSheetPng(layout, flatAnswers, caseItem.layoutOverrides || undefined);
+        pngBuffer = sheet.buffer;
+        renderDpi = sheet.dpi;
+        renderWidthPx = sheet.widthPx;
+        renderHeightPx = sheet.heightPx;
+      } else {
+        const templateData = {
+          answers: flatAnswers,
+          templateName: caseItem.template.name,
+          layoutConfig: printTarget.layout,
+          layoutOverrides: caseItem.layoutOverrides || undefined,
+        };
+
+        pngBuffer = await renderPreview(templateData as any, {
+          width: printTarget.widthPx,
+          height: printTarget.heightPx,
+          scale: 1,
+          deviceScaleFactor: 1,
+          format: 'png',
+          includeWatermark: false,
+        });
+      }
+      const pdfBuffer = await pngToPdfBuffer(pngBuffer, renderWidthPx, renderHeightPx, renderDpi);
 
       const [savedPng, savedPdf] = await Promise.all([
         saveFile(pngBuffer, {
@@ -718,11 +737,11 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
               itemIndex,
               itemNumber: itemIndex + 1,
               generatedAt: new Date().toISOString(),
-              dpi: printTarget.dpi,
-              widthPx: printTarget.widthPx,
-              heightPx: printTarget.heightPx,
-              bleedPx: printTarget.bleedPx,
-              bleedMm: printTarget.bleedMm,
+              dpi: renderDpi,
+              widthPx: renderWidthPx,
+              heightPx: renderHeightPx,
+              bleedPx: isMultiPage ? 0 : printTarget.bleedPx,
+              bleedMm: isMultiPage ? 0 : printTarget.bleedMm,
             },
           },
         }),
@@ -738,11 +757,11 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
               itemIndex,
               itemNumber: itemIndex + 1,
               generatedAt: new Date().toISOString(),
-              dpi: printTarget.dpi,
-              widthPx: printTarget.widthPx,
-              heightPx: printTarget.heightPx,
-              bleedPx: printTarget.bleedPx,
-              bleedMm: printTarget.bleedMm,
+              dpi: renderDpi,
+              widthPx: renderWidthPx,
+              heightPx: renderHeightPx,
+              bleedPx: isMultiPage ? 0 : printTarget.bleedPx,
+              bleedMm: isMultiPage ? 0 : printTarget.bleedMm,
             },
           },
         }),

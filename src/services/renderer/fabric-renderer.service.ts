@@ -664,6 +664,28 @@ async function composePrintSheet(
 }
 
 /**
+ * PNG arkusza do druku (wszystkie strony zlozone wg print layoutu lub
+ * domyslnego skladania). Uzywane przez paczke do druku (per sztuka).
+ * Uwaga: sciezka wielostronicowa nie obsluguje jeszcze spadow (bleed).
+ */
+export async function renderPrintSheetPng(
+  layout: TemplateLayoutJson,
+  answers: Record<string, any>,
+  layoutOverrides?: any
+): Promise<{ buffer: Buffer; widthMm: number; heightMm: number; widthPx: number; heightPx: number; dpi: number }> {
+  const { buffer, widthMm, heightMm } = await composePrintSheet(layout, answers, layoutOverrides);
+  const dpi = Number(layout.canvas.dpi || 300);
+  return {
+    buffer,
+    widthMm,
+    heightMm,
+    widthPx: Math.round((widthMm / MM_PER_INCH) * dpi),
+    heightPx: Math.round((heightMm / MM_PER_INCH) * dpi),
+    dpi,
+  };
+}
+
+/**
  * PDF do druku obejmujacy wszystkie strony zlozone na arkuszu.
  * Dla szablonu jednostronicowego zachowanie jak renderPDF.
  */

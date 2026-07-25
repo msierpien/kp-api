@@ -3,7 +3,7 @@ import prisma from '../../lib/prisma';
 import { hashToken, maskToken } from '../../lib/token';
 import { validateAnswers } from '../../services/renderer/text-validator.service';
 import { saveFile, fileExists, buildStorageUrl } from '../../services/storage/local-storage.service';
-import { addFinalPdfJob } from '../../services/queue/render.queue';
+import { enqueueCasePrintPackage } from '../../services/admin/cases.service';
 import { listFonts } from '../../services/admin/fonts.service';
 import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
 import { MAX_PREVIEW_UPLOAD_BYTES, assertAllowedPngUpload, isUploadValidationError } from '../../lib/upload-validation';
@@ -836,55 +836,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
-        // Pobierz dane potrzebne do renderowania
-        const submitTemplate = getCaseTemplate(personalizationCase);
-        const templateSlug = (submitTemplate as any)?.slug || submitTemplate?.name?.toLowerCase().replace(/\s+/g, '-') || 'default';
-        const templateVersion = submitTemplate?.version || personalizationCase.templateVersionFrozen || 1;
-        const layoutConfig = (submitTemplate as any)?.layoutJson || null;
-        const orderId = personalizationCase.orderId;
-        const orderReference = personalizationCase.order?.orderReference;
-
-        // Utwórz RenderJob w bazie (dla śledzenia)
-        const dbRenderJob = await prisma.renderJob.create({
-          data: {
-            caseId: personalizationCase.id,
-            jobType: 'PDF_PRINT',
-            status: 'PENDING',
-            metadata: {
-              templateId: personalizationCase.templateId,
-              templateVersion: personalizationCase.templateVersionFrozen,
-            },
-          },
-        });
-
-        // Dodaj job do BullMQ queue
-        const bullmqJob = await addFinalPdfJob({
-          caseId: personalizationCase.id,
-          answers: flattenCaseAnswers(mergedAnswers) as Record<string, string | number | boolean>,
-          templateName: templateSlug,
-          templateVersion,
-          layoutConfig,
-          layoutOverrides: layoutOverrides as any,
-          orderId,
-          orderReference: orderReference || undefined,
-          renderOptions: {
-            width: 297, // A4 landscape for 2-page spread (148mm x 2)
-            height: 210,
-          },
-        });
-
-        // Zaktualizuj RenderJob z ID BullMQ
-        await prisma.renderJob.update({
-          where: { id: dbRenderJob.id },
-          data: {
-            metadata: {
-              ...(dbRenderJob.metadata as object || {}),
-              bullmqJobId: bullmqJob.id,
-            },
-          },
-        });
-
-        // Zaktualizuj status case na SUBMITTED
+        // Najpierw utrwal zatwierdzenie i overrides - paczka czyta je z bazy.
         const updated = await prisma.personalizationCase.update({
           where: { customerTokenHash: tokenHash },
           data: {
@@ -894,15 +846,34 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           },
         });
 
-        fastify.log.info(`RenderJob created: ${dbRenderJob.id}, BullMQ job: ${bullmqJob.id} for case: ${personalizationCase.id}`);
+        // Zatwierdzenie generuje komplet plikow jak "Generuj paczke" w adminie:
+        // wszystkie pozycje (per gosc), ustawienia druku tenanta (formaty,
+        // zbiorczy PDF, znak wodny). Wczesniej PDF_PRINT renderowal tylko
+        // pierwsza pozycje. Blad kolejkowania nie cofa zatwierdzenia klienta -
+        // admin zobaczy status sprawy i moze ponowic z panelu.
+        let renderJobInfo: { id: string; bullmqJobId?: string | number; status: string } | null = null;
+        try {
+          const enqueueResult = await enqueueCasePrintPackage(personalizationCase.id, {
+            tenantId: personalizationCase.order?.shop?.tenantId,
+          });
+          renderJobInfo = {
+            id: enqueueResult.renderJobId,
+            bullmqJobId: enqueueResult.bullmqJobId,
+            status: enqueueResult.status,
+          };
+          fastify.log.info(
+            `Print package queued: ${enqueueResult.renderJobId} (bullmq ${enqueueResult.bullmqJobId}) for case: ${personalizationCase.id}`
+          );
+        } catch (packageError) {
+          fastify.log.error(
+            { err: packageError, caseId: personalizationCase.id },
+            'Nie udalo sie zakolejkowac paczki po zatwierdzeniu'
+          );
+        }
 
         return reply.send({
           ...updated,
-          renderJob: {
-            id: dbRenderJob.id,
-            bullmqJobId: bullmqJob.id,
-            status: 'PENDING',
-          },
+          renderJob: renderJobInfo,
         });
       } catch (error) {
         fastify.log.error(error);

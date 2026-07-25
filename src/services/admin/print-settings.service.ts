@@ -85,9 +85,12 @@ export async function updatePrintSettings(input: UpdatePrintSettingsInput): Prom
 /**
  * Ustawienia druku przetłumaczone na opcje joba paczki. Wołane przy zlecaniu
  * (kontekst tenanta jest w request adminowym; worker dostaje gotowe opcje).
+ * Publiczny submit nie ma kontekstu tenanta — podaje tenantId sprawy wprost.
  */
-export async function resolvePrintPackageOptions(): Promise<PrintPackageOptions> {
-  const settings = await getPrintSettings();
+export async function resolvePrintPackageOptions(tenantId?: string): Promise<PrintPackageOptions> {
+  const settings = tenantId
+    ? toView(await prisma.printSettings.findUnique({ where: { tenantId } }))
+    : await getPrintSettings();
   const formats: Array<'pdf' | 'png'> = [];
   if (settings.formatPdf) formats.push('pdf');
   if (settings.formatPng) formats.push('png');

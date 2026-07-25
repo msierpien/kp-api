@@ -472,7 +472,7 @@ export async function validateCaseAnswers(id: string, payload: { answers?: any; 
   };
 }
 
-export async function enqueueCasePrintPackage(id: string) {
+export async function enqueueCasePrintPackage(id: string, enqueueOptions: { tenantId?: string } = {}) {
   const caseItem = await prisma.personalizationCase.findUnique({
     where: { id },
     include: {
@@ -516,9 +516,10 @@ export async function enqueueCasePrintPackage(id: string) {
     throw new CasePackageValidationError(validationSummary);
   }
 
-  // Ustawienia druku (formaty, zbiorczy PDF, znak wodny) czytamy tu, bo tylko
-  // request adminowy ma kontekst tenanta - worker dostaje gotowe opcje w jobie.
-  const packageOptions = await resolvePrintPackageOptions();
+  // Ustawienia druku (formaty, zbiorczy PDF, znak wodny) czytamy tu, bo worker
+  // dostaje gotowe opcje w jobie. Admin ma kontekst tenanta w request; publiczny
+  // submit podaje tenantId sprawy wprost.
+  const packageOptions = await resolvePrintPackageOptions(enqueueOptions.tenantId);
 
   const renderJob = await prisma.renderJob.create({
     data: {

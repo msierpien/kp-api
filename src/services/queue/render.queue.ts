@@ -11,8 +11,17 @@ export interface LayoutLayerOverride {
   rotation?: number;
 }
 
+/**
+ * Zmiany klienta nakladane na layout szablonu.
+ *
+ * `layers` obowiazuje wszystkie sztuki w pozycji. `items` pozwala nadpisac
+ * pojedyncza sztuke (np. mniejsza czcionka dla dwuczlonowego nazwiska) -
+ * wpis z `items` wygrywa nad wspolnym.
+ */
 export interface LayoutOverrides {
   layers: Record<string, LayoutLayerOverride>;
+  /** Klucz = indeks sztuki (0-based) jako tekst. */
+  items?: Record<string, { layers?: Record<string, LayoutLayerOverride> }>;
 }
 
 // Singleton connection

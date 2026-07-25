@@ -23,6 +23,8 @@ interface TemplateData {
   templateName: string;
   layoutConfig?: TemplateLayoutJson;
   layoutOverrides?: any;
+  /** Indeks sztuki - decyduje, ktore nadpisania per sztuka nalozyc. */
+  itemIndex?: number;
   watermark?: WatermarkConfig;
 }
 
@@ -122,14 +124,22 @@ async function loadLayoutFonts(layout: TemplateLayoutJson): Promise<void> {
  */
 function mergeLayoutWithOverrides(
   layout: TemplateLayoutJson,
-  overrides?: any
+  overrides?: any,
+  itemIndex?: number
 ): TemplateLayoutJson {
-  if (!overrides?.layers) return layout;
-  
+  if (!overrides?.layers && !overrides?.items) return layout;
+
   return {
     ...layout,
     layers: layout.layers.map(layer => {
-      const override = overrides.layers[layer.id];
+      // Nadpisanie konkretnej sztuki wygrywa nad wspolnym - klient moze
+      // zmniejszyc czcionke tylko tam, gdzie nazwisko sie nie miescilo.
+      const shared = overrides?.layers?.[layer.id];
+      const perItem =
+        itemIndex === undefined
+          ? undefined
+          : overrides?.items?.[String(itemIndex)]?.layers?.[layer.id];
+      const override = shared || perItem ? { ...(shared || {}), ...(perItem || {}) } : undefined;
       if (!override) return layer;
       
       // Styl wybrany przez klienta (o ile szablon na to pozwolil) trafia do
@@ -372,7 +382,7 @@ export async function renderPreview(
   });
 
   // Merge layout z overrides
-  const layout = mergeLayoutWithOverrides(data.layoutConfig, data.layoutOverrides);
+  const layout = mergeLayoutWithOverrides(data.layoutConfig, data.layoutOverrides, data.itemIndex);
 
   // Załaduj czcionki
   await loadLayoutFonts(layout);
@@ -551,7 +561,8 @@ function canvasMmDimensions(canvas: TemplateLayoutJson['canvas']): { widthMm: nu
 async function renderPageToPng(
   page: TemplatePage,
   answers: Record<string, any>,
-  layoutOverrides: any
+  layoutOverrides: any,
+  itemIndex?: number
 ): Promise<{ buffer: Buffer; widthPx: number; heightPx: number }> {
   const pageLayout: TemplateLayoutJson = {
     version: 2,
@@ -559,7 +570,7 @@ async function renderPageToPng(
     fonts: [],
     layers: page.layers,
   };
-  const merged = mergeLayoutWithOverrides(pageLayout, layoutOverrides);
+  const merged = mergeLayoutWithOverrides(pageLayout, layoutOverrides, itemIndex);
   await loadLayoutFonts(merged);
 
   const { widthPx, heightPx } = canvasPxDimensions(merged.canvas);
@@ -619,7 +630,8 @@ async function composePrintSheet(
   layout: TemplateLayoutJson,
   answers: Record<string, any>,
   layoutOverrides: any,
-  watermarkText?: string | null
+  watermarkText?: string | null,
+  itemIndex?: number
 ): Promise<{ buffer: Buffer; widthMm: number; heightMm: number }> {
   const { createCanvas, Image } = await import('canvas');
   const pages = getTemplatePages(layout);
@@ -629,7 +641,7 @@ async function composePrintSheet(
 
   const rendered = new Map<string, { buffer: Buffer; widthPx: number; heightPx: number }>();
   for (const page of pages) {
-    rendered.set(page.id, await renderPageToPng(page, answers, layoutOverrides));
+    rendered.set(page.id, await renderPageToPng(page, answers, layoutOverrides, itemIndex));
   }
 
   const sheet = createCanvas(mmToPx(print.sheet.widthMm), mmToPx(print.sheet.heightMm));
@@ -690,9 +702,10 @@ export async function renderPrintSheetPng(
   layout: TemplateLayoutJson,
   answers: Record<string, any>,
   layoutOverrides?: any,
-  watermarkText?: string | null
+  watermarkText?: string | null,
+  itemIndex?: number
 ): Promise<{ buffer: Buffer; widthMm: number; heightMm: number; widthPx: number; heightPx: number; dpi: number }> {
-  const { buffer, widthMm, heightMm } = await composePrintSheet(layout, answers, layoutOverrides, watermarkText);
+  const { buffer, widthMm, heightMm } = await composePrintSheet(layout, answers, layoutOverrides, watermarkText, itemIndex);
   const dpi = Number(layout.canvas.dpi || 300);
   return {
     buffer,

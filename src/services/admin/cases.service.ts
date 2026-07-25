@@ -716,7 +716,8 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
           layout,
           flatAnswers,
           caseItem.layoutOverrides || undefined,
-          pkg.watermarkText
+          pkg.watermarkText,
+          itemIndex
         );
         pngBuffer = sheet.buffer;
         renderDpi = sheet.dpi;
@@ -728,6 +729,8 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
           templateName: caseItem.template.name,
           layoutConfig: printTarget.layout,
           layoutOverrides: caseItem.layoutOverrides || undefined,
+          // Bez indeksu druk zignorowalby poprawki zrobione dla tej sztuki.
+          itemIndex,
           watermark: pkg.watermarkText
             ? { text: pkg.watermarkText, opacity: 0.18, angle: -30 }
             : undefined,

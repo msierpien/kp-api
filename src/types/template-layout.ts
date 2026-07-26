@@ -402,6 +402,7 @@ export interface TextFieldProperties {
   clientDraggable?: boolean;  // Czy klient może przesuwać
   clientResizable?: boolean;  // Czy klient może zmieniać rozmiar
   clientRotatable?: boolean;  // Czy klient może obracać
+  clientFontWeight?: boolean; // Czy klient może zmienić grubość pisma
   // Edycja typografii przez klienta - opt-in, bo wplywa na wyglad druku
   clientFontSize?: boolean;
   clientFontFamily?: boolean;
@@ -458,6 +459,7 @@ export interface TextBoxProperties {
   clientDraggable?: boolean;  // Czy klient może przesuwać
   clientResizable?: boolean;  // Czy klient może zmieniać rozmiar
   clientRotatable?: boolean;  // Czy klient może obracać
+  clientFontWeight?: boolean; // Czy klient może zmienić grubość pisma
   // Edycja typografii przez klienta - opt-in, bo wplywa na wyglad druku
   clientFontSize?: boolean;
   clientFontFamily?: boolean;

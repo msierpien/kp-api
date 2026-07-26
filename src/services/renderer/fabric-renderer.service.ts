@@ -145,8 +145,10 @@ function mergeLayoutWithOverrides(
       // Styl wybrany przez klienta (o ile szablon na to pozwolil) trafia do
       // properties warstwy. Bez tego wybory z portalu byly widoczne wylacznie
       // w podgladzie, a wydruk zachowywal ustawienia projektanta.
+      // `text` to tresc nadpisana edycja wprost na projekcie (np. imie
+      // i nazwisko w jednej linii zamiast entera z szablonu).
       const style: Record<string, unknown> = {};
-      for (const key of ['fontSize', 'fontFamily', 'fill', 'textAlign'] as const) {
+      for (const key of ['fontSize', 'fontFamily', 'fill', 'textAlign', 'fontWeight', 'text'] as const) {
         const value = (override as Record<string, unknown>)[key];
         if (value !== undefined && value !== null) {
           style[key] = value;

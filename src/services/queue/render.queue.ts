@@ -9,6 +9,14 @@ export interface LayoutLayerOverride {
   width?: number;
   height?: number;
   rotation?: number;
+  // Styl nadpisany przez klienta (o ile szablon pozwolil).
+  fontSize?: number;
+  fontFamily?: string;
+  fill?: string;
+  textAlign?: 'left' | 'center' | 'right' | 'justify';
+  fontWeight?: number;
+  /** Tresc nadpisana edycja wprost na projekcie (warstwy bez fieldKey). */
+  text?: string;
 }
 
 /**

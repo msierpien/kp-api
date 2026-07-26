@@ -470,6 +470,7 @@ const textFieldPropertiesSchema = z.object({
   clientFontFamily: z.boolean().optional(),
   clientColor: z.boolean().optional(),
   clientTextAlign: z.boolean().optional(),
+  clientFontWeight: z.boolean().optional(),
 });
 
 const staticTextPropertiesSchema = z.object({
@@ -515,6 +516,7 @@ const textboxPropertiesSchema = z.object({
   clientFontFamily: z.boolean().optional(),
   clientColor: z.boolean().optional(),
   clientTextAlign: z.boolean().optional(),
+  clientFontWeight: z.boolean().optional(),
 });
 
 const shapePropertiesSchema = z.object({

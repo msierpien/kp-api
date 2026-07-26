@@ -30,6 +30,10 @@ export interface LayoutOverrides {
   layers: Record<string, LayoutLayerOverride>;
   /** Klucz = indeks sztuki (0-based) jako tekst. */
   items?: Record<string, { layers?: Record<string, LayoutLayerOverride> }>;
+  /** Elementy dodane przez klienta - doklejane do warstw strony przed nadpisaniami. */
+  addedLayers?: Array<{ id: string; pageId: string; layer: unknown }>;
+  /** Kolumny listy gosci dopisane przez klienta. */
+  customFields?: Array<{ key: string; label: string; scope: 'SHARED' | 'INDIVIDUAL' }>;
 }
 
 // Singleton connection

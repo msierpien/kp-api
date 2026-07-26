@@ -121,17 +121,31 @@ async function loadLayoutFonts(layout: TemplateLayoutJson): Promise<void> {
 
 /**
  * Merge layoutu z overrides (zmiany pozycji przez klienta)
+ *
+ * `pageId` decyduje, ktore elementy dodane przez klienta (addedLayers)
+ * dokleic do warstw - kazdy zyje na konkretnej stronie projektu. Dodana
+ * warstwa jest zwykla warstwa, wiec nadpisania (pozycja, styl, per sztuka)
+ * dzialaja na niej ta sama sciezka co na warstwach szablonu.
  */
 function mergeLayoutWithOverrides(
   layout: TemplateLayoutJson,
   overrides?: any,
-  itemIndex?: number
+  itemIndex?: number,
+  pageId?: string
 ): TemplateLayoutJson {
-  if (!overrides?.layers && !overrides?.items) return layout;
+  const addedLayers: Layer[] = Array.isArray(overrides?.addedLayers)
+    ? overrides.addedLayers
+        .filter((entry: any) => entry?.layer && (!pageId || entry.pageId === pageId))
+        .map((entry: any) => entry.layer as Layer)
+    : [];
+
+  if (!overrides?.layers && !overrides?.items && addedLayers.length === 0) return layout;
+
+  const baseLayers = addedLayers.length ? [...layout.layers, ...addedLayers] : layout.layers;
 
   return {
     ...layout,
-    layers: layout.layers.map(layer => {
+    layers: baseLayers.map(layer => {
       // Nadpisanie konkretnej sztuki wygrywa nad wspolnym - klient moze
       // zmniejszyc czcionke tylko tam, gdzie nazwisko sie nie miescilo.
       const shared = overrides?.layers?.[layer.id];
@@ -383,8 +397,11 @@ export async function renderPreview(
     deviceScaleFactor,
   });
 
-  // Merge layout z overrides
-  const layout = mergeLayoutWithOverrides(data.layoutConfig, data.layoutOverrides, data.itemIndex);
+  // Merge layout z overrides. Sciezka jednostronicowa renderuje lustro
+  // pierwszej strony - elementy klienta filtrujemy po jej id (fallback
+  // 'page-1' spójny z getTemplatePages dla layoutow bez `pages`).
+  const firstPageId = getTemplatePages(data.layoutConfig)[0]?.id || 'page-1';
+  const layout = mergeLayoutWithOverrides(data.layoutConfig, data.layoutOverrides, data.itemIndex, firstPageId);
 
   // Załaduj czcionki
   await loadLayoutFonts(layout);
@@ -572,7 +589,7 @@ async function renderPageToPng(
     fonts: [],
     layers: page.layers,
   };
-  const merged = mergeLayoutWithOverrides(pageLayout, layoutOverrides, itemIndex);
+  const merged = mergeLayoutWithOverrides(pageLayout, layoutOverrides, itemIndex, page.id);
   await loadLayoutFonts(merged);
 
   const { widthPx, heightPx } = canvasPxDimensions(merged.canvas);

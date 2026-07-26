@@ -105,6 +105,53 @@ async function saveAnswers(
   return mergedAnswers;
 }
 
+// Limity na elementy dodawane przez klienta. Endpoint jest chroniony
+// wylacznie tokenem z linku, a layoutOverrides laduje w bazie jako Json
+// bez zadnych ograniczen - bez limitow jedna sprawa moglaby pomiescic
+// dowolna ilosc danych.
+const MAX_ADDED_LAYERS = 40;
+const MAX_ADDED_LAYER_TEXT = 2000;
+const MAX_CUSTOM_FIELDS = 10;
+const MAX_CUSTOM_FIELD_LABEL = 60;
+
+/** Zwraca komunikat bledu albo null, gdy payload miesci sie w limitach. */
+function validateLayoutOverridesLimits(overrides: unknown): string | null {
+  if (!overrides || typeof overrides !== 'object') return null;
+  const { addedLayers, customFields } = overrides as {
+    addedLayers?: unknown;
+    customFields?: unknown;
+  };
+
+  if (addedLayers !== undefined) {
+    if (!Array.isArray(addedLayers)) return 'Nieprawidłowy format dodanych elementów';
+    if (addedLayers.length > MAX_ADDED_LAYERS) {
+      return `Za dużo dodanych elementów (maksymalnie ${MAX_ADDED_LAYERS})`;
+    }
+    for (const entry of addedLayers) {
+      const layer = (entry as { layer?: { properties?: { text?: unknown } } })?.layer;
+      const text = layer?.properties?.text;
+      if (typeof text === 'string' && text.length > MAX_ADDED_LAYER_TEXT) {
+        return `Tekst elementu jest za długi (maksymalnie ${MAX_ADDED_LAYER_TEXT} znaków)`;
+      }
+    }
+  }
+
+  if (customFields !== undefined) {
+    if (!Array.isArray(customFields)) return 'Nieprawidłowy format dodanych kolumn';
+    if (customFields.length > MAX_CUSTOM_FIELDS) {
+      return `Za dużo dodanych kolumn (maksymalnie ${MAX_CUSTOM_FIELDS})`;
+    }
+    for (const field of customFields) {
+      const label = (field as { label?: unknown })?.label;
+      if (typeof label === 'string' && label.length > MAX_CUSTOM_FIELD_LABEL) {
+        return `Nazwa kolumny jest za długa (maksymalnie ${MAX_CUSTOM_FIELD_LABEL} znaków)`;
+      }
+    }
+  }
+
+  return null;
+}
+
 // Helper do dodawania nagłówków bezpieczeństwa
 function addSecurityHeaders(reply: FastifyReply) {
   reply.header('Referrer-Policy', 'no-referrer');
@@ -383,6 +430,11 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
       try {
         addSecurityHeaders(reply);
 
+        const limitsError = validateLayoutOverridesLimits(request.body?.layoutOverrides);
+        if (limitsError) {
+          return reply.status(400).send({ error: 'Bad Request', message: limitsError });
+        }
+
         // Hash tokena z URL przed wyszukaniem w bazie
         const tokenHash = hashToken(request.params.token);
 
@@ -537,6 +589,11 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
     ) => {
       try {
         addSecurityHeaders(reply);
+
+        const limitsError = validateLayoutOverridesLimits(request.body?.layoutOverrides);
+        if (limitsError) {
+          return reply.status(400).send({ error: 'Bad Request', message: limitsError });
+        }
 
         const tokenHash = hashToken(request.params.token);
 
@@ -740,6 +797,11 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
     ) => {
       try {
         addSecurityHeaders(reply);
+
+        const limitsError = validateLayoutOverridesLimits(request.body?.layoutOverrides);
+        if (limitsError) {
+          return reply.status(400).send({ error: 'Bad Request', message: limitsError });
+        }
 
         // Hash tokena z URL przed wyszukaniem w bazie
         const tokenHash = hashToken(request.params.token);

@@ -836,6 +836,11 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
+        // Zamrozenie layoutu w chwili zatwierdzenia. Bez tego edycja szablonu
+        // w adminie zmieniala wydruk spraw juz zatwierdzonych - klient
+        // akceptowal jeden projekt, a z drukarki wychodzil inny.
+        const layoutSnapshot = getCaseTemplate(personalizationCase)?.layoutJson ?? null;
+
         // Najpierw utrwal zatwierdzenie i overrides - paczka czyta je z bazy.
         const updated = await prisma.personalizationCase.update({
           where: { customerTokenHash: tokenHash },
@@ -843,6 +848,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
             status: 'SUBMITTED',
             submittedAt: new Date(),
             layoutOverrides: layoutOverrides ? JSON.parse(JSON.stringify(layoutOverrides)) : undefined,
+            layoutSnapshot: layoutSnapshot
+              ? JSON.parse(JSON.stringify(layoutSnapshot))
+              : undefined,
           },
         });
 

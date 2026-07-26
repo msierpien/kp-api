@@ -30,6 +30,7 @@ import {
 } from '../../types/template-layout';
 import { renderPreview, renderPrintSheetPng } from '../renderer/fabric-renderer.service';
 import { validateAnswers } from '../renderer/text-validator.service';
+import { getCaseLayout } from '../../lib/case-layout';
 import { addPrintPackageJob, type PrintPackageOptions } from '../queue/render.queue';
 import { resolvePrintPackageOptions } from './print-settings.service';
 import { buildStorageUrl, saveFile } from '../storage/local-storage.service';
@@ -455,7 +456,7 @@ export async function validateCaseAnswers(id: string, payload: { answers?: any; 
     throw new Error('Case not found');
   }
 
-  const layout = caseItem.template.layoutJson as unknown as TemplateLayoutJson | null;
+  const layout = getCaseLayout(caseItem);
   if (!layout) {
     throw new Error('Template layout is required for answer validation');
   }
@@ -495,7 +496,7 @@ export async function enqueueCasePrintPackage(id: string, enqueueOptions: { tena
     throw new Error('Case not found');
   }
 
-  const layout = caseItem.template.layoutJson as unknown as TemplateLayoutJson | null;
+  const layout = getCaseLayout(caseItem);
   if (!layout) {
     throw new Error('Template layout is required for print package rendering');
   }
@@ -618,7 +619,7 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
   let renderJob: { id: string; metadata: unknown } | null = null;
 
   try {
-    const layout = caseItem.template.layoutJson as unknown as TemplateLayoutJson | null;
+    const layout = getCaseLayout(caseItem);
 
     if (!layout) {
       throw new Error('Template layout is required for print package rendering');

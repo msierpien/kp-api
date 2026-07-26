@@ -376,6 +376,10 @@ export interface ImageProperties {
   type: 'image';
   imageUrl: string;
   fit: 'cover' | 'contain' | 'fill';
+  // Zgody na ruch w portalu klienta (opt-in, jak przy warstwach tekstowych).
+  clientDraggable?: boolean;
+  clientResizable?: boolean;
+  clientRotatable?: boolean;
 }
 
 /**

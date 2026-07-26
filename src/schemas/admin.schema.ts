@@ -433,6 +433,11 @@ const imagePropertiesSchema = z.object({
   type: z.literal('image'),
   imageUrl: z.string().min(1),
   fit: z.enum(['cover', 'contain', 'fill']).default('contain'),
+  // Zgody na ruch w portalu klienta - jak przy warstwach tekstowych.
+  // Tlo (background) celowo bez nich: klient nigdy nie rusza tla.
+  clientDraggable: z.boolean().optional(),
+  clientResizable: z.boolean().optional(),
+  clientRotatable: z.boolean().optional(),
 });
 
 const simpleSlotSchema = z.enum([

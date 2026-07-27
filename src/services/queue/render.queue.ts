@@ -17,6 +17,12 @@ export interface LayoutLayerOverride {
   fontWeight?: number;
   /** Tresc nadpisana edycja wprost na projekcie (warstwy bez fieldKey). */
   text?: string;
+  /** Kolejnosc warstwy - ozdobnik na wierzchu albo pod projektem. */
+  zIndex?: number;
+  /** Kolor ozdobnika SVG (podstawiany pod currentColor przy rasteryzacji). */
+  tint?: string;
+  /** Ukrycie warstwy przez klienta - nie trafia ani na podglad, ani na druk. */
+  visible?: boolean;
 }
 
 /**

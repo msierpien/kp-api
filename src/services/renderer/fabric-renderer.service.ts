@@ -163,7 +163,7 @@ function mergeLayoutWithOverrides(
       // `text` to tresc nadpisana edycja wprost na projekcie (np. imie
       // i nazwisko w jednej linii zamiast entera z szablonu).
       const style: Record<string, unknown> = {};
-      for (const key of ['fontSize', 'fontFamily', 'fill', 'textAlign', 'fontWeight', 'text'] as const) {
+      for (const key of ['fontSize', 'fontFamily', 'fill', 'textAlign', 'fontWeight', 'text', 'tint'] as const) {
         const value = (override as Record<string, unknown>)[key];
         if (value !== undefined && value !== null) {
           style[key] = value;
@@ -177,6 +177,11 @@ function mergeLayoutWithOverrides(
         width: override.width ?? layer.width,
         height: override.height ?? layer.height,
         rotation: override.rotation ?? layer.rotation,
+        // zIndex i visible to pola warstwy, nie properties: pierwsze decyduje
+        // o kolejnosci rysowania, drugie o tym, czy warstwa w ogole trafia
+        // na wydruk (klient moze ukryc element w edytorze).
+        zIndex: override.zIndex ?? layer.zIndex,
+        visible: override.visible ?? layer.visible,
         properties: Object.keys(style).length
           ? { ...(layer.properties as unknown as Record<string, unknown>), ...style }
           : layer.properties,

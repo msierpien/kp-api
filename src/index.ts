@@ -14,6 +14,7 @@ import { authRoutes } from './routes/auth.routes';
 import { adminRoutes } from './routes/admin';
 import { personalizationRoutes } from './routes/public/personalization.routes';
 import { prestashopWebhooksRoutes } from './routes/public/prestashop-webhooks.routes';
+import { printAgentRoutes } from './routes/public/print-agent.routes';
 import { publicInvoicesRoutes } from './routes/public/invoices.routes';
 import { reloadEmailService } from './services/admin/email-settings.service';
 import { initializeEmailService } from './services/email/email.service';
@@ -222,6 +223,9 @@ server.register(authRoutes, { prefix: '/auth' });
 server.register(adminRoutes, { prefix: '/admin' });
 server.register(personalizationRoutes, { prefix: '/personalization' });
 server.register(prestashopWebhooksRoutes, { prefix: '/webhooks/prestashop' });
+// Agent druku uwierzytelnia sie wlasnym tokenem, wiec stoi poza /admin -
+// tamtejsze hooki (kompatybilnosc panelu, RBAC, feature flags) by go odrzucily.
+server.register(printAgentRoutes, { prefix: '/print-agent' });
 server.register(publicInvoicesRoutes, { prefix: '/public/invoices' });
 
 // Bull Board Dashboard (tylko w development lub z flagą)

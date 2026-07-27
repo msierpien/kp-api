@@ -8,6 +8,8 @@ export const TENANT_MODELS = new Set([
   'Automation',
   'AiSettings',
   'PrintSettings',
+  'PrintAgent',
+  'PrintJob',
   'AiPromptTemplate',
   'AiUsageLog',
   'AiBulkContentJob',

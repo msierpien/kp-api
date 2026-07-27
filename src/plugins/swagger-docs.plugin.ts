@@ -35,6 +35,8 @@ export default fp(async (fastify) => {
         { name: 'auth', description: 'Autentykacja i autoryzacja' },
         { name: 'personalization', description: 'Portal klienta — personalizacja produktów (publiczne)' },
         { name: 'webhooks', description: 'Publiczne webhooki integracji sklepów' },
+        { name: 'print-agent', description: 'Lokalny agent druku — pobieranie i raportowanie zleceń' },
+        { name: 'print', description: 'Zlecenia druku i agenci (panel)' },
         { name: 'cases', description: 'Zarządzanie case\'ami personalizacji' },
         { name: 'orders', description: 'Zamówienia' },
         { name: 'shops', description: 'Integracje z platformami e-commerce' },

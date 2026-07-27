@@ -19,6 +19,8 @@ import { aiSettingsRoutes } from './ai-settings.routes';
 import { printSettingsRoutes } from './print-settings.routes';
 import { automationsRoutes } from './automations.routes';
 import { renderJobsRoutes } from './render-jobs.routes';
+import { printJobsRoutes } from './print-jobs.routes';
+import { printAgentsRoutes } from './print-agents.routes';
 import { tenantsRoutes } from './tenants.routes';
 import { usersRoutes } from './users.routes';
 import { storageRoutes } from './storage.routes';
@@ -86,6 +88,8 @@ export async function adminRoutes(fastify: FastifyInstance) {
   fastify.register(printSettingsRoutes, { prefix: '/print-settings' });
   fastify.register(automationsRoutes, { prefix: '/automations' });
   fastify.register(renderJobsRoutes, { prefix: '/render-jobs' });
+  fastify.register(printJobsRoutes, { prefix: '/print-jobs' });
+  fastify.register(printAgentsRoutes, { prefix: '/print-agents' });
   fastify.register(tenantsRoutes, { prefix: '/tenants' });
   fastify.register(usersRoutes, { prefix: '/users' });
   fastify.register(storageRoutes, { prefix: '/storage' });

@@ -14,6 +14,8 @@ export function isPersonalizationAdminPath(path: string) {
     path.startsWith('/templates') ||
     path.startsWith('/cases') ||
     path.startsWith('/render-jobs') ||
+    path.startsWith('/print-jobs') ||
+    path.startsWith('/print-agents') ||
     path.startsWith('/fonts');
 }
 
@@ -47,6 +49,10 @@ export function canAccessAdminPath(role: UserRole, method: string, url: string) 
   if (path === '/' || path.startsWith('/stats')) return method === 'GET';
   if (path.startsWith('/sync-logs')) return method === 'GET';
   if (path.startsWith('/render-jobs')) return true;
+  // Operator drukuje i widzi kolejke, ale tokeny agentow zostaja przy adminach —
+  // token daje prawo drukowania w imieniu calej firmy.
+  if (path.startsWith('/print-jobs')) return true;
+  if (path.startsWith('/print-agents')) return method === 'GET';
   if (path.startsWith('/cases')) return true;
   if (path.startsWith('/orders')) return method !== 'DELETE';
   if (path.startsWith('/order-returns')) return true;

@@ -22,6 +22,13 @@ import {
   UpdateCaseStatusInput,
   AddCaseNoteInput,
 } from '../../schemas/admin.schema';
+import { casePrintSchema } from '../../schemas/print.schema';
+import {
+  createPrintJob,
+  listCasePrintAssets,
+  toPrintJobDto,
+} from '../../services/print/print-job.service';
+import { isAppError } from '../../lib/errors';
 import prisma from '../../lib/prisma';
 import { config } from '../../config';
 import { decrypt } from '../../lib/encryption';
@@ -326,6 +333,114 @@ export async function casesRoutes(fastify: FastifyInstance) {
           message: 'Nie udało się wygenerować paczki do druku',
         });
       }
+    }
+  );
+
+  // GET /admin/cases/:id/print-assets
+  fastify.get<{ Params: CaseIdParams }>(
+    '/:id/print-assets',
+    {
+      schema: {
+        tags: ['cases'],
+        summary: 'Pliki tej sprawy, ktore mozna wyslac na drukarke',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          200: { type: 'object', additionalProperties: true },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: CaseIdParams }>, reply: FastifyReply) => {
+      const parsed = caseIdParamsSchema.safeParse(request.params);
+      if (!parsed.success) {
+        return reply
+          .status(400)
+          .send({ error: 'Validation Error', message: parsed.error.errors[0].message });
+      }
+      return reply.send({ assets: await listCasePrintAssets(parsed.data.id) });
+    }
+  );
+
+  // POST /admin/cases/:id/print — glowna droga druku z panelu
+  fastify.post<{ Params: CaseIdParams }>(
+    '/:id/print',
+    {
+      schema: {
+        tags: ['cases'],
+        summary: 'Zlec druk plikow tej sprawy',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          201: { type: 'object', additionalProperties: true },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: CaseIdParams }>, reply: FastifyReply) => {
+      const params = caseIdParamsSchema.safeParse(request.params);
+      const body = casePrintSchema.safeParse(request.body);
+
+      if (!params.success || !body.success) {
+        const message = params.success
+          ? body.error!.errors[0].message
+          : params.error.errors[0].message;
+        return reply.status(400).send({ error: 'Validation Error', message });
+      }
+
+      const assets = await listCasePrintAssets(params.data.id);
+      if (!assets.length) {
+        return reply.status(404).send({
+          error: 'Not Found',
+          message: 'Ta sprawa nie ma jeszcze plikow do druku — wygeneruj paczke',
+        });
+      }
+
+      // Zakres wybiera operator: komplet to jeden plik z wszystkimi sztukami,
+      // 'items' to kazda sztuka osobno (latwiej powtorzyc pojedyncza po zacieciu).
+      let selected = assets;
+      if (body.data.scope === 'combined') {
+        selected = assets.filter((asset) => asset.kind === 'combined');
+      } else if (body.data.scope === 'items') {
+        selected = assets.filter((asset) => asset.kind === 'item');
+      } else {
+        const wanted = new Set(body.data.assetIds ?? []);
+        selected = assets.filter((asset) => wanted.has(asset.id));
+      }
+
+      if (!selected.length) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: 'Wybrany zakres nie obejmuje zadnego pliku',
+        });
+      }
+
+      const created = [];
+      try {
+        for (const asset of selected) {
+          const job = await createPrintJob({
+            assetId: asset.id,
+            agentId: body.data.agentId,
+            profile: body.data.profile,
+            copies: body.data.copies,
+            requestedById: request.user?.userId ?? null,
+          });
+          created.push(toPrintJobDto(job));
+        }
+      } catch (error) {
+        if (isAppError(error)) {
+          // Czesc zadan mogla juz powstac - mowimy o tym wprost, zeby operator
+          // wiedzial, ze polowa nakladu jest w kolejce.
+          return reply.status(error.statusCode).send({
+            error: error.error,
+            message: created.length
+              ? `${error.message} (utworzono juz ${created.length} zadan)`
+              : error.message,
+          });
+        }
+        throw error;
+      }
+
+      return reply.status(201).send({ jobs: created, created: created.length });
     }
   );
 

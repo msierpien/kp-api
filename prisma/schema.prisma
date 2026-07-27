@@ -38,6 +38,8 @@ model Tenant {
   emailSettings         EmailSettings[]
   aiSettings            AiSettings?
   printSettings         PrintSettings?
+  printAgents           PrintAgent[]
+  printJobs             PrintJob[]
   decorationAssets      DecorationAsset[]
   aiPromptTemplates     AiPromptTemplate[]
   aiUsageLogs           AiUsageLog[]
@@ -796,6 +798,7 @@ model PersonalizationCase {
   answerVersions PersonalizationAnswerVersion[]
   renderJobs     RenderJob[]
   assets         Asset[]
+  printJobs      PrintJob[]
 
   @@index([orderId])
   @@index([status])
@@ -890,11 +893,98 @@ model Asset {
   metadata  Json? // dodatkowe dane (width, height, generated, etc)
   createdAt DateTime @default(now()) @map("created_at")
 
-  case PersonalizationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  case      PersonalizationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  printJobs PrintJob[]
 
   @@index([caseId])
   @@index([assetType])
   @@map("assets")
+}
+
+// ============================================
+// Druk fizyczny (agent lokalny przy drukarce)
+// ============================================
+
+/// Maszyna z drukarkami, ktora odpytuje API o zlecenia druku.
+///
+/// Serwer nie ma jak dosiegnac drukarki w sieci lokalnej klienta (NAT, mDNS),
+/// wiec kierunek jest odwrotny: agent laczy sie do nas i sam pobiera zadania.
+model PrintAgent {
+  id       String @id @default(cuid())
+  tenantId String @map("tenant_id")
+  name     String
+  status   String @default("ACTIVE") // ACTIVE, DISABLED
+
+  // Token uwierzytelniajacy agenta - ten sam wzorzec co token klienta:
+  // szukamy po hashu, plaintext pokazujemy tylko raz przy nadaniu.
+  tokenHash      String    @unique @map("token_hash")
+  tokenEncrypted String?   @map("token_encrypted")
+  tokenPrefix    String    @map("token_prefix") // poczatek tokenu do listy w panelu
+  tokenRotatedAt DateTime? @map("token_rotated_at")
+
+  /// Profile druku zgloszone przez agenta - jedyne zrodlo listy profili dla panelu.
+  profilesJson   Json?     @map("profiles_json")
+  printersOnline Json?     @map("printers_online") // ostatni odczyt lpstat
+  agentVersion   String?   @map("agent_version")
+  hostname       String?
+  lastSeenAt     DateTime? @map("last_seen_at")
+  lastIp         String?   @map("last_ip")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  jobs   PrintJob[]
+
+  @@index([tenantId])
+  @@index([lastSeenAt])
+  @@map("print_agents")
+}
+
+/// Zlecenie wydruku jednego pliku. Ta tabela JEST kolejka - agent pobiera
+/// zadania przez atomowy update statusu, bez posrednictwa BullMQ.
+model PrintJob {
+  id       String  @id @default(cuid())
+  tenantId String  @map("tenant_id")
+  assetId  String  @map("asset_id")
+  caseId   String? @map("case_id") // denormalizacja: historia wydrukow na stronie sprawy
+  agentId  String? @map("agent_id")
+
+  /// Klucz profilu w config.json agenta - profil zyje na Macu, nie w bazie.
+  profile  String
+  copies   Int    @default(1)
+  priority Int    @default(0)
+
+  status      String @default("QUEUED") // QUEUED, CLAIMED, PRINTING, DONE, FAILED, CANCELLED, STALE
+  attempts    Int    @default(0)
+  maxAttempts Int    @default(3) @map("max_attempts")
+
+  // Dzierzawa zadania: agent dostaje claimToken i ma czas do claimExpiresAt.
+  claimToken     String?   @map("claim_token")
+  claimedAt      DateTime? @map("claimed_at")
+  claimExpiresAt DateTime? @map("claim_expires_at")
+
+  cupsJobId String? @map("cups_job_id")
+  error     String? @db.Text
+  metadata  Json? // fileName, geometry, profileSnapshot, cupsState
+
+  requestedById String?   @map("requested_by_id")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  startedAt     DateTime? @map("started_at")
+  completedAt   DateTime? @map("completed_at")
+
+  tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  asset       Asset                @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  case        PersonalizationCase? @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  agent       PrintAgent?          @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  requestedBy User?                @relation(fields: [requestedById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status])
+  @@index([agentId, status])
+  @@index([caseId])
+  @@index([claimExpiresAt])
+  @@index([createdAt])
+  @@map("print_jobs")
 }
 
 // ============================================
@@ -1179,6 +1269,7 @@ model User {
 
   tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   authSessions AuthSession[]
+  printJobs    PrintJob[]
 
   @@index([tenantId])
   @@index([email])

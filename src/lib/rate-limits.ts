@@ -14,6 +14,23 @@ export const RATE_LIMITS = {
     timeWindow: '1 minute',
     groupId: 'prestashop-webhook',
   },
+  // Agent druku odpytuje co ~10 s (6 hello + 6 claim na minute), wiec 120
+  // zostawia szesciokrotny zapas na ponowienia i kilku agentow za jednym NAT-em.
+  printAgentPoll: {
+    max: 120,
+    timeWindow: '1 minute',
+    groupId: 'print-agent-poll',
+  },
+  printAgentReport: {
+    max: 120,
+    timeWindow: '1 minute',
+    groupId: 'print-agent-report',
+  },
+  printAgentFile: {
+    max: 60,
+    timeWindow: '1 minute',
+    groupId: 'print-agent-file',
+  },
   adminUpload: {
     max: 20,
     timeWindow: '1 minute',

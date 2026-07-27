@@ -380,6 +380,10 @@ export interface ImageProperties {
   clientDraggable?: boolean;
   clientResizable?: boolean;
   clientRotatable?: boolean;
+  /** Kolor podstawiany pod `currentColor` w SVG (ozdobnik z palety projektu). */
+  tint?: string;
+  /** Czy skalowanie ma trzymac proporcje zrodla. */
+  lockAspectRatio?: boolean;
 }
 
 /**

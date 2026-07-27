@@ -29,4 +29,10 @@ export const RATE_LIMITS = {
     timeWindow: '1 minute',
     groupId: 'personalization-preview',
   },
+  /** Wgrywanie wlasnych grafik przez klienta w edytorze. */
+  publicAssetUpload: {
+    max: 10,
+    timeWindow: '1 minute',
+    groupId: 'public-asset-upload',
+  },
 } as const;

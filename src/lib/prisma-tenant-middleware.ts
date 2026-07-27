@@ -49,6 +49,7 @@ export const TENANT_MODELS = new Set([
   'CompetitorPriceAutomationRun',
   'CustomerReturnRequest',
   'ReturnShippingPayment',
+  'DecorationAsset',
 ]);
 
 const DEBUG_TENANT_CONTEXT = process.env.DEBUG_TENANT_CONTEXT === 'true';

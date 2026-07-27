@@ -1,4 +1,9 @@
 # Base stage
+#
+# @resvg/resvg-js (rasteryzacja SVG ozdobnikow do druku) nie wymaga pakietow
+# systemowych - pnpm zaciaga prebuilt binarke linux-x64-musl z lockfile.
+# node-canvas SVG-a nie otwiera, wiec bez resvg ozdobnik wektorowy wychodzi
+# z drukarki jako pusty prostokat.
 FROM node:20-alpine AS base
 
 # Install OpenSSL for Prisma + Python and build deps for canvas.

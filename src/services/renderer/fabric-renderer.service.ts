@@ -2,6 +2,7 @@ import { loadImage, registerFont } from 'canvas';
 import { StaticCanvas, FabricImage, IText, Textbox } from 'fabric/node';
 import type { TemplateLayoutJson, TemplatePage, PrintLayout, Layer, TextFieldProperties, TextBoxProperties, ImageProperties, MockupConfig } from '../../types/template-layout';
 import { getTemplatePages } from '../../types/template-layout';
+import { isSvgPath, rasterizeSvgFile } from './svg-raster.service';
 import { drawImageInQuad, quadToPixels, type Quad } from '../../lib/mockup-warp';
 import path from 'path';
 import fs from 'fs/promises';
@@ -274,9 +275,20 @@ async function layerToFabricObject(
     const imageUrl = props.imageUrl.startsWith('http')
       ? props.imageUrl
       : path.join(config.storage.path, props.imageUrl);
-    
+
     try {
-      const img = await loadImage(imageUrl);
+      // SVG: node-canvas go nie otworzy, wiec najpierw rasteryzujemy przez
+      // resvg w docelowej rozdzielczosci (z ewentualnym przebarwieniem
+      // na kolor z palety projektu).
+      const img = isSvgPath(imageUrl) && !props.imageUrl.startsWith('http')
+        ? await loadImage(
+            await rasterizeSvgFile({
+              filePath: imageUrl,
+              widthPx: Math.max(1, layer.width * scale),
+              tint: (props as unknown as { tint?: string }).tint,
+            })
+          )
+        : await loadImage(imageUrl);
       
       return new FabricImage(img as any, {
         ...common,

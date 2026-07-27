@@ -6,8 +6,15 @@ import { saveFile, fileExists, buildStorageUrl } from '../../services/storage/lo
 import { enqueueCasePrintPackage } from '../../services/admin/cases.service';
 import { listFonts } from '../../services/admin/fonts.service';
 import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
-import { MAX_PREVIEW_UPLOAD_BYTES, assertAllowedPngUpload, isUploadValidationError } from '../../lib/upload-validation';
+import {
+  MAX_PREVIEW_UPLOAD_BYTES,
+  assertAllowedImageUpload,
+  assertAllowedPngUpload,
+  isUploadValidationError,
+} from '../../lib/upload-validation';
 import { RATE_LIMITS } from '../../lib/rate-limits';
+import { listDecorations } from '../../services/admin/decorations.service';
+import { SvgSanitizeError, sanitizeSvg, svgSupportsTint } from '../../lib/svg-sanitizer';
 import {
   canonicalizeTemplateForms,
   flattenCaseAnswers,
@@ -113,6 +120,27 @@ const MAX_ADDED_LAYERS = 40;
 const MAX_ADDED_LAYER_TEXT = 2000;
 const MAX_CUSTOM_FIELDS = 10;
 const MAX_CUSTOM_FIELD_LABEL = 60;
+
+/** Wlasna grafika klienta - wieksza niz ozdobnik z biblioteki (zdjecia). */
+const MAX_CLIENT_ASSET_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Rozdzielczosc zrodla bitmapy. Klient dzieli ja przez docelowy rozmiar
+ * w calach i dostaje realne DPI wydruku - ponizej 300 ostrzegamy, ze
+ * grafika moze byc nieostra.
+ */
+async function readRasterDimensions(
+  buffer: Buffer
+): Promise<{ widthPx: number; heightPx: number } | null> {
+  try {
+    const { loadImage } = await import('canvas');
+    const image = await loadImage(buffer);
+    return { widthPx: image.width, heightPx: image.height };
+  } catch {
+    // Brak wymiarow tylko wylacza ostrzezenie o DPI - nie blokuje uploadu.
+    return null;
+  }
+}
 
 /** Zwraca komunikat bledu albo null, gdy payload miesci sie w limitach. */
 function validateLayoutOverridesLimits(overrides: unknown): string | null {
@@ -1115,6 +1143,204 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           error: 'Internal Server Error',
           message: 'Nie udało się zapisać podglądu',
+        });
+      }
+    }
+  );
+
+  // GET /personalization/:token/decorations - biblioteka ozdobnikow sprzedawcy
+  fastify.get<{ Params: PersonalizationParams }>(
+    '/:token/decorations',
+    {
+      schema: {
+        tags: ['personalization'],
+        summary: 'Ozdobniki dostępne dla tej sprawy',
+        security: [],
+        params: { type: 'object', properties: { token: { type: 'string' } } },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              decorations: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            },
+          },
+          403: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: PersonalizationParams }>, reply: FastifyReply) => {
+      try {
+        addSecurityHeaders(reply);
+
+        const personalizationCase = await prisma.personalizationCase.findUnique({
+          where: { customerTokenHash: hashToken(request.params.token) },
+          select: {
+            tokenActive: true,
+            order: { select: { shop: { select: { tenantId: true } } } },
+            orderItem: { select: { order: { select: { shop: { select: { tenantId: true } } } } } },
+          },
+        });
+
+        if (!personalizationCase) {
+          return reply.status(404).send({ error: 'Not Found', message: 'Nie znaleziono personalizacji' });
+        }
+        if (!personalizationCase.tokenActive) {
+          return reply.status(403).send({ error: 'Forbidden', message: 'Token jest nieaktywny' });
+        }
+        if (!(await assertPersonalizationFeatureEnabled(personalizationCase, reply))) return;
+
+        // Tenant bierzemy ze sprawy - portal nie ma kontekstu admina, a klient
+        // nie moze zobaczyc biblioteki innego sprzedawcy.
+        const tenantId =
+          personalizationCase.order?.shop?.tenantId ||
+          personalizationCase.orderItem?.order?.shop?.tenantId;
+
+        if (!tenantId) return reply.send({ decorations: [] });
+
+        return reply.send({ decorations: await listDecorations({ tenantId }) });
+      } catch (error) {
+        fastify.log.error(error);
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Nie udało się pobrać ozdobników',
+        });
+      }
+    }
+  );
+
+  // POST /personalization/:token/asset - wlasna grafika klienta
+  fastify.post<{ Params: PersonalizationParams }>(
+    '/:token/asset',
+    {
+      config: { rateLimit: RATE_LIMITS.publicAssetUpload },
+      schema: {
+        tags: ['personalization'],
+        summary: 'Wgraj własną grafikę do projektu',
+        description: 'Przyjmuje multipart/form-data (PNG/JPG/WebP/SVG)',
+        security: [],
+        consumes: ['multipart/form-data'],
+        params: { type: 'object', properties: { token: { type: 'string' } } },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              imageUrl: { type: 'string' },
+              filePath: { type: 'string' },
+              mimeType: { type: 'string' },
+              widthPx: { type: 'integer', nullable: true },
+              heightPx: { type: 'integer', nullable: true },
+              tintable: { type: 'boolean' },
+            },
+          },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          403: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: PersonalizationParams }>, reply: FastifyReply) => {
+      try {
+        addSecurityHeaders(reply);
+
+        const personalizationCase = await prisma.personalizationCase.findUnique({
+          where: { customerTokenHash: hashToken(request.params.token) },
+          select: {
+            id: true,
+            tokenActive: true,
+            order: { select: { shop: { select: { tenantId: true } } } },
+            template: { select: { version: true } },
+            orderItem: {
+              select: {
+                orderId: true,
+                order: { select: { shop: { select: { tenantId: true } } } },
+                personalizedProduct: { select: { template: { select: { version: true } } } },
+              },
+            },
+          },
+        });
+
+        if (!personalizationCase) {
+          return reply.status(404).send({ error: 'Not Found', message: 'Nie znaleziono personalizacji' });
+        }
+        if (!personalizationCase.tokenActive) {
+          return reply.status(403).send({ error: 'Forbidden', message: 'Token jest nieaktywny' });
+        }
+        if (!(await assertPersonalizationFeatureEnabled(personalizationCase, reply))) return;
+
+        const data = await request.file();
+        if (!data) {
+          return reply.status(400).send({ error: 'Bad Request', message: 'Brak pliku' });
+        }
+
+        const buffer = await data.toBuffer();
+        const isSvg = data.mimetype === 'image/svg+xml' || data.filename.toLowerCase().endsWith('.svg');
+
+        let payload = buffer;
+        let extension = 'png';
+        let mimeType = data.mimetype;
+        let tintable = false;
+        let dimensions: { widthPx: number; heightPx: number } | null = null;
+
+        if (isSvg) {
+          // Plik klienta trafia na nasza domene - czyscimy go u wejscia.
+          const clean = sanitizeSvg(buffer.toString('utf-8'));
+          payload = Buffer.from(clean, 'utf-8');
+          extension = 'svg';
+          mimeType = 'image/svg+xml';
+          tintable = svgSupportsTint(clean);
+        } else {
+          assertAllowedImageUpload(buffer, data.mimetype, { maxBytes: MAX_CLIENT_ASSET_BYTES });
+          extension = data.mimetype === 'image/jpeg' ? 'jpg' : data.mimetype === 'image/webp' ? 'webp' : 'png';
+          // Rozdzielczosc zrodla - klient policzy z niej realne DPI wydruku.
+          dimensions = await readRasterDimensions(buffer);
+        }
+
+        if (payload.length > MAX_CLIENT_ASSET_BYTES) {
+          return reply.status(400).send({
+            error: 'Upload Failed',
+            message: 'Plik jest za duży (maksymalnie 5 MB)',
+          });
+        }
+
+        const savedFile = await saveFile(payload, {
+          orderId: personalizationCase.orderItem?.orderId || 'unknown',
+          templateVersion:
+            personalizationCase.template?.version ||
+            personalizationCase.orderItem?.personalizedProduct?.template?.version ||
+            1,
+          filename: `klient-${personalizationCase.id}`,
+          extension,
+        });
+
+        // Asset przypisany do sprawy, NIE do biblioteki sprzedawcy - to plik
+        // jednego klienta i nie ma prawa pojawic sie u innych.
+        await prisma.asset.create({
+          data: {
+            caseId: personalizationCase.id,
+            assetType: 'CLIENT_UPLOAD',
+            filePath: savedFile.path,
+            fileSize: payload.length,
+            mimeType,
+          },
+        });
+
+        return reply.send({
+          imageUrl: savedFile.path,
+          filePath: savedFile.path,
+          mimeType,
+          widthPx: dimensions?.widthPx ?? null,
+          heightPx: dimensions?.heightPx ?? null,
+          tintable,
+        });
+      } catch (error) {
+        fastify.log.error({ err: error }, '[ClientAsset] Upload failed');
+        if (error instanceof SvgSanitizeError || isUploadValidationError(error)) {
+          return reply.status(400).send({ error: 'Upload Failed', message: error.message });
+        }
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Nie udało się wgrać pliku',
         });
       }
     }

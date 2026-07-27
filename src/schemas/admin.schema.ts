@@ -438,6 +438,9 @@ const imagePropertiesSchema = z.object({
   clientDraggable: z.boolean().optional(),
   clientResizable: z.boolean().optional(),
   clientRotatable: z.boolean().optional(),
+  // Kolor ozdobnika (SVG z currentColor) i blokada proporcji.
+  tint: z.string().optional(),
+  lockAspectRatio: z.boolean().optional(),
 });
 
 const simpleSlotSchema = z.enum([

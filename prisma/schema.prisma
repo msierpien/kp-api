@@ -38,6 +38,7 @@ model Tenant {
   emailSettings         EmailSettings[]
   aiSettings            AiSettings?
   printSettings         PrintSettings?
+  decorationAssets      DecorationAsset[]
   aiPromptTemplates     AiPromptTemplate[]
   aiUsageLogs           AiUsageLog[]
   aiBulkContentJobs     AiBulkContentJob[]
@@ -956,6 +957,31 @@ model AiSettings {
 }
 
 // Domyślne ustawienia generowania paczek do druku (panel: Ustawienia -> Druk).
+/// Biblioteka ozdobnikow sprzedawcy - klient wybiera z niej grafiki
+/// w edytorze. Wspolna dla wszystkich szablonow tenanta (w odroznieniu
+/// od TemplateAsset, ktory nalezy do jednego szablonu).
+model DecorationAsset {
+  id        String   @id @default(cuid())
+  tenantId  String   @map("tenant_id")
+  /// SLUBNE | KWIATOWE | LINIE | MONOGRAMY
+  category  String
+  name      String
+  /// Sciezka relatywna w storage.
+  filePath  String   @map("file_path")
+  mimeType  String   @map("mime_type")
+  fileSize  Int      @map("file_size")
+  /// SVG z `currentColor` da sie przebarwic na kolor z palety projektu.
+  tintable  Boolean  @default(false)
+  isActive  Boolean  @default(true) @map("is_active")
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, category])
+  @@map("decoration_assets")
+}
+
 model PrintSettings {
   id               String   @id @default(cuid())
   tenantId         String   @unique @map("tenant_id")

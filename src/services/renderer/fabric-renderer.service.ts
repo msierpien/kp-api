@@ -265,10 +265,23 @@ async function layerToFabricObject(
           )
         : await loadImage(imageUrl);
       
+      // Rozmiar obrazu ustawia WYLACZNIE skala. Wczesniej szly tu takze
+      // `width`/`height` z `common`, a fabric mnozy jedno przez drugie -
+      // obraz wychodzil w rozmiarze (docelowy^2 / naturalny). Przy grafice
+      // zblizonej rozmiarem do ramki bylo to ledwie widoczne (serce: 87%),
+      // ale zdjecie klienta 5000 px w ramce 1176 px kurczylo sie do 24%.
+      //
+      // `originX/originY: center` - tak samo jak w edytorze i w portalu.
+      // Bez tego serwer rysowal obraz od lewego gornego rogu, czyli
+      // przesuniety o pol jego szerokosci i wysokosci wzgledem podgladu.
+      const { width: _targetWidth, height: _targetHeight, ...imageCommon } = common;
+
       return new FabricImage(img as any, {
-        ...common,
-        scaleX: (layer.width * scale) / img.width,
-        scaleY: (layer.height * scale) / img.height,
+        ...imageCommon,
+        originX: 'center',
+        originY: 'center',
+        scaleX: (layer.width * scale) / (img.width || 1),
+        scaleY: (layer.height * scale) / (img.height || 1),
       });
     } catch (error) {
       console.error(`[Fabric] Failed to load image ${imageUrl}:`, error);

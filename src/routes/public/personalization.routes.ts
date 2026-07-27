@@ -157,8 +157,22 @@ async function readRasterDimensions(
  * wszystko, czego schemat nie zna, ma tu zginac (m.in. `imageUrl`
  * wskazujacy poza magazyn plikow).
  */
-function readLayoutOverrides(body: { layoutOverrides?: unknown } | undefined) {
-  return parseLayoutOverrides(body?.layoutOverrides);
+function readLayoutOverrides(
+  fastify: FastifyInstance,
+  body: { layoutOverrides?: unknown } | undefined
+) {
+  const result = parseLayoutOverrides(body?.layoutOverrides);
+
+  // Rozjazd portal <-> API zostawia slad. Cisza w tym miejscu kosztowala juz
+  // dwa razy: pole dodane po jednej stronie znikalo przy zapisie po drugiej.
+  if (result.ok && result.dropped.length) {
+    fastify.log.warn(
+      { droppedKeys: result.dropped.slice(0, 20) },
+      'layoutOverrides: klucze spoza schematu zostaly pominiete przy zapisie'
+    );
+  }
+
+  return result;
 }
 
 // Helper do dodawania nagłówków bezpieczeństwa
@@ -487,7 +501,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
       try {
         addSecurityHeaders(reply);
 
-        const overrides = readLayoutOverrides(request.body);
+        const overrides = readLayoutOverrides(fastify, request.body);
         if (!overrides.ok) {
           return reply.status(400).send({ error: 'Bad Request', message: overrides.message });
         }
@@ -646,7 +660,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
       try {
         addSecurityHeaders(reply);
 
-        const overrides = readLayoutOverrides(request.body);
+        const overrides = readLayoutOverrides(fastify, request.body);
         if (!overrides.ok) {
           return reply.status(400).send({ error: 'Bad Request', message: overrides.message });
         }
@@ -859,7 +873,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
       try {
         addSecurityHeaders(reply);
 
-        const overrides = readLayoutOverrides(request.body);
+        const overrides = readLayoutOverrides(fastify, request.body);
         if (!overrides.ok) {
           return reply.status(400).send({ error: 'Bad Request', message: overrides.message });
         }

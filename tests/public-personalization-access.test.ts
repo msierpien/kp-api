@@ -198,3 +198,12 @@ test('brak nadpisan to poprawny przypadek (klient zapisuje same odpowiedzi)', ()
   assert.equal(result.ok, true);
   assert.equal(result.ok && result.data, undefined);
 });
+
+test('wyciete klucze sa raportowane - cichy rozjazd portal/API kosztowal juz dwa razy', () => {
+  const result = parseLayoutOverrides({
+    layers: { 'layer-1': { x: 5, nowePoleZPortalu: 'jeszcze nie w schemacie' } },
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.ok && result.dropped, ['layers.layer-1.nowePoleZPortalu']);
+});

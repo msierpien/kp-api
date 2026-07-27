@@ -186,18 +186,51 @@ export const layoutOverridesSchema = z.object({
 export type LayoutOverridesInput = z.infer<typeof layoutOverridesSchema>;
 
 export type LayoutOverridesParseResult =
-  | { ok: true; data: LayoutOverridesInput | undefined }
+  | { ok: true; data: LayoutOverridesInput | undefined; dropped: string[] }
   | { ok: false; message: string };
+
+/**
+ * Klucze obecne w zadaniu, ktorych schemat nie zna - a wiec wycięte.
+ *
+ * `z.object` usuwa je po cichu i dokladnie na tym dwa razy przejechali sie
+ * w tym projekcie: pole dodane w panelu znikalo przy zapisie i nikt nie
+ * wiedzial dlaczego. Rozjazd miedzy portalem a API ma zostawiac slad w logu,
+ * zamiast kasowac dane bez slowa.
+ */
+function collectDroppedKeys(input: unknown, parsed: unknown, path = ''): string[] {
+  if (!input || typeof input !== 'object' || !parsed || typeof parsed !== 'object') return [];
+
+  if (Array.isArray(input)) {
+    if (!Array.isArray(parsed)) return [];
+    return input.flatMap((entry, index) =>
+      collectDroppedKeys(entry, parsed[index], `${path}[${index}]`)
+    );
+  }
+
+  const dropped: string[] = [];
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    const childPath = path ? `${path}.${key}` : key;
+    if (!(key in (parsed as Record<string, unknown>))) {
+      dropped.push(childPath);
+      continue;
+    }
+    dropped.push(...collectDroppedKeys(value, (parsed as Record<string, unknown>)[key], childPath));
+  }
+
+  return dropped;
+}
 
 /**
  * Waliduje nadpisania z requestu. Brak pola to poprawny przypadek - klient
  * moze zapisac same odpowiedzi, bez ruszania projektu.
  */
 export function parseLayoutOverrides(input: unknown): LayoutOverridesParseResult {
-  if (input === undefined || input === null) return { ok: true, data: undefined };
+  if (input === undefined || input === null) return { ok: true, data: undefined, dropped: [] };
 
   const result = layoutOverridesSchema.safeParse(input);
-  if (result.success) return { ok: true, data: result.data };
+  if (result.success) {
+    return { ok: true, data: result.data, dropped: collectDroppedKeys(input, result.data) };
+  }
 
   const issue = result.error.issues[0];
   const path = issue?.path?.length ? ` (${issue.path.join('.')})` : '';

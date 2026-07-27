@@ -2,6 +2,8 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import prisma from '../../lib/prisma';
 import { hashToken, maskToken } from '../../lib/token';
 import { validateAnswers } from '../../services/renderer/text-validator.service';
+import { validatePrintPackageAnswers } from '../../services/renderer/answers-validation.service';
+import { getCaseLayout } from '../../lib/case-layout';
 import { saveFile, fileExists, buildStorageUrl } from '../../services/storage/local-storage.service';
 import { enqueueCasePrintPackage } from '../../services/admin/cases.service';
 import { listFonts } from '../../services/admin/fonts.service';
@@ -21,6 +23,7 @@ import {
   getStoredAnswerValue,
   hasAnswerValue,
   mergeCaseAnswers,
+  normalizeCaseAnswers,
   type PersonalizationAnswerField,
 } from '../../lib/personalization-answers';
 
@@ -707,17 +710,40 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           );
         }
 
-        // Walidacja z opentype.js
-        const answersForValidation = flattenCaseAnswers(mergedAnswers) as Record<string, string | number | boolean | undefined>;
-        const validation = await validateAnswers(answersForValidation, allFields.map(f => ({
-          key: f.key,
-          label: f.label,
-          type: f.type,
-          required: f.required,
-          maxLength: f.maxLength || undefined,
-          minLength: f.minLength || undefined,
-          pattern: f.pattern || undefined,
-        })));
+        // Walidacja KAZDEJ sztuki osobno (opentype.js + geometria warstw).
+        //
+        // Wczesniej szly tu splaszczone odpowiedzi bez layoutu, wiec sprawdzana
+        // byla praktycznie pierwsza sztuka i wylacznie dlugosc w znakach -
+        // dziesiaty gosc z bardzo dlugim nazwiskiem przechodzil bez slowa.
+        // Geometria czytana jest PO nalozeniu layoutOverrides, bo klient mogl
+        // juz zmniejszyc czcionke wlasnie po to, zeby sie zmiescilo.
+        const caseLayout = getCaseTemplate(personalizationCase)
+          ? getCaseLayout({
+              layoutSnapshot: personalizationCase.layoutSnapshot,
+              template: { layoutJson: getCaseTemplate(personalizationCase).layoutJson },
+            })
+          : null;
+        const quantity = Math.max(1, Number(personalizationCase.orderItem?.quantity) || 1);
+        const validation = caseLayout
+          ? await validatePrintPackageAnswers(
+              normalizeCaseAnswers(mergedAnswers, allFields, quantity),
+              allFields,
+              caseLayout,
+              quantity,
+              layoutOverrides
+            )
+          : await validateAnswers(
+              flattenCaseAnswers(mergedAnswers) as Record<string, string | number | boolean | undefined>,
+              allFields.map(f => ({
+                key: f.key,
+                label: f.label,
+                type: f.type,
+                required: f.required,
+                maxLength: f.maxLength || undefined,
+                minLength: f.minLength || undefined,
+                pattern: f.pattern || undefined,
+              }))
+            );
 
         // Generuj preview - WYŁĄCZONE, używaj frontendu (Opcja A)
         let previewUrl: string | null = null;

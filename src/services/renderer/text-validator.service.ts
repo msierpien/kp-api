@@ -2,6 +2,7 @@
 import opentype from 'opentype.js';
 import path from 'path';
 import fs from 'fs/promises';
+import { getFontsRegistryVersion, listFonts, PRINTABLE_FONT_FORMATS } from '../admin/fonts.service';
 
 interface ValidationError {
   field: string;
@@ -12,6 +13,8 @@ interface ValidationError {
     maxWidth?: number;
     actualLines?: number;
     maxLines?: number;
+    /** Czy szerokosc zmierzono realnym plikiem fontu (patrz measureTextWidth). */
+    measured?: boolean;
   };
 }
 
@@ -43,9 +46,20 @@ interface AnswersData {
   [key: string]: string | number | boolean | undefined;
 }
 
-// Cache dla załadowanych fontów
-const fontCache = new Map<string, opentype.Font>();
-const FONTS_DIR = path.join(__dirname, '../../templates/fonts');
+// Cache dla załadowanych fontów. `null` to zapamietany brak kroju w rejestrze -
+// bez tego kazde pole kazdej sztuki czytaloby katalog na nowo. Cache pada
+// w calosci, gdy rejestr sie zmieni: inaczej krój wgrany minute temu wciaz
+// byloby widziany jako brakujacy.
+const fontCache = new Map<string, opentype.Font | null>();
+let fontCacheRegistryVersion = getFontsRegistryVersion();
+
+function invalidateFontCacheOnRegistryChange(): void {
+  const current = getFontsRegistryVersion();
+  if (current !== fontCacheRegistryVersion) {
+    fontCache.clear();
+    fontCacheRegistryVersion = current;
+  }
+}
 
 // Domyślne ograniczenia
 const DEFAULT_MAX_LINES = 10;
@@ -55,57 +69,95 @@ const DEFAULT_FONT_SIZE = 16;
 const ALLOWED_CHARS_REGEX = /^[a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ0-9\s.,!?():\-'"\n]+$/;
 
 /**
- * Ładuje font z pliku
+ * Nazwy wariantow, ktore w rejestrze wystepuja jako osobne pliki
+ * ("Montserrat_Bold.ttf" -> rodzina "Montserrat Bold"). Dla wagi 700 chcemy
+ * zmierzyc tekst faktycznym boldem, bo jest zauwazalnie szerszy od regulara.
+ */
+function familyCandidates(fontFamily: string, weight: number): string[] {
+  const base = fontFamily.trim();
+  if (!base) return [];
+  if (weight >= 600) return [`${base} Bold`, `${base} SemiBold`, base];
+  if (weight <= 300) return [`${base} Light`, base];
+  return [base, `${base} Regular`];
+}
+
+/**
+ * Laduje krój z REJESTRU czcionek (`storage/fonts`) - tego samego, z ktorego
+ * korzysta renderer.
+ *
+ * Wczesniej funkcja siegala po zaszyta mape czterech plikow w
+ * `src/templates/fonts` - katalog nie istnieje, wiec KAZDY pomiar spadal na
+ * `0.6 * fontSize` na znak i komunikat "za dlugie" nie znaczyl nic.
+ *
+ * Ograniczenie do TTF/OTF jest celowe: to jedyne formaty, ktore renderer
+ * potrafi zarejestrowac do druku, wiec tylko dla nich pomiar odpowiada temu,
+ * co realnie wyjdzie na wydruku.
  */
 async function loadFont(fontFamily: string, weight: number = 400): Promise<opentype.Font | null> {
   const cacheKey = `${fontFamily}-${weight}`;
+
+  invalidateFontCacheOnRegistryChange();
 
   if (fontCache.has(cacheKey)) {
     return fontCache.get(cacheKey)!;
   }
 
-  // Mapowanie nazwy fontu na plik
-  const fontFiles: Record<string, string> = {
-    'Playfair Display-400': 'PlayfairDisplay-Regular.ttf',
-    'Playfair Display-700': 'PlayfairDisplay-Bold.ttf',
-    'Inter-400': 'Inter-Regular.ttf',
-    'Inter-700': 'Inter-Bold.ttf',
-  };
-
-  const fontFile = fontFiles[cacheKey] || fontFiles['Inter-400'];
-  const fontPath = path.join(FONTS_DIR, fontFile);
-
   try {
+    const available = await listFonts();
+    const printable = available.filter((font) =>
+      PRINTABLE_FONT_FORMATS.includes(font.format.toLowerCase())
+    );
+
+    const match = familyCandidates(fontFamily, weight)
+      .map((candidate) =>
+        printable.find((font) => font.family.toLowerCase() === candidate.toLowerCase())
+      )
+      .find((font) => Boolean(font));
+
+    if (!match) {
+      console.warn(
+        `[TextValidator] Brak czcionki "${fontFamily}" (${weight}) w rejestrze - ` +
+          `pomiar szerokosci bedzie przyblizony. Wgraj plik TTF/OTF w panelu (Czcionki).`
+      );
+      fontCache.set(cacheKey, null);
+      return null;
+    }
+
+    const fontPath = path.join(process.cwd(), 'storage', match.filePath);
     await fs.access(fontPath);
     const font = await opentype.load(fontPath);
     fontCache.set(cacheKey, font);
     return font;
   } catch (error) {
-    console.warn(`[TextValidator] Font not found: ${fontPath}, using fallback`);
+    console.warn(`[TextValidator] Nie udalo sie zaladowac czcionki "${fontFamily}":`, error);
+    fontCache.set(cacheKey, null);
     return null;
   }
 }
 
 /**
- * Mierzy szerokość tekstu w danym foncie
+ * Mierzy szerokość tekstu w danym foncie.
+ *
+ * `measured: false` oznacza, ze kroju nie bylo w rejestrze i szerokosc jest
+ * zgadywana - wolajacy ma wtedy zejsc z bledu na ostrzezenie, zamiast blokowac
+ * klienta na podstawie zmyslonej liczby.
  */
 async function measureTextWidth(
   text: string,
   fontFamily: string = 'Inter',
   fontSize: number = DEFAULT_FONT_SIZE,
   fontWeight: number = 400
-): Promise<number> {
+): Promise<{ width: number; measured: boolean }> {
   const font = await loadFont(fontFamily, fontWeight);
 
   if (!font) {
     // Fallback: przybliżone obliczenie (0.6 * fontSize na znak)
-    return text.length * fontSize * 0.6;
+    return { width: text.length * fontSize * 0.6, measured: false };
   }
 
   // opentype.js getAdvanceWidth zwraca szerokość w jednostkach fontu
   // Trzeba przeskalować do pikseli: width * fontSize / unitsPerEm
-  const advanceWidth = font.getAdvanceWidth(text, fontSize);
-  return advanceWidth;
+  return { width: font.getAdvanceWidth(text, fontSize), measured: true };
 }
 
 /**
@@ -214,16 +266,26 @@ async function validateField(
     const lines = normalizedValue.split('\n');
 
     for (let i = 0; i < lines.length; i++) {
-      const lineWidth = await measureTextWidth(lines[i], fontFamily, fontSize, fontWeight);
+      const { width: lineWidth, measured } = await measureTextWidth(
+        lines[i],
+        fontFamily,
+        fontSize,
+        fontWeight
+      );
 
       if (lineWidth > maxWidth) {
+        // Bez kroju w rejestrze szerokosc jest zgadywana - nie blokujemy
+        // klienta liczba, ktorej sami nie umiemy obronic.
         errors.push({
           field: fieldConfig.key,
-          message: `Linia ${i + 1} w polu "${fieldConfig.label}" jest za długa`,
-          severity: 'error',
+          message: measured
+            ? `Linia ${i + 1} w polu "${fieldConfig.label}" jest za długa`
+            : `Linia ${i + 1} w polu "${fieldConfig.label}" może być za długa (brak kroju w rejestrze — pomiar przybliżony)`,
+          severity: measured ? 'error' : 'warning',
           details: {
             actualWidth: Math.round(lineWidth),
             maxWidth: maxWidth,
+            measured,
           },
         });
       }

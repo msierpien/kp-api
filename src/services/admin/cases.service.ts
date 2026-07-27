@@ -29,45 +29,16 @@ import {
   type Layer,
 } from '../../types/template-layout';
 import { renderPreview, renderPrintSheetPng } from '../renderer/fabric-renderer.service';
-import { validateAnswers } from '../renderer/text-validator.service';
+import {
+  validatePrintPackageAnswers,
+  type FieldValidationConfig,
+  type PrintPackageValidationSummary,
+} from '../renderer/answers-validation.service';
 import { getCaseLayout } from '../../lib/case-layout';
 import { addPrintPackageJob, type PrintPackageOptions } from '../queue/render.queue';
 import { resolvePrintPackageOptions } from './print-settings.service';
 import { buildStorageUrl, saveFile } from '../storage/local-storage.service';
 import { isPersonalizationCaseStatus } from '../../lib/personalization-case-statuses';
-
-type FieldValidationConfig = PersonalizationAnswerField & {
-  label: string;
-  type: string;
-  maxLength?: number | null;
-  minLength?: number | null;
-  pattern?: string | null;
-};
-
-interface PrintPackageFieldIssue {
-  field: string;
-  message: string;
-  severity: 'error' | 'warning';
-  itemIndex?: number;
-  details?: Record<string, any>;
-}
-
-interface PrintPackageValidationSummary {
-  isValid: boolean;
-  shared: {
-    isValid: boolean;
-    errors: PrintPackageFieldIssue[];
-    warnings: PrintPackageFieldIssue[];
-  };
-  items: Array<{
-    itemIndex: number;
-    isValid: boolean;
-    errors: PrintPackageFieldIssue[];
-    warnings: PrintPackageFieldIssue[];
-  }>;
-  errors: PrintPackageFieldIssue[];
-  warnings: PrintPackageFieldIssue[];
-}
 
 interface RenderedPackageItem {
   itemIndex: number;
@@ -465,7 +436,7 @@ export async function validateCaseAnswers(id: string, payload: { answers?: any; 
   const qty = Math.max(1, Number(caseItem.orderItem.quantity) || 1);
   const answers = mergeCaseAnswers(caseItem.answersJson, payload, fields, qty);
   const answerProgress = computeCaseAnswerProgress(answers, fields, qty);
-  const validationSummary = await validatePrintPackageAnswers(answers, fields, layout, qty);
+  const validationSummary = await validatePrintPackageAnswers(answers, fields, layout, qty, caseItem.layoutOverrides);
 
   return {
     answerProgress,
@@ -504,7 +475,7 @@ export async function enqueueCasePrintPackage(id: string, enqueueOptions: { tena
   const fields = caseItem.template.forms.flatMap((form) => form.fields);
   const qty = Math.max(1, Number(caseItem.orderItem.quantity) || 1);
   const answers = normalizeCaseAnswers(caseItem.answersJson, fields, qty);
-  const validationSummary = await validatePrintPackageAnswers(answers, fields, layout, qty);
+  const validationSummary = await validatePrintPackageAnswers(answers, fields, layout, qty, caseItem.layoutOverrides);
 
   if (!validationSummary.isValid) {
     await prisma.personalizationCase.update({
@@ -662,7 +633,7 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
     await options.onProgress?.(10);
 
     const answers = normalizeCaseAnswers(caseItem.answersJson, fields, qty);
-    const validationSummary = await validatePrintPackageAnswers(answers, fields, layout, qty);
+    const validationSummary = await validatePrintPackageAnswers(answers, fields, layout, qty, caseItem.layoutOverrides);
     await options.onProgress?.(20);
 
     if (!validationSummary.isValid) {
@@ -1065,130 +1036,6 @@ function expandLayerForBleed(
     ...layer,
     x: layer.x + bleedPx,
     y: layer.y + bleedPx,
-  };
-}
-
-function getLayerFieldKey(layer: Layer): string | null {
-  if (layer.type !== 'text' && layer.type !== 'textbox') return null;
-  const fieldKey = (layer.properties as any)?.fieldKey;
-  return typeof fieldKey === 'string' && fieldKey.trim() ? fieldKey : null;
-}
-
-function fontSizeToValidatorPx(fontSize: number, fontUnit: unknown, dpi: number) {
-  if (fontUnit === 'px') return fontSize;
-  return (fontSize / 72) * dpi;
-}
-
-function getValidationFields(fields: FieldValidationConfig[], layout: TemplateLayoutJson) {
-  const dpi = getCanvasDpi(layout);
-  const layerByFieldKey = new Map<string, Layer>();
-
-  for (const layer of layout.layers) {
-    if (layer.visible === false) continue;
-    const fieldKey = getLayerFieldKey(layer);
-    if (fieldKey && !layerByFieldKey.has(fieldKey)) {
-      layerByFieldKey.set(fieldKey, layer);
-    }
-  }
-
-  return fields.map((field) => {
-    const layer = layerByFieldKey.get(field.key);
-    const props = layer?.properties as any;
-    const fontSize = typeof props?.fontSize === 'number'
-      ? fontSizeToValidatorPx(props.fontSize, props.fontUnit, dpi)
-      : undefined;
-    const horizontalPadding = layer?.type === 'textbox' ? Number(props?.padding || 0) * 2 : 0;
-    const width = layer ? Math.max(1, Number(layer.width || 0) - horizontalPadding) : undefined;
-    const lineHeight = Number(props?.lineHeight || 1.2);
-    const maxLines = typeof props?.maxLines === 'number'
-      ? props.maxLines
-      : layer && fontSize
-        ? Math.max(1, Math.floor(Number(layer.height || 0) / Math.max(1, fontSize * lineHeight)))
-        : undefined;
-
-    return {
-      key: field.key,
-      label: field.label,
-      type: field.type,
-      required: Boolean(field.required),
-      maxLength: field.maxLength || undefined,
-      minLength: field.minLength || undefined,
-      pattern: field.pattern || undefined,
-      width,
-      maxLines,
-      font: props ? {
-        family: props.fontFamily || 'Inter',
-        size: fontSize,
-        weight: Number(props.fontWeight || 400),
-      } : undefined,
-    };
-  });
-}
-
-function prefixIssues(
-  issues: Array<{ field: string; message: string; severity: 'error' | 'warning'; details?: Record<string, any> }>,
-  itemIndex?: number
-): PrintPackageFieldIssue[] {
-  return issues.map((issue) => ({
-    ...issue,
-    itemIndex,
-    message: itemIndex === undefined ? issue.message : `Sztuka ${itemIndex + 1}: ${issue.message}`,
-  }));
-}
-
-async function validatePrintPackageAnswers(
-  answers: StructuredCaseAnswers,
-  fields: FieldValidationConfig[],
-  layout: TemplateLayoutJson,
-  qty: number
-): Promise<PrintPackageValidationSummary> {
-  const validationFields = getValidationFields(fields, layout);
-  const sharedFields = fields.filter((field) => getFieldScope(field) === 'SHARED');
-  const itemFields = fields.filter((field) => getFieldScope(field) === 'INDIVIDUAL');
-  const validationFieldByKey = new Map(validationFields.map((field) => [field.key, field]));
-  const sharedValidationFields = sharedFields
-    .map((field) => validationFieldByKey.get(field.key))
-    .filter((field): field is NonNullable<typeof field> => !!field);
-  const itemValidationFields = itemFields
-    .map((field) => validationFieldByKey.get(field.key))
-    .filter((field): field is NonNullable<typeof field> => !!field);
-
-  const sharedResult = await validateAnswers(answers.sharedAnswers, sharedValidationFields);
-  const sharedErrors = prefixIssues(sharedResult.errors);
-  const sharedWarnings = prefixIssues(sharedResult.warnings);
-  const items = [];
-
-  for (let itemIndex = 0; itemIndex < qty; itemIndex += 1) {
-    const result = await validateAnswers(answers.items[itemIndex] || {}, itemValidationFields);
-    const errors = prefixIssues(result.errors, itemIndex);
-    const warnings = prefixIssues(result.warnings, itemIndex);
-    items.push({
-      itemIndex,
-      isValid: result.isValid,
-      errors,
-      warnings,
-    });
-  }
-
-  const errors = [
-    ...sharedErrors,
-    ...items.flatMap((item) => item.errors),
-  ];
-  const warnings = [
-    ...sharedWarnings,
-    ...items.flatMap((item) => item.warnings),
-  ];
-
-  return {
-    isValid: errors.length === 0,
-    shared: {
-      isValid: sharedResult.isValid,
-      errors: sharedErrors,
-      warnings: sharedWarnings,
-    },
-    items,
-    errors,
-    warnings,
   };
 }
 

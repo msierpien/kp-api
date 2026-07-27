@@ -31,12 +31,25 @@ type FontsListCacheEntry = {
 
 let fontsListCache: FontsListCacheEntry | null = null;
 
+/**
+ * Rosnie przy kazdym wgraniu i usunieciu kroju. Konsumenci, ktorzy trzymaja
+ * WLASNY cache pochodny od rejestru (np. walidator tekstu pamieta rozparsowane
+ * pliki i zapamietane braki), moga po tej liczbie poznac, ze rejestr sie
+ * zmienil - bez importu w druga strone, ktory zrobilby cykl.
+ */
+let fontsRegistryVersion = 0;
+
+export function getFontsRegistryVersion(): number {
+  return fontsRegistryVersion;
+}
+
 async function ensureFontsDir(): Promise<void> {
   await fs.mkdir(FONTS_DIR, { recursive: true });
 }
 
 export function clearFontsListCache(): void {
   fontsListCache = null;
+  fontsRegistryVersion += 1;
 }
 
 export async function listFonts(): Promise<FontItem[]> {

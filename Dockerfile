@@ -1,5 +1,11 @@
 # Base stage
 #
+# UWAGA przy zaleznosciach: @msierpien/kp-template-core lezy w prywatnym
+# rejestrze GitHub Packages. Kazdy etap z `pnpm install` montuje sekret `npmrc`
+# jako /root/.npmrc - pnpm ufa danym logowania z poziomu uzytkownika, a sekret
+# zyje tylko na czas jednego RUN. ENV albo .npmrc z wpisanym tokenem zostawilyby
+# go w warstwie obrazu na zawsze.
+#
 # @resvg/resvg-js (rasteryzacja SVG ozdobnikow do druku) nie wymaga pakietow
 # systemowych - pnpm zaciaga prebuilt binarke linux-x64-musl z lockfile.
 # node-canvas SVG-a nie otwiera, wiec bez resvg ozdobnik wektorowy wychodzi
@@ -20,13 +26,13 @@ WORKDIR /app
 
 # Dependencies stage
 FROM base AS dependencies
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+COPY package.json pnpm-lock.yaml .npmrc ./
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc pnpm install --frozen-lockfile
 
 # Development stage
 FROM base AS development
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+COPY package.json pnpm-lock.yaml .npmrc ./
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc pnpm install --frozen-lockfile
 COPY prisma ./prisma
 RUN pnpm prisma generate
 COPY . .
@@ -35,8 +41,8 @@ CMD ["pnpm", "dev"]
 
 # Build stage
 FROM base AS build
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+COPY package.json pnpm-lock.yaml .npmrc ./
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc pnpm install --frozen-lockfile
 COPY prisma ./prisma
 RUN pnpm prisma generate
 COPY . .
@@ -45,8 +51,8 @@ RUN pnpm prune --prod
 
 # Migration stage
 FROM base AS migrate
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+COPY package.json pnpm-lock.yaml .npmrc ./
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc pnpm install --frozen-lockfile
 COPY prisma ./prisma
 CMD ["pnpm", "prisma", "migrate", "deploy"]
 

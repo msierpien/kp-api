@@ -41,6 +41,9 @@ importers:
       '@fastify/swagger-ui':
         specifier: ^5.0.0
         version: 5.2.6
+      '@msierpien/kp-template-core':
+        specifier: ^0.1.0
+        version: 0.1.0(zod@3.25.76)
       '@prisma/client':
         specifier: ^5.8.1
         version: 5.22.0(prisma@5.22.0)
@@ -758,6 +761,12 @@ packages:
     resolution: {integrity: sha512-x0fWaQtYp4E6sktbsdAqnehxDgEc/VwM7uLsRCYWaiGu0ykYdZPiS8zCWdnjHwyiumousxfBm4SO31eXqwEZhQ==}
     cpu: [x64]
     os: [win32]
+
+  '@msierpien/kp-template-core@0.1.0':
+    resolution: {integrity: sha512-Dyvcp0+CxDeXtQR0kIVgg7dPDcRzyEDyGW6gLB/A3HYpKB5YzxJJMBswDLhnXeMfk+nao3WStvd+BW0qmYkRJg==, tarball: https://npm.pkg.github.com/download/@msierpien/kp-template-core/0.1.0/6713e1c8ea9459dd8ee8d38939454ce7b91c8ed1}
+    engines: {node: '>=20.0.0'}
+    peerDependencies:
+      zod: ^3.24.0
 
   '@nodelib/fs.scandir@2.1.5':
     resolution: {integrity: sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==}
@@ -3754,6 +3763,10 @@ snapshots:
 
   '@msgpackr-extract/msgpackr-extract-win32-x64@3.0.3':
     optional: true
+
+  '@msierpien/kp-template-core@0.1.0(zod@3.25.76)':
+    dependencies:
+      zod: 3.25.76
 
   '@nodelib/fs.scandir@2.1.5':
     dependencies:

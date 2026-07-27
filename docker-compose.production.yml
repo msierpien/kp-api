@@ -48,6 +48,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: production
+      secrets:
+        - npmrc
     container_name: personalization-api
     restart: unless-stopped
     logging: *default-logging
@@ -157,6 +159,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: migrate
+      secrets:
+        - npmrc
     container_name: personalization-migrate
     profiles:
       - maintenance
@@ -182,3 +186,12 @@ volumes:
   postgres_data:
   redis_data:
   api_storage:
+
+# Dane logowania do prywatnego rejestru (@msierpien/kp-template-core),
+# potrzebne WYLACZNIE przy budowaniu obrazu. Plik trzymamy na serwerze poza
+# gitem, w formacie .npmrc:
+#   printf '//npm.pkg.github.com/:_authToken=%s\n' 'ghp_...' > /opt/kp-api/.npm-token
+#   chmod 600 /opt/kp-api/.npm-token
+secrets:
+  npmrc:
+    file: ./.npm-token

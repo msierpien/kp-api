@@ -45,3 +45,6 @@ tmp/
 temp/
 *.tmp
 .deployed-main-commit
+
+# Token do prywatnego rejestru npm - tylko na serwerze, przy budowaniu obrazu
+.npm-token

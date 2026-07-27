@@ -38,6 +38,18 @@ export async function initStorage(): Promise<void> {
   }
 }
 
+/**
+ * Sciezka pliku w magazynie, z gwarancja, ze nie wychodzi poza jego katalog.
+ *
+ * Rzuca wyjatkiem przy probie wyjscia (`..`, sciezka absolutna). Renderer
+ * uzywa tego dla `imageUrl` z warstw - klient dostarcza cale warstwy
+ * w `layoutOverrides`, wiec `path.join` bez tej kontroli czytalby dowolny
+ * plik z dysku serwera.
+ */
+export function resolveStorageFilePath(relativePath: string) {
+  return safeStoragePath(relativePath);
+}
+
 function safeStoragePath(relativePath: string) {
   const fullPath = path.resolve(storageRootAbsolute, relativePath);
   if (!fullPath.startsWith(`${storageRootAbsolute}${path.sep}`) && fullPath !== storageRootAbsolute) {

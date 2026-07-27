@@ -38,6 +38,7 @@ import { errorHandlerPlugin } from './plugins/error-handler.plugin';
 import { validationPlugin } from './plugins/validation.plugin';
 import type { JwtPayload } from './types';
 import { getAccessTokenFromRequest } from './lib/auth-cookies';
+import { isAllowedOrigin } from './lib/allowed-origins';
 import { getReadinessHealth } from './services/ops/health.service';
 import { getPrometheusMetrics } from './services/ops/metrics.service';
 import {
@@ -134,17 +135,9 @@ server.register(errorHandlerPlugin);
 // Validation plugin
 server.register(validationPlugin);
 
-// CORS - dozwolone origins (admin panel + portal klienta)
-const allowedOrigins = [
-  config.frontend.adminUrl,
-  config.frontend.publicPortalBaseUrl,
-];
-
-function isAllowedOrigin(origin: string) {
-  if (allowedOrigins.includes(origin)) return true;
-  return config.app.isDevelopment && origin.includes('localhost');
-}
-
+// CORS - dozwolone origins (admin panel + portal klienta).
+// Lista mieszka w lib/allowed-origins, bo korzysta z niej takze straznik
+// CSRF na trasach admina.
 server.register(cors, {
   origin: (origin, cb) => {
     // Pozwól na requesty bez origin (np. curl, Postman)

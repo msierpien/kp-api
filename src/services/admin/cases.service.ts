@@ -5,7 +5,7 @@ import type { CasesQueryInput } from '../../schemas/admin.schema';
 import { emailService } from '../email/email.service';
 import { queuePersonalizationEmail } from '../queue/email.queue';
 import { triggerAutomations, AutomationTrigger } from './automation.service';
-import { generateAccessToken, maskToken } from '../../lib/token';
+import { generateAccessToken, getTokenExpiryDate, maskToken } from '../../lib/token';
 import {
   canonicalizeTemplateForms,
   computeCaseAnswerProgress,
@@ -1253,6 +1253,8 @@ export async function resendPersonalizationEmail(id: string) {
       customerTokenHash: newHash,
       customerTokenEncrypted: newEncrypted,
       tokenActive: true, // Reaktywuj token jeśli był nieaktywny
+      // Nowy link = nowy termin waznosci; stary przestaje istniec razem z hashem.
+      customerTokenExpiresAt: getTokenExpiryDate(),
       updatedAt: new Date(),
     },
   });

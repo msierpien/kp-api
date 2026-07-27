@@ -7,7 +7,7 @@ import {
 } from '../prestashop/prestashop-client';
 import { decrypt } from '../../lib/encryption';
 import { emailService } from '../email/email.service';
-import { generateAccessToken } from '../../lib/token';
+import { generateAccessToken, getTokenExpiryDate } from '../../lib/token';
 import { createWzForOrder, shouldAutoCreateWzForTenant } from '../admin/warehouse-documents.service';
 import { releaseOrderReservations, reserveOrder } from '../admin/warehouse-reservations.service';
 import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
@@ -677,6 +677,7 @@ async function createOrderFromDetails(
         customerTokenHash: tokenHash,
         customerTokenEncrypted: tokenEncrypted,
         tokenActive: true,
+        customerTokenExpiresAt: getTokenExpiryDate(),
       },
       include: {
         order: {

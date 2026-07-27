@@ -3,7 +3,7 @@ import prisma from '../../lib/prisma';
 import { config as appConfig } from '../../config';
 import { decrypt } from '../../lib/encryption';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
-import { generateAccessToken, maskToken } from '../../lib/token';
+import { generateAccessToken, getTokenExpiryDate, maskToken } from '../../lib/token';
 import { emailService } from '../email/email.service';
 import {
   buildDryRunResult,
@@ -71,6 +71,7 @@ async function issueCaseToken(caseData: any) {
       customerTokenHash: hash,
       customerTokenEncrypted: encrypted,
       tokenActive: true,
+      customerTokenExpiresAt: getTokenExpiryDate(),
       updatedAt: new Date(),
     },
   });

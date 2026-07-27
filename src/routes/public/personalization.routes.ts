@@ -15,6 +15,8 @@ import {
   isUploadValidationError,
 } from '../../lib/upload-validation';
 import { RATE_LIMITS } from '../../lib/rate-limits';
+import { assertCaseWritable, assertTokenUsable } from '../../lib/case-access';
+import { parseLayoutOverrides } from '../../schemas/personalization.schema';
 import { listDecorations } from '../../services/admin/decorations.service';
 import { SvgSanitizeError, sanitizeSvg, svgSupportsTint } from '../../lib/svg-sanitizer';
 import {
@@ -115,17 +117,20 @@ async function saveAnswers(
   return mergedAnswers;
 }
 
-// Limity na elementy dodawane przez klienta. Endpoint jest chroniony
-// wylacznie tokenem z linku, a layoutOverrides laduje w bazie jako Json
-// bez zadnych ograniczen - bez limitow jedna sprawa moglaby pomiescic
-// dowolna ilosc danych.
-const MAX_ADDED_LAYERS = 40;
-const MAX_ADDED_LAYER_TEXT = 2000;
-const MAX_CUSTOM_FIELDS = 10;
-const MAX_CUSTOM_FIELD_LABEL = 60;
-
 /** Wlasna grafika klienta - wieksza niz ozdobnik z biblioteki (zdjecia). */
 const MAX_CLIENT_ASSET_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Klucz limitu zapytan: sprawa, nie adres IP.
+ *
+ * Cala rodzina zamawiajaca z jednego Wi-Fi to jeden adres, a klient
+ * w pociagu zmienia adres co chwile - liczenie po IP karaloby nie tych,
+ * co trzeba. Hash, zeby token nie lezal w pamieci limitera otwartym tekstem.
+ */
+function tokenRateLimitKey(request: FastifyRequest): string {
+  const token = (request.params as { token?: string })?.token;
+  return token ? hashToken(token) : request.ip;
+}
 
 /**
  * Rozdzielczosc zrodla bitmapy. Klient dzieli ja przez docelowy rozmiar
@@ -145,42 +150,15 @@ async function readRasterDimensions(
   }
 }
 
-/** Zwraca komunikat bledu albo null, gdy payload miesci sie w limitach. */
-function validateLayoutOverridesLimits(overrides: unknown): string | null {
-  if (!overrides || typeof overrides !== 'object') return null;
-  const { addedLayers, customFields } = overrides as {
-    addedLayers?: unknown;
-    customFields?: unknown;
-  };
-
-  if (addedLayers !== undefined) {
-    if (!Array.isArray(addedLayers)) return 'Nieprawidłowy format dodanych elementów';
-    if (addedLayers.length > MAX_ADDED_LAYERS) {
-      return `Za dużo dodanych elementów (maksymalnie ${MAX_ADDED_LAYERS})`;
-    }
-    for (const entry of addedLayers) {
-      const layer = (entry as { layer?: { properties?: { text?: unknown } } })?.layer;
-      const text = layer?.properties?.text;
-      if (typeof text === 'string' && text.length > MAX_ADDED_LAYER_TEXT) {
-        return `Tekst elementu jest za długi (maksymalnie ${MAX_ADDED_LAYER_TEXT} znaków)`;
-      }
-    }
-  }
-
-  if (customFields !== undefined) {
-    if (!Array.isArray(customFields)) return 'Nieprawidłowy format dodanych kolumn';
-    if (customFields.length > MAX_CUSTOM_FIELDS) {
-      return `Za dużo dodanych kolumn (maksymalnie ${MAX_CUSTOM_FIELDS})`;
-    }
-    for (const field of customFields) {
-      const label = (field as { label?: unknown })?.label;
-      if (typeof label === 'string' && label.length > MAX_CUSTOM_FIELD_LABEL) {
-        return `Nazwa kolumny jest za długa (maksymalnie ${MAX_CUSTOM_FIELD_LABEL} znaków)`;
-      }
-    }
-  }
-
-  return null;
+/**
+ * Sprawdza nadpisania z requestu schematem Zod i zwraca komunikat bledu.
+ *
+ * Zwracamy dane po parsowaniu, nie oryginal: to one ida do bazy, wiec
+ * wszystko, czego schemat nie zna, ma tu zginac (m.in. `imageUrl`
+ * wskazujacy poza magazyn plikow).
+ */
+function readLayoutOverrides(body: { layoutOverrides?: unknown } | undefined) {
+  return parseLayoutOverrides(body?.layoutOverrides);
 }
 
 // Helper do dodawania nagłówków bezpieczeństwa
@@ -220,6 +198,54 @@ function getCaseTemplate(personalizationCase: any) {
   return personalizationCase.template || personalizationCase.orderItem?.personalizedProduct?.template || null;
 }
 
+/**
+ * Walidacja odpowiedzi sprawy - ta sama dla podgladu i dla zatwierdzenia.
+ *
+ * Mierzy KAZDA sztuke osobno (opentype.js + geometria warstw) po nalozeniu
+ * `layoutOverrides`, bo klient mogl juz zmniejszyc czcionke wlasnie po to,
+ * zeby dlugie nazwisko sie zmiescilo. Sprawy bez layoutu (starsze szablony)
+ * spadaja na walidacje samych wartosci.
+ */
+async function validateCaseAnswers(
+  personalizationCase: any,
+  allFields: any[],
+  mergedAnswers: unknown,
+  layoutOverrides: unknown
+) {
+  const template = getCaseTemplate(personalizationCase);
+  const caseLayout = template
+    ? getCaseLayout({
+        layoutSnapshot: personalizationCase.layoutSnapshot,
+        template: { layoutJson: template.layoutJson },
+      })
+    : null;
+
+  const quantity = Math.max(1, Number(personalizationCase.orderItem?.quantity) || 1);
+
+  if (caseLayout) {
+    return validatePrintPackageAnswers(
+      normalizeCaseAnswers(mergedAnswers, allFields, quantity),
+      allFields,
+      caseLayout,
+      quantity,
+      layoutOverrides
+    );
+  }
+
+  return validateAnswers(
+    flattenCaseAnswers(mergedAnswers) as Record<string, string | number | boolean | undefined>,
+    allFields.map((f) => ({
+      key: f.key,
+      label: f.label,
+      type: f.type,
+      required: f.required,
+      maxLength: f.maxLength || undefined,
+      minLength: f.minLength || undefined,
+      pattern: f.pattern || undefined,
+    }))
+  );
+}
+
 async function assertPersonalizationFeatureEnabled(personalizationCase: any, reply: FastifyReply) {
   const tenantId = personalizationCase.order?.shop?.tenantId || personalizationCase.orderItem?.order?.shop?.tenantId;
   if (!tenantId) return true;
@@ -239,6 +265,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
   fastify.get<{ Params: PersonalizationParams }>(
     '/:token',
     {
+      config: {
+        rateLimit: { ...RATE_LIMITS.personalizationRead, keyGenerator: tokenRateLimitKey },
+      },
       schema: {
         tags: ['personalization'],
         summary: 'Pobierz dane personalizacji po tokenie klienta',
@@ -344,13 +373,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
-        // Check if token is active
-        if (!personalizationCase.tokenActive) {
-          return reply.status(403).send({
-            error: 'Forbidden',
-            message: 'Token jest nieaktywny',
-          });
-        }
+        if (!assertTokenUsable(personalizationCase, reply)) return;
 
         if (!(await assertPersonalizationFeatureEnabled(personalizationCase, reply))) return;
 
@@ -413,6 +436,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
   fastify.put<{ Params: PersonalizationParams; Body: SaveDesignBody }>(
     '/:token/:endpoint(answers|design)',
     {
+      config: {
+        rateLimit: { ...RATE_LIMITS.personalizationWrite, keyGenerator: tokenRateLimitKey },
+      },
       schema: {
         tags: ['personalization'],
         summary: 'Zapisz odpowiedzi / szkic projektu',
@@ -461,9 +487,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
       try {
         addSecurityHeaders(reply);
 
-        const limitsError = validateLayoutOverridesLimits(request.body?.layoutOverrides);
-        if (limitsError) {
-          return reply.status(400).send({ error: 'Bad Request', message: limitsError });
+        const overrides = readLayoutOverrides(request.body);
+        if (!overrides.ok) {
+          return reply.status(400).send({ error: 'Bad Request', message: overrides.message });
         }
 
         // Hash tokena z URL przed wyszukaniem w bazie
@@ -509,15 +535,13 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
-        // Check if token is active
-        if (!personalizationCase.tokenActive) {
-          return reply.status(403).send({
-            error: 'Forbidden',
-            message: 'Token jest nieaktywny',
-          });
-        }
+        if (!assertTokenUsable(personalizationCase, reply)) return;
 
         if (!(await assertPersonalizationFeatureEnabled(personalizationCase, reply))) return;
+        // Sprawa zatwierdzona nie przyjmuje juz zmian. Do tej pory pilnowal
+        // tego wylacznie portal, wiec zapis wracal tu z kazdego zapytania -
+        // razem z cofnieciem statusu na "Czeka na klienta".
+        if (!assertCaseWritable(personalizationCase, reply)) return;
 
         // Zbuduj mapę fieldKey -> fieldId (na podstawie template)
         const fieldKeyToId = new Map<string, string>();
@@ -545,7 +569,8 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           data: {
             status: 'WAITING_FOR_CUSTOMER',
             answersJson: JSON.parse(JSON.stringify(mergedAnswers)),
-            layoutOverrides: request.body.layoutOverrides ? JSON.parse(JSON.stringify(request.body.layoutOverrides)) : undefined,
+            // Zapisujemy dane PO schemacie, nie surowe z requestu.
+            layoutOverrides: overrides.data ? JSON.parse(JSON.stringify(overrides.data)) : undefined,
           },
           include: {
             answers: {
@@ -579,7 +604,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
     '/:token/preview',
     {
       config: {
-        rateLimit: RATE_LIMITS.personalizationPreview,
+        rateLimit: { ...RATE_LIMITS.personalizationPreview, keyGenerator: tokenRateLimitKey },
       },
       schema: {
         tags: ['personalization'],
@@ -621,9 +646,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
       try {
         addSecurityHeaders(reply);
 
-        const limitsError = validateLayoutOverridesLimits(request.body?.layoutOverrides);
-        if (limitsError) {
-          return reply.status(400).send({ error: 'Bad Request', message: limitsError });
+        const overrides = readLayoutOverrides(request.body);
+        if (!overrides.ok) {
+          return reply.status(400).send({ error: 'Bad Request', message: overrides.message });
         }
 
         const tokenHash = hashToken(request.params.token);
@@ -677,14 +702,11 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
-        if (!personalizationCase.tokenActive) {
-          return reply.status(403).send({
-            error: 'Forbidden',
-            message: 'Token jest nieaktywny',
-          });
-        }
+        if (!assertTokenUsable(personalizationCase, reply)) return;
 
         if (!(await assertPersonalizationFeatureEnabled(personalizationCase, reply))) return;
+        // Podglad tez zapisuje odpowiedzi i przestawia status sprawy.
+        if (!assertCaseWritable(personalizationCase, reply)) return;
 
         // Zbuduj mapę fieldKey -> fieldId
         const fieldKeyToId = new Map<string, string>();
@@ -698,7 +720,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
 
         // Zapisz odpowiedzi jeśli przyszły w body
         let mergedAnswers: unknown = personalizationCase.answersJson || {};
-        const layoutOverrides = request.body?.layoutOverrides ?? personalizationCase.layoutOverrides;
+        const layoutOverrides = overrides.data ?? personalizationCase.layoutOverrides;
         if (hasAnswersPayload(request.body)) {
           mergedAnswers = await saveAnswers(
             personalizationCase.id,
@@ -710,40 +732,12 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           );
         }
 
-        // Walidacja KAZDEJ sztuki osobno (opentype.js + geometria warstw).
-        //
-        // Wczesniej szly tu splaszczone odpowiedzi bez layoutu, wiec sprawdzana
-        // byla praktycznie pierwsza sztuka i wylacznie dlugosc w znakach -
-        // dziesiaty gosc z bardzo dlugim nazwiskiem przechodzil bez slowa.
-        // Geometria czytana jest PO nalozeniu layoutOverrides, bo klient mogl
-        // juz zmniejszyc czcionke wlasnie po to, zeby sie zmiescilo.
-        const caseLayout = getCaseTemplate(personalizationCase)
-          ? getCaseLayout({
-              layoutSnapshot: personalizationCase.layoutSnapshot,
-              template: { layoutJson: getCaseTemplate(personalizationCase).layoutJson },
-            })
-          : null;
-        const quantity = Math.max(1, Number(personalizationCase.orderItem?.quantity) || 1);
-        const validation = caseLayout
-          ? await validatePrintPackageAnswers(
-              normalizeCaseAnswers(mergedAnswers, allFields, quantity),
-              allFields,
-              caseLayout,
-              quantity,
-              layoutOverrides
-            )
-          : await validateAnswers(
-              flattenCaseAnswers(mergedAnswers) as Record<string, string | number | boolean | undefined>,
-              allFields.map(f => ({
-                key: f.key,
-                label: f.label,
-                type: f.type,
-                required: f.required,
-                maxLength: f.maxLength || undefined,
-                minLength: f.minLength || undefined,
-                pattern: f.pattern || undefined,
-              }))
-            );
+        const validation = await validateCaseAnswers(
+          personalizationCase,
+          allFields,
+          mergedAnswers,
+          layoutOverrides
+        );
 
         // Generuj preview - WYŁĄCZONE, używaj frontendu (Opcja A)
         let previewUrl: string | null = null;
@@ -804,6 +798,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: PersonalizationParams; Body: SaveDesignBody }>(
     '/:token/submit',
     {
+      config: {
+        rateLimit: { ...RATE_LIMITS.personalizationSubmit, keyGenerator: tokenRateLimitKey },
+      },
       schema: {
         tags: ['personalization'],
         summary: 'Zatwierdź personalizację do produkcji (tworzy RenderJob)',
@@ -839,7 +836,17 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
               },
             },
           },
-          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          // `validation` musi byc wymienione ze `additionalProperties`,
+          // inaczej fast-json-stringify wytnie je z odpowiedzi i portal
+          // pokaze sam komunikat, bez wskazania wiersza.
+          400: {
+            type: 'object',
+            properties: {
+              error: { type: 'string' },
+              message: { type: 'string' },
+              validation: { type: 'object', additionalProperties: true },
+            },
+          },
           403: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
           404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
         },
@@ -852,9 +859,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
       try {
         addSecurityHeaders(reply);
 
-        const limitsError = validateLayoutOverridesLimits(request.body?.layoutOverrides);
-        if (limitsError) {
-          return reply.status(400).send({ error: 'Bad Request', message: limitsError });
+        const overrides = readLayoutOverrides(request.body);
+        if (!overrides.ok) {
+          return reply.status(400).send({ error: 'Bad Request', message: overrides.message });
         }
 
         // Hash tokena z URL przed wyszukaniem w bazie
@@ -902,15 +909,13 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
-        // Check if token is active
-        if (!personalizationCase.tokenActive) {
-          return reply.status(403).send({
-            error: 'Forbidden',
-            message: 'Token jest nieaktywny',
-          });
-        }
+        if (!assertTokenUsable(personalizationCase, reply)) return;
 
         if (!(await assertPersonalizationFeatureEnabled(personalizationCase, reply))) return;
+        // Powtorne zatwierdzenie tej samej sprawy kolejkowalo kolejna paczke
+        // renderow i przestawialo `submittedAt` - sprawa zatwierdzona jest
+        // zamknieta do czasu, az admin cofnie status.
+        if (!assertCaseWritable(personalizationCase, reply)) return;
 
         // Zbuduj mapę fieldKey -> fieldId (na podstawie template)
         const fieldKeyToId = new Map<string, string>();
@@ -924,7 +929,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
 
         // Jeśli w body przyszły odpowiedzi, zapisz je przed walidacją
         let mergedAnswers: unknown = personalizationCase.answersJson;
-        const layoutOverrides = request.body?.layoutOverrides ?? personalizationCase.layoutOverrides;
+        const layoutOverrides = overrides.data ?? personalizationCase.layoutOverrides;
         if (hasAnswersPayload(request.body)) {
           mergedAnswers = await saveAnswers(
             personalizationCase.id,
@@ -949,6 +954,32 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           return reply.status(400).send({
             error: 'Bad Request',
             message: 'Brak wypełnionych pól personalizacji',
+          });
+        }
+
+        // Ta sama walidacja, ktora blokuje przycisk w portalu - tyle ze tutaj
+        // realnie decyduje. Do tej pory `submit` sprawdzal wylacznie to, czy
+        // cokolwiek wypelniono, wiec sprawa z nazwiskiem wychodzacym poza
+        // ramke przechodzila i konczyla sie `FAILED_RENDER` przy paczce.
+        // Ostrzezenia (np. przybliżony pomiar bez kroju w rejestrze) nie
+        // blokuja - blokuja wylacznie bledy.
+        const submitValidation = await validateCaseAnswers(
+          personalizationCase,
+          allFields,
+          mergedAnswers,
+          layoutOverrides
+        );
+
+        if (submitValidation.errors?.length) {
+          await prisma.personalizationCase.update({
+            where: { id: personalizationCase.id },
+            data: { validationSummary: JSON.parse(JSON.stringify(submitValidation)) },
+          });
+
+          return reply.status(400).send({
+            error: 'Validation Failed',
+            message: submitValidation.errors[0]?.message || 'Personalizacja zawiera błędy',
+            validation: submitValidation,
           });
         }
 
@@ -1014,7 +1045,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
     '/:token/upload-preview',
     {
       config: {
-        rateLimit: RATE_LIMITS.publicPreviewUpload,
+        rateLimit: { ...RATE_LIMITS.publicPreviewUpload, keyGenerator: tokenRateLimitKey },
       },
       schema: {
         tags: ['personalization'],
@@ -1056,7 +1087,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           where: { customerTokenHash: tokenHash },
           select: {
             id: true,
+            status: true,
             tokenActive: true,
+            customerTokenExpiresAt: true,
             orderItem: {
               select: {
                 orderId: true,
@@ -1083,14 +1116,10 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
-        if (!personalizationCase.tokenActive) {
-          return reply.status(403).send({
-            error: 'Forbidden',
-            message: 'Token jest nieaktywny',
-          });
-        }
+        if (!assertTokenUsable(personalizationCase, reply)) return;
 
         if (!(await assertPersonalizationFeatureEnabled(personalizationCase, reply))) return;
+        if (!assertCaseWritable(personalizationCase, reply)) return;
 
         // Pobierz plik z multipart
         const data = await request.file();
@@ -1203,6 +1232,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           where: { customerTokenHash: hashToken(request.params.token) },
           select: {
             tokenActive: true,
+            customerTokenExpiresAt: true,
             order: { select: { shop: { select: { tenantId: true } } } },
             orderItem: { select: { order: { select: { shop: { select: { tenantId: true } } } } } },
           },
@@ -1211,9 +1241,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         if (!personalizationCase) {
           return reply.status(404).send({ error: 'Not Found', message: 'Nie znaleziono personalizacji' });
         }
-        if (!personalizationCase.tokenActive) {
-          return reply.status(403).send({ error: 'Forbidden', message: 'Token jest nieaktywny' });
-        }
+        if (!assertTokenUsable(personalizationCase, reply)) return;
         if (!(await assertPersonalizationFeatureEnabled(personalizationCase, reply))) return;
 
         // Tenant bierzemy ze sprawy - portal nie ma kontekstu admina, a klient
@@ -1239,7 +1267,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
   fastify.post<{ Params: PersonalizationParams }>(
     '/:token/asset',
     {
-      config: { rateLimit: RATE_LIMITS.publicAssetUpload },
+      config: {
+        rateLimit: { ...RATE_LIMITS.publicAssetUpload, keyGenerator: tokenRateLimitKey },
+      },
       schema: {
         tags: ['personalization'],
         summary: 'Wgraj własną grafikę do projektu',
@@ -1273,7 +1303,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           where: { customerTokenHash: hashToken(request.params.token) },
           select: {
             id: true,
+            status: true,
             tokenActive: true,
+            customerTokenExpiresAt: true,
             order: { select: { shop: { select: { tenantId: true } } } },
             template: { select: { version: true } },
             orderItem: {
@@ -1289,10 +1321,9 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         if (!personalizationCase) {
           return reply.status(404).send({ error: 'Not Found', message: 'Nie znaleziono personalizacji' });
         }
-        if (!personalizationCase.tokenActive) {
-          return reply.status(403).send({ error: 'Forbidden', message: 'Token jest nieaktywny' });
-        }
+        if (!assertTokenUsable(personalizationCase, reply)) return;
         if (!(await assertPersonalizationFeatureEnabled(personalizationCase, reply))) return;
+        if (!assertCaseWritable(personalizationCase, reply)) return;
 
         const data = await request.file();
         if (!data) {

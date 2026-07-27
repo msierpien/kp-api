@@ -2,7 +2,7 @@ import prisma from '../../lib/prisma';
 import { Prisma } from '@prisma/client';
 import type { CreateManualOrderInput, OrdersCountsQueryInput, OrdersListQueryInput } from '../../schemas/admin.schema';
 import type { ManualOrderResponse, PaginatedResponse } from '../../types';
-import { generateAccessToken } from '../../lib/token';
+import { generateAccessToken, getTokenExpiryDate } from '../../lib/token';
 import { config } from '../../config';
 import { emailService } from '../email/email.service';
 import { queuePersonalizationEmail } from '../queue/email.queue';
@@ -545,6 +545,7 @@ export async function createManualOrder(data: CreateManualOrderInput): Promise<M
             customerTokenHash: hash,
             customerTokenEncrypted: encrypted,
             tokenActive: true,
+            customerTokenExpiresAt: getTokenExpiryDate(),
           },
         });
 

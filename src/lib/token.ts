@@ -1,5 +1,21 @@
 import crypto from 'crypto';
 import { encrypt } from './encryption';
+import { config } from '../config';
+
+/** Milisekundy w dobie - czytelniej niz 86400000 w wyrazeniu. */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Termin waznosci nowo wydanego linku klienta.
+ *
+ * `PERSONALIZATION_TOKEN_TTL_DAYS=0` wylacza termin (link zyje do recznej
+ * dezaktywacji) - zachowanie sprzed wprowadzenia wygasania.
+ */
+export function getTokenExpiryDate(now: Date = new Date()): Date | null {
+  const days = config.personalization.tokenTtlDays;
+  if (!days) return null;
+  return new Date(now.getTime() + days * DAY_MS);
+}
 
 /**
  * Generuje kryptograficznie bezpieczny token dostępu.

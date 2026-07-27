@@ -8,7 +8,43 @@ import { mergeLayoutWithOverrides } from '../../lib/layout-overrides';
 import path from 'path';
 import fs from 'fs/promises';
 import { config } from '../../config';
+import { resolveStorageFilePath } from '../storage/local-storage.service';
 import { listFonts, PRINTABLE_FONT_FORMATS } from '../admin/fonts.service';
+
+/**
+ * Zamienia `imageUrl` warstwy na sciezke pliku w magazynie.
+ *
+ * Warstwy nie pochodza wylacznie od projektanta - klient dokleja wlasne
+ * (`layoutOverrides.addedLayers`), wiec `imageUrl` jest danymi z zewnatrz.
+ * Wczesniej trafialo prosto do `path.join` (wyjscie poza magazyn przez `..`)
+ * albo do `loadImage(url)` (zadanie HTTP z serwera, czyli SSRF).
+ *
+ * Adres http przyjmujemy TYLKO jesli wskazuje nasz wlasny magazyn - wtedy
+ * czytamy plik z dysku zamiast wolac samych siebie po sieci. Zwraca null,
+ * gdy sciezki nie da sie bezpiecznie rozwiazac; wolajacy loguje i pomija
+ * warstwe, zamiast wywracac caly render.
+ */
+function resolveLayerImagePath(imageUrl: string): string | null {
+  const value = String(imageUrl || '').trim();
+  if (!value) return null;
+
+  let relative = value;
+
+  if (/^https?:\/\//i.test(value)) {
+    const publicPrefix = config.storage.publicUrl.replace(/\/$/, '');
+    if (!value.startsWith(`${publicPrefix}/`)) return null;
+    relative = decodeURIComponent(value.slice(publicPrefix.length + 1));
+  } else if (/^[a-z][a-z0-9+.-]*:/i.test(value)) {
+    // file:, data:, ftp: - nic z tego nie ma prawa trafic do renderera.
+    return null;
+  }
+
+  try {
+    return resolveStorageFilePath(relative);
+  } catch {
+    return null;
+  }
+}
 
 interface RenderOptions {
   width: number;
@@ -208,15 +244,18 @@ async function layerToFabricObject(
   // Background lub Image
   if (layer.type === 'background' || layer.type === 'image') {
     const props = layer.properties as ImageProperties;
-    const imageUrl = props.imageUrl.startsWith('http')
-      ? props.imageUrl
-      : path.join(config.storage.path, props.imageUrl);
+    const imageUrl = resolveLayerImagePath(props.imageUrl);
+
+    if (!imageUrl) {
+      console.error(`[Fabric] Odrzucony adres grafiki warstwy ${layer.id}: ${props.imageUrl}`);
+      return null;
+    }
 
     try {
       // SVG: node-canvas go nie otworzy, wiec najpierw rasteryzujemy przez
       // resvg w docelowej rozdzielczosci (z ewentualnym przebarwieniem
       // na kolor z palety projektu).
-      const img = isSvgPath(imageUrl) && !props.imageUrl.startsWith('http')
+      const img = isSvgPath(imageUrl)
         ? await loadImage(
             await rasterizeSvgFile({
               filePath: imageUrl,
@@ -700,9 +739,12 @@ export async function renderMockupPng(
 ): Promise<Buffer> {
   const { createCanvas, Image } = await import('canvas');
 
-  const photoPath = mockup.imageUrl.startsWith('http')
-    ? mockup.imageUrl
-    : path.join(config.storage.path, mockup.imageUrl);
+  // Zdjecie mockupu pochodzi z szablonu (admin), ale ta sama sciezka co
+  // warstwy - jedna regula rozwiazywania adresow dla calego renderera.
+  const photoPath = resolveLayerImagePath(mockup.imageUrl);
+  if (!photoPath) {
+    throw new Error(`Nieprawidłowy adres zdjęcia mockupu: ${mockup.imageUrl}`);
+  }
   const photo = await loadImage(photoPath);
 
   const maxWidthPx = options.maxWidthPx;

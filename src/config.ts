@@ -50,6 +50,13 @@ const envSchema = z.object({
   FRONTEND_URL: z.string().url().default('http://localhost:3000'),
   PUBLIC_PORTAL_BASE_URL: z.string().url().default('http://localhost:3002'),
 
+  // Personalizacja: jak dlugo zyje link wyslany klientowi (0 = bez terminu)
+  PERSONALIZATION_TOKEN_TTL_DAYS: z
+    .string()
+    .transform(Number)
+    .pipe(z.number().int().min(0).max(3650))
+    .default('90'),
+
   // Storage URLs
   PUBLIC_STORAGE_URL: z.string().url().optional(),
 
@@ -210,6 +217,14 @@ export const config = {
     adminUrl: env.FRONTEND_URL,
     portalUrl: env.PUBLIC_PORTAL_BASE_URL,
     publicPortalBaseUrl: env.PUBLIC_PORTAL_BASE_URL,
+  },
+
+  /**
+   * Portal klienta (dostep tokenem z linku)
+   */
+  personalization: {
+    /** Waznosc linku w dniach; 0 wylacza termin (link zyje do dezaktywacji). */
+    tokenTtlDays: env.PERSONALIZATION_TOKEN_TTL_DAYS,
   },
 
   /**

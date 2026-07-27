@@ -29,6 +29,27 @@ export const RATE_LIMITS = {
     timeWindow: '1 minute',
     groupId: 'personalization-preview',
   },
+  /** Odczyt sprawy przez klienta - portal wola to przy kazdym wejsciu. */
+  personalizationRead: {
+    max: 60,
+    timeWindow: '1 minute',
+    groupId: 'personalization-read',
+  },
+  /** Autozapis szkicu chodzi co ~2,5 s, wiec limit musi to miescic z zapasem. */
+  personalizationWrite: {
+    max: 40,
+    timeWindow: '1 minute',
+    groupId: 'personalization-write',
+  },
+  /**
+   * Zatwierdzenie kolejkuje pelna paczke renderow (realna praca CPU),
+   * a klient robi to raz. Limit jest celowo ciasny.
+   */
+  personalizationSubmit: {
+    max: 5,
+    timeWindow: '1 minute',
+    groupId: 'personalization-submit',
+  },
   /** Wgrywanie wlasnych grafik przez klienta w edytorze. */
   publicAssetUpload: {
     max: 10,

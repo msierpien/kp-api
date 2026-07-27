@@ -1,4 +1,5 @@
-import { FastifyInstance } from 'fastify';
+import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { isAllowedOrigin } from '../../lib/allowed-origins';
 import { authMiddleware, requireAdminPathAccess, requireTenantFeatureAccess } from '../../middleware/auth.middleware';
 import { requireAdminApiCompatibility } from '../../middleware/admin-compatibility.middleware';
 import { statsRoutes } from './stats.routes';
@@ -30,7 +31,36 @@ import { wholesaleRoutes } from './wholesale.routes';
 import { competitorAnalyticsRoutes } from './competitor-analytics.routes';
 import { writeAdminAuditLog } from '../../services/audit/audit-log.service';
 
+/**
+ * Straznik CSRF dla zapisow w panelu.
+ *
+ * Ciasteczka sesji admina musza miec `SameSite=None` (panel stoi na innej
+ * domenie niz API), wiec przegladarka dolacza je takze do zadan z obcych
+ * stron. Preflight ratuje tylko JSON - `multipart/form-data` to zadanie
+ * proste i CORS go nie zatrzyma, czyli obca strona moze wyslac upload
+ * w imieniu zalogowanego admina. Zadania bez naglowka Origin (curl, skrypty
+ * serwerowe, integracje) przepuszczamy - przegladarka zawsze go ustawia
+ * przy zadaniach mutujacych, a te nie sa wektorem CSRF.
+ */
+function requireTrustedOrigin() {
+  const mutatingMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    if (!mutatingMethods.has(request.method)) return;
+
+    const origin = request.headers.origin;
+    if (!origin || isAllowedOrigin(origin)) return;
+
+    request.log.warn({ origin, url: request.url }, 'Odrzucone zadanie z niedozwolonego origin');
+    return reply.status(403).send({
+      error: 'Forbidden',
+      message: 'Żądanie z niedozwolonego źródła',
+    });
+  };
+}
+
 export async function adminRoutes(fastify: FastifyInstance) {
+  fastify.addHook('preHandler', requireTrustedOrigin());
   fastify.addHook('preHandler', requireAdminApiCompatibility());
   // Apply auth middleware to all admin routes
   fastify.addHook('preHandler', authMiddleware(fastify));

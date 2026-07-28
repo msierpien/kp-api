@@ -9,7 +9,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { config } from '../../config';
 import { resolveStorageFilePath } from '../storage/local-storage.service';
-import { listFonts, PRINTABLE_FONT_FORMATS } from '../admin/fonts.service';
+import { resolveFontFile } from '../admin/fonts.service';
 
 /**
  * Zamienia `imageUrl` warstwy na sciezke pliku w magazynie.
@@ -102,17 +102,18 @@ function fontSizeToRenderPx(
  * istnieje, wiec KAZDY krój pisma cicho spadal na domyslny systemowy i wydruk
  * ignorowal ustawienia szablonu.
  */
-async function loadFontFamily(fontFamily: string, weight: number = 400): Promise<void> {
-  const fontKey = `${fontFamily}-${weight}`;
+async function loadFontFamily(
+  fontFamily: string,
+  weight: number = 400,
+  style: 'normal' | 'italic' = 'normal'
+): Promise<void> {
+  const fontKey = `${fontFamily}::${weight}::${style}`;
   if (loadedFonts.has(fontKey)) return;
 
   try {
-    const available = await listFonts();
-    const match = available.find(
-      (font) =>
-        font.family.toLowerCase() === fontFamily.toLowerCase() &&
-        PRINTABLE_FONT_FORMATS.includes(font.format.toLowerCase())
-    );
+    // Rodzina moze byc nazwa pliku (starsze szablony) albo rodzina
+    // typograficzna z wyborem wagi i kursywy - resolver zna oba warianty.
+    const match = await resolveFontFile(fontFamily, weight, style);
 
     if (!match) {
       console.warn(
@@ -124,9 +125,9 @@ async function loadFontFamily(fontFamily: string, weight: number = 400): Promise
 
     const fontPath = path.join(process.cwd(), 'storage', match.filePath);
     await fs.access(fontPath);
-    registerFont(fontPath, { family: fontFamily, weight: String(weight) });
+    registerFont(fontPath, { family: fontFamily, weight: String(weight), style });
     loadedFonts.add(fontKey);
-    console.log(`[Fabric] Font loaded: ${fontFamily} (${weight}) <- ${match.fileName}`);
+    console.log(`[Fabric] Font loaded: ${fontFamily} (${weight}, ${style}) <- ${match.fileName}`);
   } catch (error) {
     console.warn(`[Fabric] Nie udalo sie zaladowac czcionki "${fontFamily}":`, error);
   }
@@ -139,7 +140,7 @@ async function loadLayoutFonts(layout: TemplateLayoutJson): Promise<void> {
   // Mapa zamiast klucza tekstowego: wczesniej rodzina i waga byly sklejane
   // myslnikiem i rozbijane split('-'), wiec krój z myslnikiem w nazwie
   // (np. "Noto-Serif") gubil wage i czesc nazwy.
-  const needed = new Map<string, { family: string; weight: number }>();
+  const needed = new Map<string, { family: string; weight: number; style: 'normal' | 'italic' }>();
 
   for (const layer of layout.layers) {
     if (layer.type !== 'text' && layer.type !== 'static_text' && layer.type !== 'textbox') continue;
@@ -149,11 +150,12 @@ async function loadLayoutFonts(layout: TemplateLayoutJson): Promise<void> {
     if (!family) continue;
 
     const weight = Number(props.fontWeight) || 400;
-    needed.set(`${family}::${weight}`, { family, weight });
+    const style = props.fontStyle === 'italic' ? 'italic' : 'normal';
+    needed.set(`${family}::${weight}::${style}`, { family, weight, style });
   }
 
-  for (const { family, weight } of needed.values()) {
-    await loadFontFamily(family, weight);
+  for (const { family, weight, style } of needed.values()) {
+    await loadFontFamily(family, weight, style);
   }
 }
 

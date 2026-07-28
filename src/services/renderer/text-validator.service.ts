@@ -2,7 +2,7 @@
 import opentype from 'opentype.js';
 import path from 'path';
 import fs from 'fs/promises';
-import { getFontsRegistryVersion, listFonts, PRINTABLE_FONT_FORMATS } from '../admin/fonts.service';
+import { getFontsRegistryVersion, resolveFontFile } from '../admin/fonts.service';
 
 interface ValidationError {
   field: string;
@@ -69,19 +69,6 @@ const DEFAULT_FONT_SIZE = 16;
 const ALLOWED_CHARS_REGEX = /^[a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ0-9\s.,!?():\-'"\n]+$/;
 
 /**
- * Nazwy wariantow, ktore w rejestrze wystepuja jako osobne pliki
- * ("Montserrat_Bold.ttf" -> rodzina "Montserrat Bold"). Dla wagi 700 chcemy
- * zmierzyc tekst faktycznym boldem, bo jest zauwazalnie szerszy od regulara.
- */
-function familyCandidates(fontFamily: string, weight: number): string[] {
-  const base = fontFamily.trim();
-  if (!base) return [];
-  if (weight >= 600) return [`${base} Bold`, `${base} SemiBold`, base];
-  if (weight <= 300) return [`${base} Light`, base];
-  return [base, `${base} Regular`];
-}
-
-/**
  * Laduje krój z REJESTRU czcionek (`storage/fonts`) - tego samego, z ktorego
  * korzysta renderer.
  *
@@ -103,16 +90,9 @@ async function loadFont(fontFamily: string, weight: number = 400): Promise<opent
   }
 
   try {
-    const available = await listFonts();
-    const printable = available.filter((font) =>
-      PRINTABLE_FONT_FORMATS.includes(font.format.toLowerCase())
-    );
-
-    const match = familyCandidates(fontFamily, weight)
-      .map((candidate) =>
-        printable.find((font) => font.family.toLowerCase() === candidate.toLowerCase())
-      )
-      .find((font) => Boolean(font));
+    // Ten sam resolver co renderer - pomiar musi trafiac w plik, ktory
+    // faktycznie pojdzie na wydruk (bold jest zauwazalnie szerszy od regulara).
+    const match = await resolveFontFile(fontFamily, weight);
 
     if (!match) {
       console.warn(

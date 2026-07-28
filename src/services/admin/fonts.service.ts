@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import * as fontkit from 'fontkit';
 
 const FONTS_DIR = path.join(process.cwd(), 'storage', 'fonts');
 const ALLOWED_EXTENSIONS = ['.ttf', '.otf', '.woff', '.woff2'];
@@ -22,6 +23,81 @@ export interface FontItem {
   format: string;   // ttf | otf | woff | woff2
   /** Czy krój zadziała w druku (renderer serwerowy rejestruje tylko TTF/OTF). */
   printable: boolean;
+  /**
+   * Rodzina typograficzna z pliku (name ID 16, z fallbackiem na ID 1).
+   * Laczy warianty jednego kroju: LobsterTwo-Bold i LobsterTwo-Italic maja
+   * tu obie "Lobster Two", wiec panel pokazuje jedna pozycje z wyborem wagi.
+   */
+  typographicFamily: string;
+  /** Waga z OS/2 (100-900). */
+  weight: number;
+  style: 'normal' | 'italic';
+  /** Nazwa wariantu w rodzinie, np. "SemiBold Italic". */
+  variantLabel: string;
+  /** Krój zmienny - plik niesie os wagi, nie pojedyncza wartosc. */
+  variable: boolean;
+}
+
+/** Metadane odczytane z pliku; brak = plik nie do rozczytania. */
+type FontMetadata = Pick<FontItem, 'typographicFamily' | 'weight' | 'style' | 'variantLabel' | 'variable'>;
+
+function pickNameRecord(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, string>;
+    return record.en || Object.values(record)[0] || '';
+  }
+  return '';
+}
+
+/**
+ * Rodzina, waga i styl wprost z pliku.
+ *
+ * Nazwa pliku klamie: "CormorantInfant-SemiBold.ttf" to rodzina
+ * "Cormorant Infant" w wadze 600, a nie osobny krój "CormorantInfant SemiBold".
+ * Bez tego panel pokazywal kilkanascie pozycji tego samego kroju, a wybor wagi
+ * nie mial czego zmieniac.
+ */
+async function readFontMetadata(fullPath: string, format: string): Promise<FontMetadata | null> {
+  if (!PRINTABLE_FONT_FORMATS.includes(format)) return null;
+
+  try {
+    const font: any = await fontkit.open(fullPath);
+    if (!font || font.type === 'TTC' || font.type === 'DFont') return null;
+
+    const records = font.name?.records ?? {};
+    const preferredFamily = pickNameRecord(records.preferredFamily);
+    const preferredSubfamily = pickNameRecord(records.preferredSubfamily);
+    const family = preferredFamily || font.familyName || '';
+    if (!family) return null;
+
+    const subfamily = preferredSubfamily || font.subfamilyName || 'Regular';
+    const weight = Number(font['OS/2']?.usWeightClass) || 400;
+    const italic = /italic|oblique/i.test(subfamily) || Number(font.italicAngle) !== 0;
+    const variable = Boolean(font.variationAxes && Object.keys(font.variationAxes).length > 0);
+
+    return {
+      typographicFamily: family.trim(),
+      weight: Math.min(900, Math.max(100, weight)),
+      style: italic ? 'italic' : 'normal',
+      variantLabel: subfamily.trim() || 'Regular',
+      variable,
+    };
+  } catch (error) {
+    console.warn(`[Fonts] Nie udalo sie odczytac metadanych z ${path.basename(fullPath)}:`, error);
+    return null;
+  }
+}
+
+/** Metadane zastepcze, gdy pliku nie da sie rozczytac (np. woff2). */
+function fallbackMetadata(family: string): FontMetadata {
+  return {
+    typographicFamily: family,
+    weight: 400,
+    style: /italic/i.test(family) ? 'italic' : 'normal',
+    variantLabel: 'Regular',
+    variable: false,
+  };
 }
 
 type FontsListCacheEntry = {
@@ -69,6 +145,8 @@ export async function listFonts(): Promise<FontItem[]> {
     const stat = await fs.stat(fullPath);
     const baseName = path.basename(entry.name, ext);
     const family = baseName.replace(/_/g, ' ');
+    const format = ext.replace('.', '');
+    const metadata = (await readFontMetadata(fullPath, format)) ?? fallbackMetadata(family);
 
     return {
       id: baseName,
@@ -76,8 +154,9 @@ export async function listFonts(): Promise<FontItem[]> {
       fileName: entry.name,
       filePath: `fonts/${entry.name}`,
       fileSize: stat.size,
-      format: ext.replace('.', ''),
-      printable: PRINTABLE_FONT_FORMATS.includes(ext.replace('.', '')),
+      format,
+      printable: PRINTABLE_FONT_FORMATS.includes(format),
+      ...metadata,
     };
   }));
 
@@ -91,6 +170,57 @@ export async function listFonts(): Promise<FontItem[]> {
   };
 
   return result;
+}
+
+/**
+ * Plik kroju dla rodziny, wagi i stylu z warstwy.
+ *
+ * Layout moze trzymac nazwe pliku ("LobsterTwo-Bold" - starsze szablony) albo
+ * rodzine typograficzna ("Lobster Two" - panel po zgrupowaniu wariantow).
+ * Obie drogi musza trafiac w ten sam plik, inaczej podglad i wydruk pokazuja
+ * inny krój niz edytor.
+ */
+export async function resolveFontFile(
+  fontFamily: string,
+  weight: number = 400,
+  style: 'normal' | 'italic' = 'normal'
+): Promise<FontItem | null> {
+  const wanted = fontFamily.trim().toLowerCase();
+  if (!wanted) return null;
+
+  const available = await listFonts();
+  const printable = available.filter((font) => PRINTABLE_FONT_FORMATS.includes(font.format.toLowerCase()));
+
+  const variants = printable.filter((font) => font.typographicFamily.toLowerCase() === wanted);
+  if (variants.length > 0) return pickFontVariant(variants, weight, style);
+
+  // Starsze szablony trzymaja nazwe pliku - wtedy rodzina jest jednoelementowa.
+  const byFileName = printable.find((font) => font.family.toLowerCase() === wanted);
+  if (byFileName) return byFileName;
+
+  // Ostatnia proba: rodzina z nazwy pliku bez wariantu ("Montserrat Bold").
+  const looseMatch = printable.filter((font) => font.family.toLowerCase().startsWith(`${wanted} `));
+  return looseMatch.length > 0 ? pickFontVariant(looseMatch, weight, style) : null;
+}
+
+/**
+ * Wariant o zadanym stylu i najblizszej wadze.
+ *
+ * Pliki stale maja pierwszenstwo przed krojem zmiennym: node-canvas rejestruje
+ * krój zmienny w instancji domyslnej i nie umie ruszyc osi wagi, wiec przy
+ * wyborze 600 wydrukowalby Light. Krój zmienny zostaje jako ostatnia deska
+ * ratunku, gdy rodzina nie ma plikow statycznych.
+ */
+export function pickFontVariant(variants: FontItem[], weight: number, style: 'normal' | 'italic'): FontItem {
+  const sameStyle = variants.filter((font) => font.style === style);
+  const pool = sameStyle.length > 0 ? sameStyle : variants;
+  const staticFonts = pool.filter((font) => !font.variable);
+  const candidates = staticFonts.length > 0 ? staticFonts : pool;
+
+  return candidates.reduce(
+    (best, font) => (Math.abs(font.weight - weight) < Math.abs(best.weight - weight) ? font : best),
+    candidates[0]
+  );
 }
 
 export async function uploadFont(
@@ -113,6 +243,8 @@ export async function uploadFont(
   clearFontsListCache();
 
   const family = safeBaseName.replace(/_/g, ' ');
+  const format = ext.replace('.', '');
+  const metadata = (await readFontMetadata(fullPath, format)) ?? fallbackMetadata(family);
 
   return {
     id: safeBaseName,
@@ -120,8 +252,9 @@ export async function uploadFont(
     fileName,
     filePath: `fonts/${fileName}`,
     fileSize: fileBuffer.length,
-    format: ext.replace('.', ''),
-    printable: PRINTABLE_FONT_FORMATS.includes(ext.replace('.', '')),
+    format,
+    printable: PRINTABLE_FONT_FORMATS.includes(format),
+    ...metadata,
   };
 }
 

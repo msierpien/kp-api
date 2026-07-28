@@ -198,12 +198,22 @@ async function enrichTemplateLayoutWithGlobalFonts(template: any) {
     ...canonicalTemplate,
     layoutJson: {
       ...layoutJson,
-      fonts: globalFonts.map((font) => ({
-        family: font.family,
-        src: font.filePath,
-        weight: 400,
-        style: 'normal' as const,
-      })),
+      // Kazdy plik idzie dwa razy: pod nazwa pliku (starsze szablony trzymaja
+      // ja w fontFamily) i pod rodzina typograficzna z waga oraz stylem, po
+      // ktorych przegladarka wybiera wariant. Bez tej drugiej pozycji podglad
+      // klienta pokazywalby regular tam, gdzie wydruk da bold albo kursywe.
+      fonts: globalFonts.flatMap((font) => {
+        const variant = {
+          src: font.filePath,
+          weight: font.weight,
+          style: font.style,
+        };
+        const entries = [{ family: font.family, ...variant }];
+        if (font.typographicFamily && font.typographicFamily !== font.family) {
+          entries.push({ family: font.typographicFamily, ...variant });
+        }
+        return entries;
+      }),
     },
   };
 }

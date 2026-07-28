@@ -65,8 +65,17 @@ function invalidateFontCacheOnRegistryChange(): void {
 const DEFAULT_MAX_LINES = 10;
 const DEFAULT_FONT_SIZE = 16;
 
-// Dozwolone znaki (polskie + podstawowe)
-const ALLOWED_CHARS_REGEX = /^[a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ0-9\s.,!?():\-'"\n]+$/;
+/**
+ * Znaki dopuszczone, gdy kroju nie ma w rejestrze i nie da sie sprawdzic, co
+ * naprawde umie wydrukowac.
+ *
+ * Poza alfabetem i cyframi sa tu znaki, ktorych klienci uzywaja normalnie:
+ * polskie cudzyslowy („ ”), myslniki, wielokropek, ukosnik, ampersand, stopien
+ * czy waluty. Wczesniej lista konczyla sie na `.,!?():-'"` i nazwa restauracji
+ * w cudzyslowie („Zacisze”) wychodzila jako "niedozwolone znaki".
+ */
+const FALLBACK_ALLOWED_CHARS_REGEX =
+  /^[\p{L}\p{N}\s.,!?():;'"„”«»‘’\-–—…&@#%№*+=/\\[\]{}<>|~^$€£zł°²³·•\n\r]+$/u;
 
 /**
  * Laduje krój z REJESTRU czcionek (`storage/fonts`) - tego samego, z ktorego
@@ -141,6 +150,31 @@ async function measureTextWidth(
 }
 
 /**
+ * Znaki, ktorych wybrany krój NIE potrafi narysowac.
+ *
+ * O tym, co wolno wpisac, decyduje plik czcionki, a nie nasza lista: kazdy znak
+ * bez glifu wychodzi na wydruku pustym prostokatem, a wszystko inne (polskie
+ * cudzyslowy, myslniki, symbole walut) jest w porzadku. Gdy kroju nie ma
+ * w rejestrze, zostaje ostrozna lista zapasowa.
+ */
+async function findUnprintableChars(
+  text: string,
+  fontFamily: string = 'Inter',
+  fontWeight: number = 400
+): Promise<string[]> {
+  const unique = Array.from(new Set(Array.from(text))).filter((char) => !/\s/u.test(char));
+  if (unique.length === 0) return [];
+
+  const font = await loadFont(fontFamily, fontWeight);
+  if (!font) {
+    return unique.filter((char) => !FALLBACK_ALLOWED_CHARS_REGEX.test(char));
+  }
+
+  // charToGlyphIndex zwraca 0 (.notdef) dla znaku spoza kroju.
+  return unique.filter((char) => font.charToGlyphIndex(char) === 0);
+}
+
+/**
  * Normalizuje tekst (trim, usuwa podwójne spacje)
  */
 function normalizeText(text: string): string {
@@ -207,18 +241,20 @@ async function validateField(
     }
   }
 
-  // Walidacja znaków
+  // Znaki, ktorych nie da sie wydrukowac wybranym krojem
   if (fieldConfig.type === 'text' || fieldConfig.type === 'textarea') {
-    if (!ALLOWED_CHARS_REGEX.test(normalizedValue)) {
-      // Znajdź niedozwolone znaki
-      const invalidChars = normalizedValue
-        .split('')
-        .filter(char => !ALLOWED_CHARS_REGEX.test(char))
-        .filter((char, index, arr) => arr.indexOf(char) === index);
+    const unprintable = await findUnprintableChars(
+      normalizedValue,
+      fieldConfig.font?.family,
+      fieldConfig.font?.weight
+    );
 
+    if (unprintable.length > 0) {
       errors.push({
         field: fieldConfig.key,
-        message: `Pole "${fieldConfig.label}" zawiera niedozwolone znaki: ${invalidChars.join(', ')}`,
+        message:
+          `Pole "${fieldConfig.label}" zawiera znaki, których nie ma w wybranym kroju pisma ` +
+          `(${unprintable.join(' ')}) - na wydruku wyjdą puste prostokąty.`,
         severity: 'warning',
       });
     }

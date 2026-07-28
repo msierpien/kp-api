@@ -3,6 +3,8 @@ import { templateLayoutSchema, type TemplateFormInput, type CreateTemplateInput,
 import { canonicalizeTemplateForms } from '../../lib/personalization-answers';
 import { normalizeCanvasConfig } from '../../types/template-layout';
 import { buildDeletedFieldKeySet, buildFieldRenameMap, migrateLayoutFieldKeys, removeDeletedFieldLayers } from './template-field-key-migration';
+import { assertTemplateVersion, templateVersionToken } from './template-version';
+import { NotFoundError } from '../../lib/errors';
 
 export async function listTemplates() {
   const templates = await prisma.personalizationTemplate.findMany({
@@ -57,20 +59,34 @@ export async function listTemplates() {
 }
 
 export async function getTemplateForm(templateId: string) {
-  const forms = await prisma.form.findMany({
-    where: { templateId },
-    orderBy: { sortOrder: 'asc' },
-    include: {
-      fields: {
-        orderBy: { sortOrder: 'asc' },
+  const [forms, template] = await Promise.all([
+    prisma.form.findMany({
+      where: { templateId },
+      orderBy: { sortOrder: 'asc' },
+      include: {
+        fields: {
+          orderBy: { sortOrder: 'asc' },
+        },
       },
-    },
-  });
+    }),
+    prisma.personalizationTemplate.findUnique({
+      where: { id: templateId },
+      select: { updatedAt: true },
+    }),
+  ]);
 
-  return { forms: canonicalizeTemplateForms(forms) };
+  return {
+    forms: canonicalizeTemplateForms(forms),
+    // Ten sam znacznik co przy layoucie - zapis formularza tez dotyka szablonu.
+    version: template ? templateVersionToken(template.updatedAt) : undefined,
+  };
 }
 
-export async function replaceTemplateForm(templateId: string, input: TemplateFormInput) {
+export async function replaceTemplateForm(
+  templateId: string,
+  input: TemplateFormInput,
+  expectedVersion?: string
+) {
   const [existingForms, existingTemplate] = await Promise.all([
     prisma.form.findMany({
       where: { templateId },
@@ -83,9 +99,15 @@ export async function replaceTemplateForm(templateId: string, input: TemplateFor
     }),
     prisma.personalizationTemplate.findUnique({
       where: { id: templateId },
-      select: { layoutJson: true },
+      select: { layoutJson: true, updatedAt: true },
     }),
   ]);
+
+  if (!existingTemplate) {
+    throw new NotFoundError('Szablon nie znaleziony');
+  }
+
+  assertTemplateVersion(existingTemplate.updatedAt, expectedVersion);
 
   const renameMap = buildFieldRenameMap(existingForms, input.forms);
   const deletedKeys = buildDeletedFieldKeySet(existingForms, input.forms, renameMap);
@@ -133,14 +155,17 @@ export async function replaceTemplateForm(templateId: string, input: TemplateFor
       });
     }
 
-    if (changedLayout) {
-      await tx.personalizationTemplate.update({
-        where: { id: templateId },
-        data: {
-          layoutJson: changedLayout as any,
-        },
-      });
-    }
+    // Szablon dotykamy ZAWSZE, nie tylko przy zmianie layoutu: `updatedAt`
+    // jest znacznikiem wersji dla obu sciezek zapisu, wiec po zmianie samych
+    // pol formularza tez musi drgnac - inaczej kontrola konfliktu przepuscilaby
+    // nadpisanie z nieswiezej karty.
+    await tx.personalizationTemplate.update({
+      where: { id: templateId },
+      data: {
+        ...(changedLayout ? { layoutJson: changedLayout as any } : {}),
+        updatedAt: new Date(),
+      },
+    });
   });
 
   return getTemplateForm(templateId);

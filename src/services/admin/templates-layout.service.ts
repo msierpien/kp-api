@@ -4,6 +4,7 @@ import type { TemplateLayoutInput } from '../../schemas/admin.schema';
 import type { TemplateLayoutJson, TemplateAssetItem } from '../../types/template-layout';
 import { normalizeCanvasConfig } from '../../types/template-layout';
 import { validateTemplateLayout, type TemplateLayoutWarning } from './template-layout-validation';
+import { assertTemplateVersion, templateVersionToken } from './template-version';
 import fs from 'fs/promises';
 import path from 'path';
 import { imageExtensionForMimeType } from '../../lib/upload-validation';
@@ -16,27 +17,34 @@ const ALLOWED_TEMPLATE_ASSET_TYPES = new Set(['BACKGROUND', 'DECORATION', 'LOGO'
 // Layout CRUD
 // ============================================
 
-export async function getTemplateLayout(templateId: string): Promise<TemplateLayoutJson | null> {
+export async function getTemplateLayout(
+  templateId: string
+): Promise<{ layout: TemplateLayoutJson | null; version: string }> {
   const template = await prisma.personalizationTemplate.findUnique({
     where: { id: templateId },
-    select: { layoutJson: true },
+    select: { layoutJson: true, updatedAt: true },
   });
 
   if (!template) {
     throw new Error('Szablon nie znaleziony');
   }
 
-  return (template.layoutJson as unknown as TemplateLayoutJson) ?? null;
+  return {
+    layout: (template.layoutJson as unknown as TemplateLayoutJson) ?? null,
+    version: templateVersionToken(template.updatedAt),
+  };
 }
 
 export async function updateTemplateLayout(
   templateId: string,
-  layoutJson: TemplateLayoutInput
-): Promise<{ layout: TemplateLayoutJson; warnings: TemplateLayoutWarning[] }> {
+  layoutJson: TemplateLayoutInput,
+  expectedVersion?: string
+): Promise<{ layout: TemplateLayoutJson; warnings: TemplateLayoutWarning[]; version: string }> {
   const template = await prisma.personalizationTemplate.findUnique({
     where: { id: templateId },
     select: {
       id: true,
+      updatedAt: true,
       forms: {
         select: {
           fields: {
@@ -51,6 +59,8 @@ export async function updateTemplateLayout(
     throw new Error('Szablon nie znaleziony');
   }
 
+  assertTemplateVersion(template.updatedAt, expectedVersion);
+
   const normalizedLayout = {
     ...layoutJson,
     canvas: normalizeCanvasConfig(layoutJson.canvas as any),
@@ -63,12 +73,13 @@ export async function updateTemplateLayout(
     data: {
       layoutJson: normalizedLayout as any,
     },
-    select: { layoutJson: true },
+    select: { layoutJson: true, updatedAt: true },
   });
 
   return {
     layout: updated.layoutJson as unknown as TemplateLayoutJson,
     warnings,
+    version: templateVersionToken(updated.updatedAt),
   };
 }
 

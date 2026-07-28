@@ -33,6 +33,7 @@ import {
   MAX_TEMPLATE_ASSET_BYTES,
   assertAllowedImageUpload,
 } from '../../lib/upload-validation';
+import { ConflictError } from '../../lib/errors';
 import { RATE_LIMITS } from '../../lib/rate-limits';
 
 const templateItemResponseSchema = {
@@ -69,6 +70,9 @@ const templateItemResponseSchema = {
 const templateFormResponseSchema = {
   type: 'object',
   properties: {
+    // Bez zadeklarowania pola fast-json-stringify wycina je z odpowiedzi,
+    // a panel nie ma czym pilnowac konfliktu zapisu.
+    version: { type: 'string' },
     forms: {
       type: 'array',
       items: {
@@ -92,6 +96,7 @@ const templateFormResponseSchema = {
 const templateLayoutResponseSchema = {
   type: 'object',
   properties: {
+    version: { type: 'string' },
     layout: {
       type: ['object', 'null'],
       additionalProperties: true,
@@ -110,6 +115,19 @@ const templateLayoutResponseSchema = {
 const templateAssetResponseSchema = {
   type: 'object',
   additionalProperties: true,
+} as const;
+
+/** Znacznik wersji szablonu wczytanej przez panel - patrz template-version.ts. */
+type TemplateVersionQuery = { expectedVersion?: string };
+
+const templateVersionQuerySchema = {
+  type: 'object',
+  properties: {
+    expectedVersion: {
+      type: 'string',
+      description: 'Znacznik wersji z GET; zapis odrzucany (409), gdy szablon zmienil sie w miedzyczasie',
+    },
+  },
 } as const;
 
 export async function templatesRoutes(fastify: FastifyInstance) {
@@ -232,18 +250,22 @@ export async function templatesRoutes(fastify: FastifyInstance) {
   );
 
   // PUT /admin/templates/:id/form
-  fastify.put<{ Params: TemplateIdParams; Body: TemplateFormInput }>(
+  fastify.put<{ Params: TemplateIdParams; Body: TemplateFormInput; Querystring: TemplateVersionQuery }>(
     '/:id/form',
     {
       schema: {
         tags: ['templates'],
         summary: 'Zastąp konfigurację formularza szablonu',
         params: { type: 'object', properties: { id: { type: 'string' } } },
+        querystring: templateVersionQuerySchema,
         body: { type: 'object', description: 'Konfiguracja formularza z polami (TemplateFormInput)' },
         response: { 200: templateFormResponseSchema },
       },
     },
-    async (request: FastifyRequest<{ Params: TemplateIdParams; Body: TemplateFormInput }>, reply: FastifyReply) => {
+    async (
+      request: FastifyRequest<{ Params: TemplateIdParams; Body: TemplateFormInput; Querystring: TemplateVersionQuery }>,
+      reply: FastifyReply
+    ) => {
       const paramsParsed = templateIdParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
         return reply.status(400).send({ error: 'Validation Error', message: paramsParsed.error.errors[0].message });
@@ -252,8 +274,23 @@ export async function templatesRoutes(fastify: FastifyInstance) {
       if (!bodyParsed.success) {
         return reply.status(400).send({ error: 'Validation Error', message: bodyParsed.error.errors[0].message });
       }
-      const data = await replaceTemplateForm(paramsParsed.data.id, bodyParsed.data);
-      return reply.send(data);
+      try {
+        const data = await replaceTemplateForm(
+          paramsParsed.data.id,
+          bodyParsed.data,
+          request.query?.expectedVersion
+        );
+        return reply.send(data);
+      } catch (error: any) {
+        if (error instanceof ConflictError) {
+          return reply.status(error.statusCode).send({
+            error: error.error,
+            message: error.message,
+            details: error.details,
+          });
+        }
+        throw error;
+      }
     }
   );
 
@@ -310,8 +347,8 @@ export async function templatesRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({ error: 'Validation Error', message: paramsParsed.error.errors[0].message });
       }
       try {
-        const layout = await getTemplateLayout(paramsParsed.data.id);
-        return reply.send({ layout });
+        const { layout, version } = await getTemplateLayout(paramsParsed.data.id);
+        return reply.send({ layout, version });
       } catch (error: any) {
         fastify.log.error(error);
         return reply.status(404).send({ error: 'Not Found', message: error.message });
@@ -320,13 +357,14 @@ export async function templatesRoutes(fastify: FastifyInstance) {
   );
 
   // PUT /admin/templates/:id/layout
-  fastify.put<{ Params: TemplateIdParams; Body: TemplateLayoutInput }>(
+  fastify.put<{ Params: TemplateIdParams; Body: TemplateLayoutInput; Querystring: TemplateVersionQuery }>(
     '/:id/layout',
     {
       schema: {
         tags: ['templates'],
         summary: 'Zapisz wizualny layout szablonu (Fabric.js JSON)',
         params: { type: 'object', properties: { id: { type: 'string' } } },
+        querystring: templateVersionQuerySchema,
         body: { type: 'object', description: 'Konfiguracja layoutu Fabric.js z warstwami i fontami' },
         response: {
           200: templateLayoutResponseSchema,
@@ -334,7 +372,10 @@ export async function templatesRoutes(fastify: FastifyInstance) {
         },
       },
     },
-    async (request: FastifyRequest<{ Params: TemplateIdParams; Body: TemplateLayoutInput }>, reply: FastifyReply) => {
+    async (
+      request: FastifyRequest<{ Params: TemplateIdParams; Body: TemplateLayoutInput; Querystring: TemplateVersionQuery }>,
+      reply: FastifyReply
+    ) => {
       const paramsParsed = templateIdParamsSchema.safeParse(request.params);
       if (!paramsParsed.success) {
         return reply.status(400).send({ error: 'Validation Error', message: paramsParsed.error.errors[0].message });
@@ -348,9 +389,22 @@ export async function templatesRoutes(fastify: FastifyInstance) {
         });
       }
       try {
-        const result = await updateTemplateLayout(paramsParsed.data.id, bodyParsed.data);
+        const result = await updateTemplateLayout(
+          paramsParsed.data.id,
+          bodyParsed.data,
+          request.query?.expectedVersion
+        );
         return reply.send(result);
       } catch (error: any) {
+        // Konflikt wersji to normalna sytuacja przy dwoch kartach, nie awaria -
+        // panel ma na nim poprosic o odswiezenie, a nie pokazac "blad zapisu".
+        if (error instanceof ConflictError) {
+          return reply.status(error.statusCode).send({
+            error: error.error,
+            message: error.message,
+            details: error.details,
+          });
+        }
         fastify.log.error(error);
         return reply.status(400).send({ error: 'Update Failed', message: error.message });
       }

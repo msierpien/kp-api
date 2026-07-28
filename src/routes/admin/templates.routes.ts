@@ -25,6 +25,8 @@ import {
 import {
   getTemplateLayout,
   updateTemplateLayout,
+  listTemplateLayoutVersions,
+  restoreTemplateLayoutVersion,
   listTemplateAssets,
   uploadTemplateAsset,
   deleteTemplateAsset,
@@ -291,6 +293,69 @@ export async function templatesRoutes(fastify: FastifyInstance) {
           });
         }
         throw error;
+      }
+    }
+  );
+
+  // GET /admin/templates/:id/layout/versions
+  fastify.get<{ Params: TemplateIdParams }>(
+    '/:id/layout/versions',
+    {
+      schema: {
+        tags: ['templates'],
+        summary: 'Historia zapisanych wersji layoutu',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              versions: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            },
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: TemplateIdParams }>, reply: FastifyReply) => {
+      const paramsParsed = templateIdParamsSchema.safeParse(request.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send({ error: 'Validation Error', message: paramsParsed.error.errors[0].message });
+      }
+      return reply.send(await listTemplateLayoutVersions(paramsParsed.data.id));
+    }
+  );
+
+  // POST /admin/templates/:id/layout/versions/:versionId/restore
+  fastify.post<{ Params: TemplateIdParams & { versionId: string } }>(
+    '/:id/layout/versions/:versionId/restore',
+    {
+      schema: {
+        tags: ['templates'],
+        summary: 'Przywroc layout z historii',
+        params: {
+          type: 'object',
+          properties: { id: { type: 'string' }, versionId: { type: 'string' } },
+        },
+        response: { 200: templateLayoutResponseSchema },
+      },
+    },
+    async (
+      request: FastifyRequest<{ Params: TemplateIdParams & { versionId: string } }>,
+      reply: FastifyReply
+    ) => {
+      const paramsParsed = templateIdParamsSchema.safeParse(request.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send({ error: 'Validation Error', message: paramsParsed.error.errors[0].message });
+      }
+
+      try {
+        const result = await restoreTemplateLayoutVersion(
+          paramsParsed.data.id,
+          String(request.params.versionId)
+        );
+        return reply.send(result);
+      } catch (error: any) {
+        fastify.log.error(error);
+        return reply.status(400).send({ error: 'Restore Failed', message: error.message });
       }
     }
   );

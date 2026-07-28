@@ -678,6 +678,7 @@ model PersonalizationTemplate {
 
   tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   forms                Form[]
+  layoutVersions       TemplateLayoutVersion[]
   cases                PersonalizationCase[]
   personalizedProducts PersonalizedProduct[]
   templateAssets       TemplateAsset[]
@@ -688,6 +689,25 @@ model PersonalizationTemplate {
   @@index([code])
   @@index([isActive])
   @@map("personalization_templates")
+}
+
+/// Poprzednie wersje layoutu szablonu.
+///
+/// Cofnij w edytorze dziala tylko w obrebie sesji, a sprawy zamrazaja wlasny
+/// layoutSnapshot - projektant nie mial jak wrocic do wczorajszego ukladu.
+/// Zapisujemy stan SPRZED nadpisania, wiec najnowszy wpis to poprzednia wersja.
+model TemplateLayoutVersion {
+  id         String   @id @default(cuid())
+  templateId String   @map("template_id")
+  layoutJson Json     @map("layout_json")
+  /// Skrot dla listy: liczba stron i wariantow w chwili zapisu.
+  summary    String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  template PersonalizationTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId, createdAt])
+  @@map("template_layout_versions")
 }
 
 model TemplateAsset {

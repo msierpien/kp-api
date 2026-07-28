@@ -2,7 +2,7 @@ import prisma from '../../lib/prisma';
 import { Prisma } from '@prisma/client';
 import type { TemplateLayoutInput } from '../../schemas/admin.schema';
 import type { TemplateLayoutJson, TemplateAssetItem } from '../../types/template-layout';
-import { normalizeCanvasConfig } from '../../types/template-layout';
+import { getTemplatePages, normalizeCanvasConfig } from '../../types/template-layout';
 import { validateTemplateLayout, type TemplateLayoutWarning } from './template-layout-validation';
 import { assertTemplateVersion, templateVersionToken } from './template-version';
 import fs from 'fs/promises';
@@ -35,6 +35,97 @@ export async function getTemplateLayout(
   };
 }
 
+/** Ile wersji trzymamy - starsze i tak nikt nie przywraca, a JSON waży. */
+const LAYOUT_HISTORY_LIMIT = 20;
+
+/** Krotki opis wersji na liste: liczba stron i wariantow. */
+function describeLayout(layout: unknown): string {
+  const parsed = layout as TemplateLayoutJson | null;
+  if (!parsed) return 'pusty layout';
+
+  const pages = getTemplatePages(parsed).length;
+  const variants = Array.isArray(parsed.variants) ? parsed.variants.length : 1;
+  const pageLabel = pages === 1 ? '1 strona' : `${pages} stron`;
+  return variants > 1 ? `${pageLabel}, ${variants} warianty` : pageLabel;
+}
+
+/**
+ * Odklada stan SPRZED nadpisania.
+ *
+ * Zapisujemy poprzednia wersje, nie nowa - dzieki temu najswiezszy wpis
+ * historii to zawsze "to, co bylo przed ostatnim zapisem", czyli dokladnie
+ * to, do czego projektant chce wrocic.
+ */
+async function snapshotLayout(templateId: string, layout: unknown): Promise<void> {
+  if (!layout) return;
+
+  await prisma.templateLayoutVersion.create({
+    data: {
+      templateId,
+      layoutJson: layout as any,
+      summary: describeLayout(layout),
+    },
+  });
+
+  const stale = await prisma.templateLayoutVersion.findMany({
+    where: { templateId },
+    orderBy: { createdAt: 'desc' },
+    skip: LAYOUT_HISTORY_LIMIT,
+    select: { id: true },
+  });
+
+  if (stale.length > 0) {
+    await prisma.templateLayoutVersion.deleteMany({
+      where: { id: { in: stale.map((item) => item.id) } },
+    });
+  }
+}
+
+export async function listTemplateLayoutVersions(templateId: string) {
+  const versions = await prisma.templateLayoutVersion.findMany({
+    where: { templateId },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true, summary: true, createdAt: true },
+  });
+
+  return { versions };
+}
+
+/**
+ * Przywraca layout z historii.
+ *
+ * Biezacy stan trafia najpierw do historii, wiec przywrocenie samo daje sie
+ * cofnac - bez tego jedno klikniecie kasowaloby dzien pracy.
+ */
+export async function restoreTemplateLayoutVersion(templateId: string, versionId: string) {
+  const [template, version] = await Promise.all([
+    prisma.personalizationTemplate.findUnique({
+      where: { id: templateId },
+      select: { layoutJson: true },
+    }),
+    prisma.templateLayoutVersion.findFirst({
+      where: { id: versionId, templateId },
+      select: { layoutJson: true },
+    }),
+  ]);
+
+  if (!template) throw new Error('Szablon nie znaleziony');
+  if (!version) throw new Error('Wersja layoutu nie znaleziona');
+
+  await snapshotLayout(templateId, template.layoutJson);
+
+  const updated = await prisma.personalizationTemplate.update({
+    where: { id: templateId },
+    data: { layoutJson: version.layoutJson as any },
+    select: { layoutJson: true, updatedAt: true },
+  });
+
+  return {
+    layout: updated.layoutJson as unknown as TemplateLayoutJson,
+    version: templateVersionToken(updated.updatedAt),
+  };
+}
+
 export async function updateTemplateLayout(
   templateId: string,
   layoutJson: TemplateLayoutInput,
@@ -45,6 +136,7 @@ export async function updateTemplateLayout(
     select: {
       id: true,
       updatedAt: true,
+      layoutJson: true,
       forms: {
         select: {
           fields: {
@@ -60,6 +152,7 @@ export async function updateTemplateLayout(
   }
 
   assertTemplateVersion(template.updatedAt, expectedVersion);
+  const previousLayout = template.layoutJson;
 
   const normalizedLayout = {
     ...layoutJson,
@@ -67,6 +160,8 @@ export async function updateTemplateLayout(
   } as TemplateLayoutInput;
 
   const warnings = validateTemplateLayout(normalizedLayout, template.forms);
+
+  await snapshotLayout(templateId, previousLayout);
 
   const updated = await prisma.personalizationTemplate.update({
     where: { id: templateId },

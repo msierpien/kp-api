@@ -317,6 +317,9 @@ async function layerToFabricObject(
 
     const textField = new IText(value, {
       ...common,
+      // charSpacing fabrica ma te sama jednostke co letterSpacing formatu
+      // (1/1000 firetu), wiec nie ma tu zadnego przeliczania.
+      charSpacing: Number(props.letterSpacing) || 0,
       fontSize: fontSizeToRenderPx(props.fontSize, getFontUnit(props.fontUnit), dpi, scale),
       fontFamily: props.fontFamily,
       fontWeight: String(props.fontWeight || 400),
@@ -343,6 +346,7 @@ async function layerToFabricObject(
     
     const staticText = new IText(value, {
       ...common,
+      charSpacing: Number(props.letterSpacing) || 0,
       fontSize: fontSizeToRenderPx(props.fontSize, getFontUnit(props.fontUnit), dpi, scale),
       fontFamily: props.fontFamily,
       fontWeight: String(props.fontWeight || 400),
@@ -374,6 +378,7 @@ async function layerToFabricObject(
     
     const textbox = new Textbox(value, {
       ...common,
+      charSpacing: Number(props.letterSpacing) || 0,
       fontSize: fontSizeToRenderPx(props.fontSize, getFontUnit(props.fontUnit), dpi, scale),
       fontFamily: props.fontFamily,
       fontWeight: String(props.fontWeight || 400),

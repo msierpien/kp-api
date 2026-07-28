@@ -4,7 +4,7 @@ import { canonicalizeTemplateForms } from '../../lib/personalization-answers';
 import { normalizeCanvasConfig } from '../../types/template-layout';
 import { buildDeletedFieldKeySet, buildFieldRenameMap, migrateLayoutFieldKeys, removeDeletedFieldLayers } from './template-field-key-migration';
 import { assertTemplateVersion, templateVersionToken } from './template-version';
-import { NotFoundError } from '../../lib/errors';
+import { ConflictError, NotFoundError } from '../../lib/errors';
 
 export async function listTemplates() {
   const templates = await prisma.personalizationTemplate.findMany({
@@ -169,6 +169,87 @@ export async function replaceTemplateForm(
   });
 
   return getTemplateForm(templateId);
+}
+
+/**
+ * Kopia szablonu razem z layoutem i formularzem.
+ *
+ * Chrzest, komunia i urodziny to ten sam uklad z inna trescia - bez kopiowania
+ * kazdy projekt trzeba bylo skladac od zera. Assety zostaja przy oryginale:
+ * kopia wskazuje te same pliki w storage, wiec usuniecie kopii nie zabiera
+ * tla oryginalowi.
+ */
+export async function duplicateTemplate(templateId: string, input: { code: string; name: string }) {
+  const source = await prisma.personalizationTemplate.findUnique({
+    where: { id: templateId },
+    include: {
+      forms: {
+        orderBy: { sortOrder: 'asc' },
+        include: { fields: { orderBy: { sortOrder: 'asc' } } },
+      },
+    },
+  });
+
+  if (!source) {
+    throw new NotFoundError('Szablon nie znaleziony');
+  }
+
+  const existing = await prisma.personalizationTemplate.findFirst({
+    where: { code: input.code },
+  });
+  if (existing) {
+    throw new ConflictError(`Szablon o kodzie "${input.code}" już istnieje`);
+  }
+
+  return prisma.personalizationTemplate.create({
+    data: {
+      code: input.code,
+      name: input.name,
+      description: source.description,
+      // Kopia zaczyna od wersji 1 - numer wersji sluzy do zamrazania spraw
+      // przy oryginale i nie ma sensu go dziedziczyc.
+      version: 1,
+      editorType: source.editorType,
+      isActive: source.isActive,
+      layoutJson: (source.layoutJson ?? undefined) as any,
+      thumbnailUrl: source.thumbnailUrl,
+      forms: {
+        create: source.forms.map((form) => ({
+          name: form.name,
+          sortOrder: form.sortOrder,
+          isActive: form.isActive,
+          fields: {
+            create: form.fields.map((field) => ({
+              key: field.key,
+              label: field.label,
+              type: field.type,
+              scope: field.scope,
+              required: field.required,
+              minLength: field.minLength,
+              maxLength: field.maxLength,
+              pattern: field.pattern,
+              placeholder: field.placeholder,
+              helpText: field.helpText,
+              defaultValue: field.defaultValue,
+              optionsJson: field.optionsJson ?? undefined,
+              repeaterGroupKey: field.repeaterGroupKey,
+              sortOrder: field.sortOrder,
+              validationRulesJson: field.validationRulesJson ?? undefined,
+            })),
+          },
+        })),
+      },
+    } as any,
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      version: true,
+      editorType: true,
+      isActive: true,
+      createdAt: true,
+    },
+  });
 }
 
 export async function createTemplate(input: CreateTemplateInput) {

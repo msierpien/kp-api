@@ -17,6 +17,7 @@ import {
   listTemplates,
   getTemplateForm,
   replaceTemplateForm,
+  duplicateTemplate,
   createTemplate,
   updateTemplateMetadata,
   deleteTemplate
@@ -33,7 +34,7 @@ import {
   MAX_TEMPLATE_ASSET_BYTES,
   assertAllowedImageUpload,
 } from '../../lib/upload-validation';
-import { ConflictError } from '../../lib/errors';
+import { ConflictError, NotFoundError } from '../../lib/errors';
 import { RATE_LIMITS } from '../../lib/rate-limits';
 
 const templateItemResponseSchema = {
@@ -290,6 +291,62 @@ export async function templatesRoutes(fastify: FastifyInstance) {
           });
         }
         throw error;
+      }
+    }
+  );
+
+  // POST /admin/templates/:id/duplicate
+  fastify.post<{ Params: TemplateIdParams; Body: { code?: string; name?: string } }>(
+    '/:id/duplicate',
+    {
+      schema: {
+        tags: ['templates'],
+        summary: 'Skopiuj szablon razem z layoutem i formularzem',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        body: {
+          type: 'object',
+          required: ['code', 'name'],
+          properties: {
+            code: { type: 'string', minLength: 1, maxLength: 50 },
+            name: { type: 'string', minLength: 1, maxLength: 100 },
+          },
+        },
+        response: {
+          201: { type: 'object', additionalProperties: true },
+          409: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
+    async (
+      request: FastifyRequest<{ Params: TemplateIdParams; Body: { code?: string; name?: string } }>,
+      reply: FastifyReply
+    ) => {
+      const paramsParsed = templateIdParamsSchema.safeParse(request.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send({ error: 'Validation Error', message: paramsParsed.error.errors[0].message });
+      }
+
+      const code = String(request.body?.code || '').trim().toUpperCase();
+      const name = String(request.body?.name || '').trim();
+      if (!/^[A-Z0-9_]+$/.test(code)) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: 'Kod może zawierać tylko wielkie litery, cyfry i podkreślenia',
+        });
+      }
+      if (!name) {
+        return reply.status(400).send({ error: 'Validation Error', message: 'Podaj nazwę kopii' });
+      }
+
+      try {
+        const template = await duplicateTemplate(paramsParsed.data.id, { code, name });
+        return reply.status(201).send(template);
+      } catch (error: any) {
+        if (error instanceof ConflictError || error instanceof NotFoundError) {
+          return reply.status(error.statusCode).send({ error: error.error, message: error.message });
+        }
+        fastify.log.error(error);
+        return reply.status(400).send({ error: 'Duplicate Failed', message: error.message });
       }
     }
   );

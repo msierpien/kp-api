@@ -455,6 +455,21 @@ const simpleSlotSchema = z.enum([
   'BOTTOM_RIGHT',
 ]);
 
+/**
+ * Styl fragmentu tekstu. Zakres liczy sie na surowym tekscie warstwy - patrz
+ * TextStyleRange w @msierpien/kp-template-core.
+ */
+const textStyleRangeSchema = z.object({
+  start: z.number().int().min(0),
+  end: z.number().int().min(0),
+  fontWeight: z.number().int().min(100).max(900).optional(),
+  fontStyle: z.enum(['normal', 'italic']).optional(),
+  underline: z.boolean().optional(),
+  fill: z.string().optional(),
+  fontFamily: z.string().optional(),
+  fontSize: z.number().positive().optional(),
+});
+
 const textFieldPropertiesSchema = z.object({
   type: z.literal('text'),
   fieldKey: z.string().default(''),
@@ -470,6 +485,7 @@ const textFieldPropertiesSchema = z.object({
   lineHeight: z.number().positive().default(1.2),
   maxLines: z.number().int().positive().default(1),
   textTransform: z.enum(['none', 'uppercase', 'lowercase', 'capitalize']).default('none'),
+  styleRanges: z.array(textStyleRangeSchema).optional(),
   editable: z.literal(true).default(true),
   clientDraggable: z.boolean().optional(),
   clientResizable: z.boolean().optional(),
@@ -517,6 +533,7 @@ const textboxPropertiesSchema = z.object({
   borderWidth: z.number().min(0).default(0),
   editable: z.boolean().default(true),
   splitByGrapheme: z.boolean().optional(),
+  styleRanges: z.array(textStyleRangeSchema).optional(),
   clientDraggable: z.boolean().optional(),
   clientResizable: z.boolean().optional(),
   clientRotatable: z.boolean().optional(),
@@ -613,6 +630,8 @@ const printLayoutSchema = z.object({
     heightMm: z.number().positive(),
   }),
   placements: z.array(printPlacementSchema).default([]),
+  // Brak = tryb wynika z wymiarow stron (shouldPrintPagesSeparately).
+  mode: z.enum(['sheet', 'separate']).optional(),
 });
 
 const mockupPointSchema = z.object({
@@ -635,6 +654,14 @@ const mockupConfigSchema = z.object({
   surfaces: z.array(mockupSurfaceSchema).default([]),
 });
 
+/** Wariant ukladu - wlasny komplet stron dla tego samego produktu. */
+const templateVariantSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  matchValue: z.string().optional(),
+  pages: z.array(templatePageSchema).default([]),
+});
+
 export const templateLayoutSchema = z.object({
   // Wersja 2 wprowadza pages/print. Wersja 1 (canvas + layers) nadal akceptowana.
   version: z.union([z.literal(1), z.literal(2)]),
@@ -643,6 +670,8 @@ export const templateLayoutSchema = z.object({
   layers: z.array(layerBaseSchema).default([]),
   // Bez tych pol z.object wycialoby strony przy zapisie (strip nieznanych kluczy).
   pages: z.array(templatePageSchema).optional(),
+  variants: z.array(templateVariantSchema).optional(),
+  variantFieldKey: z.string().optional(),
   print: printLayoutSchema.optional(),
   mockups: z.array(mockupConfigSchema).optional(),
   // Kolory proponowane klientowi; pilnujemy formatu hex, bo trafiaja wprost

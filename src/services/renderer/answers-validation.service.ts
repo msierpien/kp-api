@@ -4,7 +4,11 @@ import {
   type StructuredCaseAnswers,
 } from '../../lib/personalization-answers';
 import { mergeLayoutWithOverrides } from '../../lib/layout-overrides';
-import { getTemplatePages, type Layer, type TemplateLayoutJson } from '../../types/template-layout';
+import {
+  getTemplatePagesForAnswers,
+  type Layer,
+  type TemplateLayoutJson,
+} from '../../types/template-layout';
 import { validateAnswers } from './text-validator.service';
 
 export type FieldValidationConfig = PersonalizationAnswerField & {
@@ -69,9 +73,12 @@ function fontSizeToValidatorPx(fontSize: number, fontUnit: unknown, dpi: number)
 function collectLayersForItem(
   layout: TemplateLayoutJson,
   layoutOverrides: unknown,
-  itemIndex?: number
+  itemIndex?: number,
+  answers?: Record<string, unknown>
 ): Layer[] {
-  const pages = getTemplatePages(layout);
+  // Warianty maja wlasne strony - sprawdzamy ten, ktory faktycznie pojdzie do
+  // druku, inaczej walidacja mierzylaby ramki z ukladu podstawowego.
+  const pages = getTemplatePagesForAnswers(layout, answers);
 
   return pages.flatMap((page) => {
     const pageLayout: TemplateLayoutJson = {
@@ -92,12 +99,13 @@ export function buildValidationFields(
   fields: FieldValidationConfig[],
   layout: TemplateLayoutJson,
   layoutOverrides?: unknown,
-  itemIndex?: number
+  itemIndex?: number,
+  answers?: Record<string, unknown>
 ) {
   const dpi = getCanvasDpi(layout);
   const layerByFieldKey = new Map<string, Layer>();
 
-  for (const layer of collectLayersForItem(layout, layoutOverrides, itemIndex)) {
+  for (const layer of collectLayersForItem(layout, layoutOverrides, itemIndex, answers)) {
     if (layer.visible === false) continue;
     const fieldKey = getLayerFieldKey(layer);
     if (fieldKey && !layerByFieldKey.has(fieldKey)) {
@@ -168,14 +176,29 @@ export async function validatePrintPackageAnswers(
   const sharedFields = fields.filter((field) => getFieldScope(field) === 'SHARED');
   const itemFields = fields.filter((field) => getFieldScope(field) === 'INDIVIDUAL');
 
-  const sharedValidationFields = buildValidationFields(sharedFields, layout, layoutOverrides);
+  const sharedValidationFields = buildValidationFields(
+    sharedFields,
+    layout,
+    layoutOverrides,
+    undefined,
+    answers.sharedAnswers
+  );
   const sharedResult = await validateAnswers(answers.sharedAnswers, sharedValidationFields);
   const sharedErrors = prefixIssues(sharedResult.errors);
   const sharedWarnings = prefixIssues(sharedResult.warnings);
   const items: PrintPackageItemValidation[] = [];
 
   for (let itemIndex = 0; itemIndex < qty; itemIndex += 1) {
-    const itemValidationFields = buildValidationFields(itemFields, layout, layoutOverrides, itemIndex);
+    // Odpowiedzi sztuki nadpisuja wspolne - tak samo sklada je renderer, wiec
+    // wariant wybrany tutaj jest tym, ktory pojdzie na wydruk tej sztuki.
+    const itemAnswers = { ...answers.sharedAnswers, ...(answers.items[itemIndex] || {}) };
+    const itemValidationFields = buildValidationFields(
+      itemFields,
+      layout,
+      layoutOverrides,
+      itemIndex,
+      itemAnswers
+    );
     const result = await validateAnswers(answers.items[itemIndex] || {}, itemValidationFields);
     const errors = prefixIssues(result.errors, itemIndex);
     const warnings = prefixIssues(result.warnings, itemIndex);

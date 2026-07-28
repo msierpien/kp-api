@@ -1,18 +1,14 @@
 import type { TemplateLayoutInput } from '../../schemas/admin.schema';
+import {
+  validateTemplateVariants,
+  type TemplateLayoutJson,
+  type TemplateLayoutWarning,
+} from '../../types/template-layout';
 
-export type TemplateLayoutWarningCode =
-  | 'TEXT_LAYER_FIELD_KEY_MISSING'
-  | 'TEXT_LAYER_FIELD_KEY_UNMAPPED'
-  | 'TEXT_LAYER_FIELD_KEY_DUPLICATED'
-  | 'BACKGROUND_LAYER_MISSING';
-
-export type TemplateLayoutWarning = {
-  code: TemplateLayoutWarningCode;
-  message: string;
-  layerId?: string;
-  layerName?: string;
-  fieldKey?: string;
-};
+// Kody i ksztalt ostrzezenia zyja w pakiecie formatu - panel czyta je z tego
+// samego zrodla, wiec lokalna kopia rozjezdzalaby sie po kazdym wydaniu.
+export type TemplateLayoutWarningCode = TemplateLayoutWarning['code'];
+export type { TemplateLayoutWarning };
 
 type TemplateFormFieldKeySource = Array<{ fields: Array<{ key: string }> }> | null;
 
@@ -88,6 +84,12 @@ export function collectTemplateLayoutWarnings(
       message: 'Layout nie ma warstwy tła. Tło jest opcjonalne, ale eksport do druku może wymagać kontroli.',
     });
   }
+
+  // Sklad do druku i mockupy sa wspolne dla szablonu i wskazuja strony po id,
+  // wiec wariant bez ktorejs strony po cichu wypadlby z wydruku.
+  warnings.push(
+    ...validateTemplateVariants(layout as unknown as TemplateLayoutJson, Array.from(formKeys))
+  );
 
   return warnings;
 }

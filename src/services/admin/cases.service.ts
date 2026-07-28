@@ -23,13 +23,14 @@ import {
   getCanvasHeightPx as getLayoutCanvasHeightPx,
   getCanvasWidthPx as getLayoutCanvasWidthPx,
   getTemplatePages,
+  getTemplatePagesForAnswers,
   normalizeCanvasConfig,
   pxToMm,
+  shouldPrintPagesSeparately,
   type TemplateLayoutJson,
   type Layer,
 } from '../../types/template-layout';
 import {
-  hasMixedPageSizes,
   renderPreview,
   renderPrintPagePng,
   renderPrintSheetPng,
@@ -692,7 +693,9 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
     // Strony o roznych wymiarach to osobne kartki (zaproszenie + zwrotka), a nie
     // przod i tyl tej samej. Skladanie ich na wspolny arkusz dawaloby wydruk nie
     // do przyciecia, wiec kazda dostaje wlasny arkusz i wlasny plik.
-    const printPagesSeparately = isMultiPage && hasMixedPageSizes(layout);
+    // Decyzja idzie po ukladzie podstawowym: warianty roznia sie trescia stron,
+    // nie ich formatem.
+    const printPagesSeparately = isMultiPage && shouldPrintPagesSeparately(layout);
     const packageEntries: ZipEntry[] = [];
     const renderedItems: RenderedPackageItem[] = [];
     const packageBaseName = sanitizeFilePart(`${caseItem.order.orderReference}-${caseItem.template.code}`) || `case-${id}`;
@@ -711,8 +714,12 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
       let renderHeightPx = printTarget.heightPx;
 
       if (printPagesSeparately) {
-        for (let pageIndex = 0; pageIndex < templatePages.length; pageIndex += 1) {
-          const page = templatePages[pageIndex];
+        // Wariant moze byc inny dla kazdej sztuki - odpowiedzi indywidualne
+        // rozjezdzaja sie miedzy pozycjami, wiec strony bierzemy per sztuka.
+        const itemPages = getTemplatePagesForAnswers(layout, flatAnswers);
+
+        for (let pageIndex = 0; pageIndex < itemPages.length; pageIndex += 1) {
+          const page = itemPages[pageIndex];
           const sheet = await renderPrintPagePng(
             layout,
             page,

@@ -88,34 +88,6 @@ test('composePrintSheet honoruje wlasne print.placements (pozycja + obrot 90)', 
   assert.ok(empty[0] > 240 && empty[1] > 240 && empty[2] > 240, `oczekiwano bieli, jest rgb(${empty})`);
 });
 
-test('hasMixedPageSizes rozroznia przod+tyl od osobnych kartek', async () => {
-  const { hasMixedPageSizes } = await import('../src/services/renderer/fabric-renderer.service');
-
-  const sameSize = {
-    version: 2,
-    canvas: makePage('page-1', 'Przod', 90, 50, '#ffffff').canvas,
-    fonts: [],
-    layers: [],
-    pages: [
-      makePage('page-1', 'Przod', 90, 50, '#ffffff'),
-      makePage('page-2', 'Tyl', 90, 50, '#ffffff'),
-    ],
-  };
-  assert.equal(hasMixedPageSizes(sameSize as any), false);
-
-  const mixed = {
-    ...sameSize,
-    pages: [
-      makePage('page-1', 'Zaproszenie', 90, 135, '#ffffff'),
-      makePage('page-2', 'Zwrotka', 95, 145, '#ffffff'),
-    ],
-  };
-  assert.equal(hasMixedPageSizes(mixed as any), true);
-
-  const singlePage = { ...sameSize, pages: [makePage('page-1', 'Przod', 90, 50, '#ffffff')] };
-  assert.equal(hasMixedPageSizes(singlePage as any), false);
-});
-
 test('renderPrintPagePng drukuje strone poziomo wg obrotu ze skladu', async () => {
   const { renderPrintPagePng } = await import('../src/services/renderer/fabric-renderer.service');
 
@@ -146,4 +118,40 @@ test('renderPrintPagePng drukuje strone poziomo wg obrotu ze skladu', async () =
   // Arkusz wypelnia sama strona - narozniki tez sa zielone.
   const corner = await pixelAt(sheet.buffer, mmToPx(38), mmToPx(18));
   assert.ok(corner[1] > 120 && corner[0] < 80, `oczekiwano zieleni, jest rgb(${corner})`);
+});
+
+test('wariant wybrany odpowiedzia decyduje, co idzie na arkusz', async () => {
+  const { renderPrintSheetPng } = await import('../src/services/renderer/fabric-renderer.service');
+
+  // Oba warianty maja te sama strone "page-1" (sklad do druku wskazuje ja po
+  // id), ale inny kolor tla - po nim poznamy, ktory faktycznie sie wyrenderowal.
+  const layout = {
+    version: 2,
+    canvas: makePage('page-1', 'Zaproszenie', 20, 20, '#00aa00').canvas,
+    fonts: [],
+    layers: [],
+    pages: [makePage('page-1', 'Zaproszenie', 20, 20, '#00aa00')],
+    variants: [
+      { id: 'v-full', name: 'Z potwierdzeniem', matchValue: 'tak', pages: [makePage('page-1', 'Zaproszenie', 20, 20, '#00aa00')] },
+      { id: 'v-short', name: 'Bez potwierdzenia', matchValue: 'nie', pages: [makePage('page-1', 'Zaproszenie', 20, 20, '#0000ff')] },
+    ],
+    variantFieldKey: 'potwierdzenie',
+    print: {
+      sheet: { widthMm: 20, heightMm: 20 },
+      placements: [{ pageId: 'page-1', xMm: 0, yMm: 0, rotation: 0 }],
+    },
+  };
+
+  const withConfirmation = await renderPrintSheetPng(layout as any, { potwierdzenie: 'tak' });
+  const green = await pixelAt(withConfirmation.buffer, mmToPx(10), mmToPx(10));
+  assert.ok(green[1] > 120 && green[2] < 80, `oczekiwano zieleni wariantu podstawowego, jest rgb(${green})`);
+
+  const withoutConfirmation = await renderPrintSheetPng(layout as any, { potwierdzenie: 'nie' });
+  const blue = await pixelAt(withoutConfirmation.buffer, mmToPx(10), mmToPx(10));
+  assert.ok(blue[2] > 200 && blue[0] < 80, `oczekiwano niebieskiego wariantu skroconego, jest rgb(${blue})`);
+
+  // Nieznana odpowiedz nie moze zostawic druku bez ukladu - pada pierwszy wariant.
+  const unknown = await renderPrintSheetPng(layout as any, { potwierdzenie: 'moze' });
+  const fallback = await pixelAt(unknown.buffer, mmToPx(10), mmToPx(10));
+  assert.ok(fallback[1] > 120 && fallback[2] < 80, `oczekiwano wariantu pierwszego, jest rgb(${fallback})`);
 });

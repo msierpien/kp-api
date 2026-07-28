@@ -1,7 +1,12 @@
 import { loadImage, registerFont } from 'canvas';
 import { StaticCanvas, FabricImage, IText, Textbox } from 'fabric/node';
 import type { TemplateLayoutJson, TemplatePage, PrintLayout, Layer, TextFieldProperties, TextBoxProperties, ImageProperties, MockupConfig } from '../../types/template-layout';
-import { getTemplatePages } from '../../types/template-layout';
+import {
+  buildFabricTextStyles,
+  getTemplatePages,
+  getTemplatePagesForAnswers,
+  resolveCharStyles,
+} from '../../types/template-layout';
 import { isSvgPath, rasterizeSvgFile } from './svg-raster.service';
 import { drawImageInQuad, quadToPixels, type Quad } from '../../lib/mockup-warp';
 import { mergeLayoutWithOverrides } from '../../lib/layout-overrides';
@@ -643,24 +648,6 @@ function defaultPrintLayout(pages: TemplatePage[]): PrintLayout {
   return { sheet: { widthMm, heightMm: yMm }, placements };
 }
 
-/**
- * Czy strony szablonu maja rozne wymiary.
- *
- * Skladanie na wspolny arkusz ma sens dla przodu i tylu tej samej karty.
- * Gdy strony roznia sie formatem (np. zaproszenie 90x135 i zwrotka 95x145),
- * sa to osobne kartki - drukujemy kazda na wlasnym arkuszu.
- */
-export function hasMixedPageSizes(layout: TemplateLayoutJson): boolean {
-  const pages = getTemplatePages(layout);
-  if (pages.length < 2) return false;
-
-  const first = canvasMmDimensions(pages[0].canvas);
-  return pages.some((page) => {
-    const dims = canvasMmDimensions(page.canvas);
-    return Math.abs(dims.widthMm - first.widthMm) > 0.01 || Math.abs(dims.heightMm - first.heightMm) > 0.01;
-  });
-}
-
 function drawWatermark(ctx: any, widthPx: number, heightPx: number, watermarkText?: string | null): void {
   if (!watermarkText || !watermarkText.trim()) return;
 
@@ -741,7 +728,9 @@ async function composePrintSheet(
   itemIndex?: number
 ): Promise<{ buffer: Buffer; widthMm: number; heightMm: number }> {
   const { createCanvas, Image } = await import('canvas');
-  const pages = getTemplatePages(layout);
+  // Wariant wybiera odpowiedz klienta - sklad do druku jest wspolny dla
+  // szablonu i wskazuje strony po id, wiec warianty maja te same identyfikatory.
+  const pages = getTemplatePagesForAnswers(layout, answers);
   const print = layout.print && layout.print.placements?.length ? layout.print : defaultPrintLayout(pages);
   const dpi = Number(layout.canvas.dpi || 300);
   const mmToPx = (mm: number) => Math.round((mm / MM_PER_INCH) * dpi);
@@ -842,7 +831,8 @@ export async function renderMockupPng(
   const ctx = canvas.getContext('2d');
   ctx.drawImage(photo as any, 0, 0, width, height);
 
-  const pages = getTemplatePages(layout);
+  // Mockup pokazuje to, co pojdzie do druku - czyli wariant wybrany odpowiedziami.
+  const pages = getTemplatePagesForAnswers(layout, answers);
 
   for (const surface of mockup.surfaces) {
     const page = pages.find((item) => item.id === surface.pageId);

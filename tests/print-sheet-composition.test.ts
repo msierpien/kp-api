@@ -87,3 +87,63 @@ test('composePrintSheet honoruje wlasne print.placements (pozycja + obrot 90)', 
   const empty = await pixelAt(sheet.buffer, mmToPx(25), mmToPx(10));
   assert.ok(empty[0] > 240 && empty[1] > 240 && empty[2] > 240, `oczekiwano bieli, jest rgb(${empty})`);
 });
+
+test('hasMixedPageSizes rozroznia przod+tyl od osobnych kartek', async () => {
+  const { hasMixedPageSizes } = await import('../src/services/renderer/fabric-renderer.service');
+
+  const sameSize = {
+    version: 2,
+    canvas: makePage('page-1', 'Przod', 90, 50, '#ffffff').canvas,
+    fonts: [],
+    layers: [],
+    pages: [
+      makePage('page-1', 'Przod', 90, 50, '#ffffff'),
+      makePage('page-2', 'Tyl', 90, 50, '#ffffff'),
+    ],
+  };
+  assert.equal(hasMixedPageSizes(sameSize as any), false);
+
+  const mixed = {
+    ...sameSize,
+    pages: [
+      makePage('page-1', 'Zaproszenie', 90, 135, '#ffffff'),
+      makePage('page-2', 'Zwrotka', 95, 145, '#ffffff'),
+    ],
+  };
+  assert.equal(hasMixedPageSizes(mixed as any), true);
+
+  const singlePage = { ...sameSize, pages: [makePage('page-1', 'Przod', 90, 50, '#ffffff')] };
+  assert.equal(hasMixedPageSizes(singlePage as any), false);
+});
+
+test('renderPrintPagePng drukuje strone poziomo wg obrotu ze skladu', async () => {
+  const { renderPrintPagePng } = await import('../src/services/renderer/fabric-renderer.service');
+
+  const page = makePage('page-1', 'Zaproszenie', 20, 40, '#00aa00');
+  const layout = {
+    version: 2,
+    canvas: page.canvas,
+    fonts: [],
+    layers: [],
+    pages: [page, makePage('page-2', 'Zwrotka', 30, 50, '#0000ff')],
+    print: {
+      sheet: { widthMm: 40, heightMm: 20 },
+      placements: [
+        { pageId: 'page-1', xMm: 0, yMm: 0, rotation: 90 },
+        { pageId: 'page-2', xMm: 0, yMm: 0, rotation: 90 },
+      ],
+    },
+  };
+
+  const sheet = await renderPrintPagePng(layout as any, page as any, {});
+
+  // Obrot 90 zamienia boki: kartka 20x40 mm daje arkusz 40x20 mm.
+  assert.equal(sheet.widthMm, 40);
+  assert.equal(sheet.heightMm, 20);
+  assert.equal(sheet.widthPx, mmToPx(40));
+  assert.equal(sheet.heightPx, mmToPx(20));
+
+  // Arkusz wypelnia sama strona - narozniki tez sa zielone.
+  const corner = await pixelAt(sheet.buffer, mmToPx(38), mmToPx(18));
+  assert.ok(corner[1] > 120 && corner[0] < 80, `oczekiwano zieleni, jest rgb(${corner})`);
+});

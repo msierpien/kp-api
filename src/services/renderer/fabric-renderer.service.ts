@@ -642,6 +642,92 @@ function defaultPrintLayout(pages: TemplatePage[]): PrintLayout {
 }
 
 /**
+ * Czy strony szablonu maja rozne wymiary.
+ *
+ * Skladanie na wspolny arkusz ma sens dla przodu i tylu tej samej karty.
+ * Gdy strony roznia sie formatem (np. zaproszenie 90x135 i zwrotka 95x145),
+ * sa to osobne kartki - drukujemy kazda na wlasnym arkuszu.
+ */
+export function hasMixedPageSizes(layout: TemplateLayoutJson): boolean {
+  const pages = getTemplatePages(layout);
+  if (pages.length < 2) return false;
+
+  const first = canvasMmDimensions(pages[0].canvas);
+  return pages.some((page) => {
+    const dims = canvasMmDimensions(page.canvas);
+    return Math.abs(dims.widthMm - first.widthMm) > 0.01 || Math.abs(dims.heightMm - first.heightMm) > 0.01;
+  });
+}
+
+function drawWatermark(ctx: any, widthPx: number, heightPx: number, watermarkText?: string | null): void {
+  if (!watermarkText || !watermarkText.trim()) return;
+
+  const text = watermarkText.trim();
+  // Rozmiar dobrany do szerokosci arkusza, zeby napis byl czytelny
+  // niezaleznie od formatu; przekatna, polprzezroczysty.
+  const fontSize = Math.max(24, Math.round(widthPx / Math.max(6, text.length)));
+  ctx.save();
+  ctx.translate(widthPx / 2, heightPx / 2);
+  ctx.rotate(-Math.PI / 6);
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = '#000000';
+  ctx.font = `bold ${fontSize}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 0, 0);
+  ctx.restore();
+}
+
+/**
+ * PNG jednej strony na wlasnym arkuszu, z obrotem ze skladu do druku.
+ *
+ * Obrot 90/270 zamienia wymiary arkusza - kartka 90x135 mm drukowana poziomo
+ * daje arkusz 135x90 mm.
+ */
+export async function renderPrintPagePng(
+  layout: TemplateLayoutJson,
+  page: TemplatePage,
+  answers: Record<string, any>,
+  layoutOverrides?: any,
+  watermarkText?: string | null,
+  itemIndex?: number
+): Promise<{ buffer: Buffer; widthMm: number; heightMm: number; widthPx: number; heightPx: number; dpi: number }> {
+  const { createCanvas, Image } = await import('canvas');
+  const dpi = Number(page.canvas.dpi || layout.canvas.dpi || 300);
+  const rotation = layout.print?.placements?.find((placement) => placement.pageId === page.id)?.rotation || 0;
+  const swap = rotation === 90 || rotation === 270;
+
+  const render = await renderPageToPng(page, answers, layoutOverrides, itemIndex);
+  const sheetWidthPx = swap ? render.heightPx : render.widthPx;
+  const sheetHeightPx = swap ? render.widthPx : render.heightPx;
+
+  const sheet = createCanvas(sheetWidthPx, sheetHeightPx);
+  const ctx = sheet.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, sheetWidthPx, sheetHeightPx);
+
+  const img = new Image();
+  img.src = render.buffer;
+  ctx.save();
+  ctx.translate(sheetWidthPx / 2, sheetHeightPx / 2);
+  if (rotation) ctx.rotate((rotation * Math.PI) / 180);
+  ctx.drawImage(img, -render.widthPx / 2, -render.heightPx / 2, render.widthPx, render.heightPx);
+  ctx.restore();
+
+  drawWatermark(ctx, sheetWidthPx, sheetHeightPx, watermarkText);
+
+  const dims = canvasMmDimensions(page.canvas);
+  return {
+    buffer: sheet.toBuffer('image/png'),
+    widthMm: swap ? dims.heightMm : dims.widthMm,
+    heightMm: swap ? dims.widthMm : dims.heightMm,
+    widthPx: sheetWidthPx,
+    heightPx: sheetHeightPx,
+    dpi,
+  };
+}
+
+/**
  * Sklada wyrenderowane strony na jeden arkusz wg print layoutu (lub domyslnego).
  * Zwraca PNG arkusza i jego wymiary w mm.
  */
@@ -692,22 +778,7 @@ async function composePrintSheet(
     ctx.restore();
   }
 
-  if (watermarkText && watermarkText.trim()) {
-    const text = watermarkText.trim();
-    // Rozmiar dobrany do szerokosci arkusza, zeby napis byl czytelny
-    // niezaleznie od formatu; przekatna, polprzezroczysty.
-    const fontSize = Math.max(24, Math.round(sheet.width / Math.max(6, text.length)));
-    ctx.save();
-    ctx.translate(sheet.width / 2, sheet.height / 2);
-    ctx.rotate(-Math.PI / 6);
-    ctx.globalAlpha = 0.18;
-    ctx.fillStyle = '#000000';
-    ctx.font = `bold ${fontSize}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(text, 0, 0);
-    ctx.restore();
-  }
+  drawWatermark(ctx, sheet.width, sheet.height, watermarkText);
 
   return { buffer: sheet.toBuffer('image/png'), widthMm: print.sheet.widthMm, heightMm: print.sheet.heightMm };
 }

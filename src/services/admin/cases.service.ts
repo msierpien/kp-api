@@ -28,7 +28,12 @@ import {
   type TemplateLayoutJson,
   type Layer,
 } from '../../types/template-layout';
-import { renderPreview, renderPrintSheetPng } from '../renderer/fabric-renderer.service';
+import {
+  hasMixedPageSizes,
+  renderPreview,
+  renderPrintPagePng,
+  renderPrintSheetPng,
+} from '../renderer/fabric-renderer.service';
 import {
   validatePrintPackageAnswers,
   type FieldValidationConfig,
@@ -40,8 +45,24 @@ import { resolvePrintPackageOptions } from './print-settings.service';
 import { buildStorageUrl, saveFile } from '../storage/local-storage.service';
 import { isPersonalizationCaseStatus } from '../../lib/personalization-case-statuses';
 
+/** Jeden wyrenderowany arkusz sztuki: cala kartka albo pojedyncza strona. */
+interface ItemRender {
+  png: Buffer;
+  widthPx: number;
+  heightPx: number;
+  dpi: number;
+  /** Nazwa pliku bez rozszerzenia. */
+  baseName: string;
+  pageId?: string;
+  pageNumber?: number;
+  pageName?: string;
+}
+
 interface RenderedPackageItem {
   itemIndex: number;
+  /** Ustawiane tylko gdy strony ida na osobne arkusze. */
+  pageId?: string;
+  pageNumber?: number;
   pdfAssetId?: string;
   pngAssetId?: string;
   pdfFilePath?: string;
@@ -666,7 +687,12 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
     // stron (renderPrintSheetPng). buildPrintLayout zna tylko lustro pierwszej
     // strony, wiec paczka mialaby sam przod (np. winietki bez tylu).
     // Ta sciezka nie obsluguje jeszcze spadow (bleed).
-    const isMultiPage = getTemplatePages(layout).length > 1;
+    const templatePages = getTemplatePages(layout);
+    const isMultiPage = templatePages.length > 1;
+    // Strony o roznych wymiarach to osobne kartki (zaproszenie + zwrotka), a nie
+    // przod i tyl tej samej. Skladanie ich na wspolny arkusz dawaloby wydruk nie
+    // do przyciecia, wiec kazda dostaje wlasny arkusz i wlasny plik.
+    const printPagesSeparately = isMultiPage && hasMixedPageSizes(layout);
     const packageEntries: ZipEntry[] = [];
     const renderedItems: RenderedPackageItem[] = [];
     const packageBaseName = sanitizeFilePart(`${caseItem.order.orderReference}-${caseItem.template.code}`) || `case-${id}`;
@@ -678,12 +704,35 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
       await options.onProgress?.(20 + Math.round((itemIndex / qty) * 60));
       const flatAnswers = flattenCaseAnswers(answers, itemIndex);
       const itemBaseName = `${packageBaseName}-szt-${String(itemIndex + 1).padStart(2, '0')}`;
+      const itemRenders: ItemRender[] = [];
       let pngBuffer: Buffer;
       let renderDpi = printTarget.dpi;
       let renderWidthPx = printTarget.widthPx;
       let renderHeightPx = printTarget.heightPx;
 
-      if (isMultiPage) {
+      if (printPagesSeparately) {
+        for (let pageIndex = 0; pageIndex < templatePages.length; pageIndex += 1) {
+          const page = templatePages[pageIndex];
+          const sheet = await renderPrintPagePng(
+            layout,
+            page,
+            flatAnswers,
+            caseItem.layoutOverrides || undefined,
+            pkg.watermarkText,
+            itemIndex
+          );
+          itemRenders.push({
+            png: sheet.buffer,
+            widthPx: sheet.widthPx,
+            heightPx: sheet.heightPx,
+            dpi: sheet.dpi,
+            baseName: `${itemBaseName}-str-${pageIndex + 1}`,
+            pageId: page.id,
+            pageNumber: pageIndex + 1,
+            pageName: page.name,
+          });
+        }
+      } else if (isMultiPage) {
         const sheet = await renderPrintSheetPng(
           layout,
           flatAnswers,
@@ -695,6 +744,13 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
         renderDpi = sheet.dpi;
         renderWidthPx = sheet.widthPx;
         renderHeightPx = sheet.heightPx;
+        itemRenders.push({
+          png: pngBuffer,
+          widthPx: renderWidthPx,
+          heightPx: renderHeightPx,
+          dpi: renderDpi,
+          baseName: itemBaseName,
+        });
       } else {
         const templateData = {
           answers: flatAnswers,
@@ -716,76 +772,96 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
           format: 'png',
           includeWatermark: Boolean(pkg.watermarkText),
         });
+        itemRenders.push({
+          png: pngBuffer,
+          widthPx: renderWidthPx,
+          heightPx: renderHeightPx,
+          dpi: renderDpi,
+          baseName: itemBaseName,
+        });
       }
 
-      if (pkg.combinedPdf) {
-        combinedPages.push({ png: pngBuffer, widthPx: renderWidthPx, heightPx: renderHeightPx, dpi: renderDpi });
+      for (const render of itemRenders) {
+        if (pkg.combinedPdf) {
+          combinedPages.push({
+            png: render.png,
+            widthPx: render.widthPx,
+            heightPx: render.heightPx,
+            dpi: render.dpi,
+          });
+        }
+
+        const assetMetadata = {
+          renderJobId: renderJob.id,
+          itemIndex,
+          itemNumber: itemIndex + 1,
+          ...(render.pageId
+            ? { pageId: render.pageId, pageNumber: render.pageNumber, pageName: render.pageName }
+            : {}),
+          generatedAt: new Date().toISOString(),
+          dpi: render.dpi,
+          widthPx: render.widthPx,
+          heightPx: render.heightPx,
+          bleedPx: isMultiPage ? 0 : printTarget.bleedPx,
+          bleedMm: isMultiPage ? 0 : printTarget.bleedMm,
+          watermark: pkg.watermarkText || undefined,
+        };
+        const renderedItem: RenderedPackageItem = {
+          itemIndex,
+          ...(render.pageId ? { pageId: render.pageId, pageNumber: render.pageNumber } : {}),
+        };
+
+        if (pkg.formats.has('png')) {
+          const savedPng = await saveFile(render.png, {
+            orderId: caseItem.orderId,
+            templateVersion: caseItem.templateVersionFrozen,
+            filename: `${render.baseName}-print`,
+            extension: 'png',
+          });
+          const pngAsset = await prisma.asset.create({
+            data: {
+              caseId: id,
+              assetType: 'PNG_PRINT',
+              filePath: savedPng.relativePath,
+              fileSize: savedPng.size,
+              mimeType: 'image/png',
+              metadata: assetMetadata,
+            },
+          });
+          packageEntries.push({ name: `png/${render.baseName}.png`, data: render.png });
+          renderedItem.pngAssetId = pngAsset.id;
+          renderedItem.pngFilePath = savedPng.relativePath;
+          renderedItem.pngFileUrl = savedPng.url;
+          renderedItem.pngFileSize = savedPng.size;
+        }
+
+        if (pkg.formats.has('pdf')) {
+          const pdfBuffer = await pngToPdfBuffer(render.png, render.widthPx, render.heightPx, render.dpi);
+          const savedPdf = await saveFile(pdfBuffer, {
+            orderId: caseItem.orderId,
+            templateVersion: caseItem.templateVersionFrozen,
+            filename: `${render.baseName}-print`,
+            extension: 'pdf',
+          });
+          const pdfAsset = await prisma.asset.create({
+            data: {
+              caseId: id,
+              assetType: 'PDF_PRINT',
+              filePath: savedPdf.relativePath,
+              fileSize: savedPdf.size,
+              mimeType: 'application/pdf',
+              metadata: assetMetadata,
+            },
+          });
+          packageEntries.push({ name: `pdf/${render.baseName}.pdf`, data: pdfBuffer });
+          renderedItem.pdfAssetId = pdfAsset.id;
+          renderedItem.pdfFilePath = savedPdf.relativePath;
+          renderedItem.pdfFileUrl = savedPdf.url;
+          renderedItem.pdfFileSize = savedPdf.size;
+        }
+
+        renderedItems.push(renderedItem);
       }
-
-      const assetMetadata = {
-        renderJobId: renderJob.id,
-        itemIndex,
-        itemNumber: itemIndex + 1,
-        generatedAt: new Date().toISOString(),
-        dpi: renderDpi,
-        widthPx: renderWidthPx,
-        heightPx: renderHeightPx,
-        bleedPx: isMultiPage ? 0 : printTarget.bleedPx,
-        bleedMm: isMultiPage ? 0 : printTarget.bleedMm,
-        watermark: pkg.watermarkText || undefined,
-      };
-      const renderedItem: RenderedPackageItem = { itemIndex };
-
-      if (pkg.formats.has('png')) {
-        const savedPng = await saveFile(pngBuffer, {
-          orderId: caseItem.orderId,
-          templateVersion: caseItem.templateVersionFrozen,
-          filename: `${itemBaseName}-print`,
-          extension: 'png',
-        });
-        const pngAsset = await prisma.asset.create({
-          data: {
-            caseId: id,
-            assetType: 'PNG_PRINT',
-            filePath: savedPng.relativePath,
-            fileSize: savedPng.size,
-            mimeType: 'image/png',
-            metadata: assetMetadata,
-          },
-        });
-        packageEntries.push({ name: `png/${itemBaseName}.png`, data: pngBuffer });
-        renderedItem.pngAssetId = pngAsset.id;
-        renderedItem.pngFilePath = savedPng.relativePath;
-        renderedItem.pngFileUrl = savedPng.url;
-        renderedItem.pngFileSize = savedPng.size;
-      }
-
-      if (pkg.formats.has('pdf')) {
-        const pdfBuffer = await pngToPdfBuffer(pngBuffer, renderWidthPx, renderHeightPx, renderDpi);
-        const savedPdf = await saveFile(pdfBuffer, {
-          orderId: caseItem.orderId,
-          templateVersion: caseItem.templateVersionFrozen,
-          filename: `${itemBaseName}-print`,
-          extension: 'pdf',
-        });
-        const pdfAsset = await prisma.asset.create({
-          data: {
-            caseId: id,
-            assetType: 'PDF_PRINT',
-            filePath: savedPdf.relativePath,
-            fileSize: savedPdf.size,
-            mimeType: 'application/pdf',
-            metadata: assetMetadata,
-          },
-        });
-        packageEntries.push({ name: `pdf/${itemBaseName}.pdf`, data: pdfBuffer });
-        renderedItem.pdfAssetId = pdfAsset.id;
-        renderedItem.pdfFilePath = savedPdf.relativePath;
-        renderedItem.pdfFileUrl = savedPdf.url;
-        renderedItem.pdfFileSize = savedPdf.size;
-      }
-
-      renderedItems.push(renderedItem);
     }
 
     // Zbiorczy PDF: wszystkie sztuki jako kolejne strony jednego pliku.

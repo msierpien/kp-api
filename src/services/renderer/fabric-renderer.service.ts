@@ -1,6 +1,6 @@
 import { loadImage, registerFont } from 'canvas';
 import { StaticCanvas, FabricImage, IText, Textbox } from 'fabric/node';
-import type { TemplateLayoutJson, TemplatePage, PrintLayout, Layer, TextFieldProperties, TextBoxProperties, ImageProperties, MockupConfig } from '../../types/template-layout';
+import type { TemplateLayoutJson, TemplatePage, PrintLayout, Layer, TextFieldProperties, TextBoxProperties, TextStyleRange, ImageProperties, MockupConfig } from '../../types/template-layout';
 import {
   buildFabricTextStyles,
   getTemplatePages,
@@ -157,6 +157,20 @@ async function loadLayoutFonts(layout: TemplateLayoutJson): Promise<void> {
     const weight = Number(props.fontWeight) || 400;
     const style = props.fontStyle === 'italic' ? 'italic' : 'normal';
     needed.set(`${family}::${weight}::${style}`, { family, weight, style });
+
+    // Fragmenty moga miec wlasna wage, kursywe albo krój - bez zarejestrowania
+    // tych wariantow pogrubione slowo wyszloby na wydruku regularem.
+    for (const range of (props.styleRanges || []) as Array<Record<string, unknown>>) {
+      const rangeFamily = String(range.fontFamily || family).trim();
+      if (!rangeFamily) continue;
+      const rangeWeight = Number(range.fontWeight) || weight;
+      const rangeStyle = range.fontStyle === 'italic' ? 'italic' : range.fontStyle === 'normal' ? 'normal' : style;
+      needed.set(`${rangeFamily}::${rangeWeight}::${rangeStyle}`, {
+        family: rangeFamily,
+        weight: rangeWeight,
+        style: rangeStyle,
+      });
+    }
   }
 
   for (const { family, weight, style } of needed.values()) {
@@ -299,9 +313,9 @@ async function layerToFabricObject(
   // Text (IText)
   if (layer.type === 'text') {
     const props = layer.properties as TextFieldProperties;
-    const value = answers[props.fieldKey] || props.placeholder || '';
-    
-    return new IText(String(value), {
+    const value = String(answers[props.fieldKey] || props.placeholder || '');
+
+    const textField = new IText(value, {
       ...common,
       fontSize: fontSizeToRenderPx(props.fontSize, getFontUnit(props.fontUnit), dpi, scale),
       fontFamily: props.fontFamily,
@@ -312,6 +326,9 @@ async function layerToFabricObject(
       originX: 'center',
       originY: 'center',
     });
+
+    applyTextStyleRanges(textField, value, props, dpi, scale);
+    return textField;
   }
 
   // Static text
@@ -324,7 +341,7 @@ async function layerToFabricObject(
       return answers[key] || match;
     });
     
-    return new IText(value, {
+    const staticText = new IText(value, {
       ...common,
       fontSize: fontSizeToRenderPx(props.fontSize, getFontUnit(props.fontUnit), dpi, scale),
       fontFamily: props.fontFamily,
@@ -335,6 +352,9 @@ async function layerToFabricObject(
       originX: 'center',
       originY: 'center',
     });
+
+    applyTextStyleRanges(staticText, value, props, dpi, scale);
+    return staticText;
   }
 
   // TextBox
@@ -369,6 +389,9 @@ async function layerToFabricObject(
       splitByGrapheme: (props as any).splitByGrapheme === true,
     });
 
+    // Style fragmentow przed wyrownaniem pionowym: zmieniaja wysokosc tekstu
+    // (inna waga i rozmiar), a to od niej zalezy offset w ramce.
+    applyTextStyleRanges(textbox, value, props, dpi, scale);
     enforceTextboxBox(textbox, layer.height * scale, (props as any).verticalAlign);
 
     return textbox;
@@ -646,6 +669,51 @@ function defaultPrintLayout(pages: TemplatePage[]): PrintLayout {
   }
 
   return { sheet: { widthMm, heightMm: yMm }, placements };
+}
+
+/**
+ * Nadaje obiektowi fabrica style fragmentow tekstu.
+ *
+ * Wolane PO utworzeniu obiektu, bo dopiero on wie, jak zawinal tekst -
+ * a `styles` fabrica sa kluczowane numerem linii po zawinieciu.
+ * `fontSize` fragmentu jest w tej samej jednostce co warstwa, wiec przelicza
+ * sie tak samo jak rozmiar bazowy.
+ */
+function applyTextStyleRanges(
+  textObject: any,
+  text: string,
+  props: { styleRanges?: unknown; fontUnit?: unknown },
+  dpi: number,
+  scale: number
+): void {
+  const ranges = props.styleRanges as TextStyleRange[] | undefined;
+  if (!Array.isArray(ranges) || ranges.length === 0) return;
+
+  const charStyles = resolveCharStyles(text, ranges);
+  const lines: string[] = Array.isArray(textObject.textLines) && textObject.textLines.length
+    ? textObject.textLines
+    : [text];
+  const styles = buildFabricTextStyles(text, lines, charStyles);
+
+  const fontUnit = getFontUnit(props.fontUnit);
+  const rendered: Record<number, Record<number, Record<string, unknown>>> = {};
+
+  for (const [lineIndex, lineStyles] of Object.entries(styles)) {
+    rendered[Number(lineIndex)] = {};
+    for (const [charIndex, style] of Object.entries(lineStyles)) {
+      const { fontSize, fontWeight, ...rest } = style;
+      rendered[Number(lineIndex)][Number(charIndex)] = {
+        ...rest,
+        ...(fontWeight !== undefined ? { fontWeight: String(fontWeight) } : {}),
+        ...(fontSize !== undefined
+          ? { fontSize: fontSizeToRenderPx(fontSize, fontUnit, dpi, scale) }
+          : {}),
+      };
+    }
+  }
+
+  textObject.set('styles', rendered);
+  if (typeof textObject.initDimensions === 'function') textObject.initDimensions();
 }
 
 function drawWatermark(ctx: any, widthPx: number, heightPx: number, watermarkText?: string | null): void {

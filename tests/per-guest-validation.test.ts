@@ -252,6 +252,87 @@ test('brak kroju w rejestrze daje ostrzezenie, nie blokujacy blad', async () => 
   assert.match(summary.warnings[0].message, /pomiar przybliżony/);
 });
 
+test('problem niesie nazwe pola po ludzku, nie tylko klucz', async () => {
+  const { validatePrintPackageAnswers } = await import(
+    '../src/services/renderer/answers-validation.service'
+  );
+
+  const layout = layoutWithPages([{ id: 'page-1', layers: [textLayer('layer_name', 'nazwisko')] }]);
+  const answers = { sharedAnswers: {}, items: [{ nazwisko: LONG_NAME }] };
+
+  const summary = await validatePrintPackageAnswers(answers, [NAZWISKO_FIELD] as any, layout, 1);
+
+  // Portal skladal wczesniej "nazwisko: Sztuka 1: tekst nie miesci sie" -
+  // raz po ludzku, raz po programistycznemu.
+  assert.equal(summary.errors[0].field, 'nazwisko');
+  assert.equal(summary.errors[0].fieldLabel, 'Nazwisko');
+});
+
+test('tekst dopisany przez klienta tez jest mierzony', async () => {
+  const { validatePrintPackageAnswers } = await import(
+    '../src/services/renderer/answers-validation.service'
+  );
+
+  const layout = layoutWithPages([{ id: 'page-1', layers: [textLayer('layer_name', 'nazwisko')] }]);
+
+  // Element "Twój tekst" wstawiony w portalu: tresc zyje w warstwie, nie
+  // w odpowiedziach, wiec wczesniej nie mial czego przekroczyc.
+  const ownLayer = {
+    ...textLayer('client_1', 'nieuzywany'),
+    properties: {
+      ...textLayer('client_1', 'nieuzywany').properties,
+      text: LONG_NAME,
+      fieldKey: undefined,
+    },
+  };
+
+  const overrides = {
+    layers: {},
+    addedLayers: [{ id: 'client_1', pageId: 'page-1', layer: ownLayer }],
+  };
+
+  const summary = await validatePrintPackageAnswers(
+    { sharedAnswers: {}, items: [{ nazwisko: SHORT_NAME }] },
+    [NAZWISKO_FIELD] as any,
+    layout,
+    1,
+    overrides
+  );
+
+  assert.equal(summary.isValid, false, 'wlasny tekst poza ramka musi zatrzymac zatwierdzenie');
+  const issue = summary.errors.find((error) => error.field.startsWith('__layer:'));
+  assert.ok(issue, 'problem ma dotyczyc warstwy dodanej przez klienta');
+  assert.equal(issue?.itemIndex, undefined, 'wlasny tekst jest wspolny dla zamowienia');
+  assert.match(String(issue?.fieldLabel), /Twój tekst/);
+});
+
+test('krotki wlasny tekst nie zglasza nic', async () => {
+  const { validatePrintPackageAnswers } = await import(
+    '../src/services/renderer/answers-validation.service'
+  );
+
+  const layout = layoutWithPages([{ id: 'page-1', layers: [textLayer('layer_name', 'nazwisko')] }]);
+  const ownLayer = {
+    ...textLayer('client_1', 'nieuzywany'),
+    properties: {
+      ...textLayer('client_1', 'nieuzywany').properties,
+      text: SHORT_NAME,
+      fieldKey: undefined,
+    },
+  };
+
+  const summary = await validatePrintPackageAnswers(
+    { sharedAnswers: {}, items: [{ nazwisko: SHORT_NAME }] },
+    [NAZWISKO_FIELD] as any,
+    layout,
+    1,
+    { layers: {}, addedLayers: [{ id: 'client_1', pageId: 'page-1', layer: ownLayer }] }
+  );
+
+  assert.equal(summary.isValid, true);
+  assert.equal(summary.errors.length, 0);
+});
+
 test('pola wspolne sprawdzane sa raz, bez numeru sztuki', async () => {
   const { validatePrintPackageAnswers } = await import(
     '../src/services/renderer/answers-validation.service'

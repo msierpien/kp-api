@@ -21,6 +21,12 @@ export type FieldValidationConfig = PersonalizationAnswerField & {
 
 export interface PrintPackageFieldIssue {
   field: string;
+  /**
+   * Nazwa pola po ludzku ("Imię i nazwisko"), a nie klucz techniczny.
+   * Bez niej portal pokazywal `imie: Sztuka 3: tekst nie miesci sie w ramce` -
+   * raz po ludzku, raz po programistycznemu.
+   */
+  fieldLabel?: string;
   message: string;
   severity: 'error' | 'warning';
   itemIndex?: number;
@@ -90,6 +96,32 @@ function collectLayersForItem(
   });
 }
 
+/** Geometria ramki, wzgledem ktorej walidator mierzy tekst. */
+function describeLayerBox(layer: Layer | undefined, dpi: number) {
+  const props = layer?.properties as any;
+  const fontSize = typeof props?.fontSize === 'number'
+    ? fontSizeToValidatorPx(props.fontSize, props.fontUnit, dpi)
+    : undefined;
+  const horizontalPadding = layer?.type === 'textbox' ? Number(props?.padding || 0) * 2 : 0;
+  const width = layer ? Math.max(1, Number(layer.width || 0) - horizontalPadding) : undefined;
+  const lineHeight = Number(props?.lineHeight || 1.2);
+  const maxLines = typeof props?.maxLines === 'number'
+    ? props.maxLines
+    : layer && fontSize
+      ? Math.max(1, Math.floor(Number(layer.height || 0) / Math.max(1, fontSize * lineHeight)))
+      : undefined;
+
+  return {
+    width,
+    maxLines,
+    font: props ? {
+      family: props.fontFamily || 'Inter',
+      size: fontSize,
+      weight: Number(props.fontWeight || 400),
+    } : undefined,
+  };
+}
+
 /**
  * Dokleja do konfiguracji pol geometrie warstwy, w ktorej pole sie renderuje
  * (szerokosc ramki, rozmiar pisma, liczba linii) - bez tego walidator nie ma
@@ -115,18 +147,6 @@ export function buildValidationFields(
 
   return fields.map((field) => {
     const layer = layerByFieldKey.get(field.key);
-    const props = layer?.properties as any;
-    const fontSize = typeof props?.fontSize === 'number'
-      ? fontSizeToValidatorPx(props.fontSize, props.fontUnit, dpi)
-      : undefined;
-    const horizontalPadding = layer?.type === 'textbox' ? Number(props?.padding || 0) * 2 : 0;
-    const width = layer ? Math.max(1, Number(layer.width || 0) - horizontalPadding) : undefined;
-    const lineHeight = Number(props?.lineHeight || 1.2);
-    const maxLines = typeof props?.maxLines === 'number'
-      ? props.maxLines
-      : layer && fontSize
-        ? Math.max(1, Math.floor(Number(layer.height || 0) / Math.max(1, fontSize * lineHeight)))
-        : undefined;
 
     return {
       key: field.key,
@@ -136,26 +156,102 @@ export function buildValidationFields(
       maxLength: field.maxLength || undefined,
       minLength: field.minLength || undefined,
       pattern: field.pattern || undefined,
-      width,
-      maxLines,
-      font: props ? {
-        family: props.fontFamily || 'Inter',
-        size: fontSize,
-        weight: Number(props.fontWeight || 400),
-      } : undefined,
+      ...describeLayerBox(layer, dpi),
     };
   });
 }
 
-function prefixIssues(
+/** Prefiks klucza pseudo-pola dla tekstu dopisanego przez klienta. */
+const ADDED_TEXT_KEY_PREFIX = '__layer:';
+
+/** Skrot tresci do etykiety - pelne motto nie zmiesci sie w komunikacie. */
+function shortenText(text: string, limit = 24): string {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  return clean.length > limit ? `${clean.slice(0, limit)}…` : clean;
+}
+
+/**
+ * Pseudo-pola dla tekstow, ktore klient dopisal sam (element "Twój tekst").
+ *
+ * Walidacja budowala mape wylacznie po `fieldKey` warstwy, wiec wlasne teksty
+ * nie mialy czego przekroczyc: klient wpisywal dwuwierszowe motto, dostawal
+ * zielone swiatlo i reklamacje po druku. Tresc takiej warstwy nie zyje
+ * w odpowiedziach, tylko w samej warstwie - stad osobna para pola i wartosci.
+ */
+export function buildAddedTextValidation(
+  layout: TemplateLayoutJson,
+  layoutOverrides?: unknown,
+  itemIndex?: number,
+  answers?: Record<string, unknown>
+): { fields: any[]; values: Record<string, string> } {
+  const overrides = layoutOverrides as any;
+  const addedIds = new Set<string>(
+    Array.isArray(overrides?.addedLayers)
+      ? overrides.addedLayers
+          .map((entry: any) => entry?.layer?.id || entry?.id)
+          .filter((id: unknown): id is string => typeof id === 'string')
+      : []
+  );
+
+  if (addedIds.size === 0) return { fields: [], values: {} };
+
+  const dpi = getCanvasDpi(layout);
+  const fields: any[] = [];
+  const values: Record<string, string> = {};
+
+  for (const layer of collectLayersForItem(layout, layoutOverrides, itemIndex, answers)) {
+    if (!addedIds.has(layer.id)) continue;
+    if (layer.visible === false) continue;
+    if (layer.type !== 'text' && layer.type !== 'textbox') continue;
+    // Element wpiety w kolumne listy gosci ma `fieldKey` i idzie zwykla sciezka.
+    if (getLayerFieldKey(layer)) continue;
+
+    const text = (layer.properties as any)?.text;
+    if (typeof text !== 'string' || !text.trim()) continue;
+
+    const key = `${ADDED_TEXT_KEY_PREFIX}${layer.id}`;
+    values[key] = text;
+    fields.push({
+      key,
+      label: `Twój tekst: „${shortenText(text)}"`,
+      type: 'text',
+      required: false,
+      ...describeLayerBox(layer, dpi),
+    });
+  }
+
+  return { fields, values };
+}
+
+/**
+ * Uzupelnia problem o numer sztuki i nazwe pola po ludzku.
+ *
+ * `message` zostaje z prefiksem "Sztuka N:" - czyta go panel, gdzie lista
+ * problemow jest plaska. Portal klienta ma `itemIndex` i `fieldLabel`,
+ * wiec sklada zdanie po swojemu.
+ */
+function describeIssues(
   issues: Array<{ field: string; message: string; severity: 'error' | 'warning'; details?: Record<string, any> }>,
+  labels: Map<string, string>,
   itemIndex?: number
 ): PrintPackageFieldIssue[] {
   return issues.map((issue) => ({
     ...issue,
     itemIndex,
+    fieldLabel: labels.get(issue.field),
     message: itemIndex === undefined ? issue.message : `Sztuka ${itemIndex + 1}: ${issue.message}`,
   }));
+}
+
+/** Mapa klucz pola -> etykieta, z pol formularza i z tekstow klienta. */
+function labelsOf(...fieldSets: Array<Array<{ key: string; label?: string }>>): Map<string, string> {
+  const labels = new Map<string, string>();
+  for (const fields of fieldSets) {
+    for (const field of fields) {
+      if (field.label) labels.set(field.key, field.label);
+    }
+  }
+  return labels;
 }
 
 /**
@@ -183,9 +279,23 @@ export async function validatePrintPackageAnswers(
     undefined,
     answers.sharedAnswers
   );
-  const sharedResult = await validateAnswers(answers.sharedAnswers, sharedValidationFields);
-  const sharedErrors = prefixIssues(sharedResult.errors);
-  const sharedWarnings = prefixIssues(sharedResult.warnings);
+
+  // Teksty dopisane przez klienta sa wspolne dla zamowienia (tresc nie zalezy
+  // od goscia), wiec mierzymy je raz, razem z polami wspolnymi.
+  const addedText = buildAddedTextValidation(
+    layout,
+    layoutOverrides,
+    undefined,
+    answers.sharedAnswers
+  );
+
+  const sharedResult = await validateAnswers(
+    { ...answers.sharedAnswers, ...addedText.values },
+    [...sharedValidationFields, ...addedText.fields]
+  );
+  const sharedLabels = labelsOf(sharedValidationFields, addedText.fields);
+  const sharedErrors = describeIssues(sharedResult.errors, sharedLabels);
+  const sharedWarnings = describeIssues(sharedResult.warnings, sharedLabels);
   const items: PrintPackageItemValidation[] = [];
 
   for (let itemIndex = 0; itemIndex < qty; itemIndex += 1) {
@@ -200,8 +310,9 @@ export async function validatePrintPackageAnswers(
       itemAnswers
     );
     const result = await validateAnswers(answers.items[itemIndex] || {}, itemValidationFields);
-    const errors = prefixIssues(result.errors, itemIndex);
-    const warnings = prefixIssues(result.warnings, itemIndex);
+    const itemLabels = labelsOf(itemValidationFields);
+    const errors = describeIssues(result.errors, itemLabels, itemIndex);
+    const warnings = describeIssues(result.warnings, itemLabels, itemIndex);
     items.push({
       itemIndex,
       isValid: result.isValid,

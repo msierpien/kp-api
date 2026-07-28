@@ -155,3 +155,29 @@ test('wariant wybrany odpowiedzia decyduje, co idzie na arkusz', async () => {
   const fallback = await pixelAt(unknown.buffer, mmToPx(10), mmToPx(10));
   assert.ok(fallback[1] > 120 && fallback[2] < 80, `oczekiwano wariantu pierwszego, jest rgb(${fallback})`);
 });
+
+test('spad powieksza arkusz i wypelnia sie trescia, nie biela', async () => {
+  const { renderPrintPagePng } = await import('../src/services/renderer/fabric-renderer.service');
+
+  const page = makePage('page-1', 'Zaproszenie', 20, 40, '#00aa00');
+  (page.canvas as any).bleedMm = 3;
+
+  const layout = {
+    version: 2,
+    canvas: page.canvas,
+    fonts: [],
+    layers: [],
+    pages: [page],
+  };
+
+  const sheet = await renderPrintPagePng(layout as any, page as any, {});
+
+  // 20x40 mm + 3 mm spadu z kazdej strony.
+  assert.equal(sheet.widthMm, 26);
+  assert.equal(sheet.heightMm, 46);
+
+  // Piksel w polu spadu ma byc zielony - inaczej po przycieciu zostalaby
+  // biala nitka przy krawedzi.
+  const inBleed = await pixelAt(sheet.buffer, mmToPx(1), mmToPx(23));
+  assert.ok(inBleed[1] > 120 && inBleed[0] < 80, `oczekiwano zieleni w spadzie, jest rgb(${inBleed})`);
+});

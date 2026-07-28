@@ -721,6 +721,37 @@ function applyTextStyleRanges(
   if (typeof textObject.initDimensions === 'function') textObject.initDimensions();
 }
 
+/**
+ * Wypelnia spad rozciagnietymi krawedziami projektu.
+ *
+ * Dziala niezaleznie od tresci: dla jednolitego tla ciagnie kolor, dla zdjecia
+ * przedluza jego brzeg. Alternatywa - skalowanie calego projektu - przesunelaby
+ * teksty wzgledem linii ciecia.
+ */
+function drawBleedEdges(
+  ctx: any,
+  img: any,
+  widthPx: number,
+  heightPx: number,
+  bleedPx: number
+): void {
+  const halfW = widthPx / 2;
+  const halfH = heightPx / 2;
+  const strip = Math.max(1, Math.round(Math.min(widthPx, heightPx) * 0.01));
+
+  // Boki
+  ctx.drawImage(img, 0, 0, strip, heightPx, -halfW - bleedPx, -halfH, bleedPx, heightPx);
+  ctx.drawImage(img, widthPx - strip, 0, strip, heightPx, halfW, -halfH, bleedPx, heightPx);
+  ctx.drawImage(img, 0, 0, widthPx, strip, -halfW, -halfH - bleedPx, widthPx, bleedPx);
+  ctx.drawImage(img, 0, heightPx - strip, widthPx, strip, -halfW, halfH, widthPx, bleedPx);
+
+  // Naroza
+  ctx.drawImage(img, 0, 0, strip, strip, -halfW - bleedPx, -halfH - bleedPx, bleedPx, bleedPx);
+  ctx.drawImage(img, widthPx - strip, 0, strip, strip, halfW, -halfH - bleedPx, bleedPx, bleedPx);
+  ctx.drawImage(img, 0, heightPx - strip, strip, strip, -halfW - bleedPx, halfH, bleedPx, bleedPx);
+  ctx.drawImage(img, widthPx - strip, heightPx - strip, strip, strip, halfW, halfH, bleedPx, bleedPx);
+}
+
 function drawWatermark(ctx: any, widthPx: number, heightPx: number, watermarkText?: string | null): void {
   if (!watermarkText || !watermarkText.trim()) return;
 
@@ -760,8 +791,17 @@ export async function renderPrintPagePng(
   const swap = rotation === 90 || rotation === 270;
 
   const render = await renderPageToPng(page, answers, layoutOverrides, itemIndex);
-  const sheetWidthPx = swap ? render.heightPx : render.widthPx;
-  const sheetHeightPx = swap ? render.widthPx : render.heightPx;
+
+  // Spad: arkusz rosnie o margines z kazdej strony, a brakujace pole
+  // wypelniamy rozciagnietymi krawedziami projektu. Bez tego kartka po
+  // przycieciu z tolerancja miala biala nitke przy krawedzi.
+  const bleedMm = Math.max(0, Number(page.canvas.bleedMm) || 0);
+  const bleedPx = Math.round((bleedMm / MM_PER_INCH) * dpi);
+  const contentWidthPx = render.widthPx + bleedPx * 2;
+  const contentHeightPx = render.heightPx + bleedPx * 2;
+
+  const sheetWidthPx = swap ? contentHeightPx : contentWidthPx;
+  const sheetHeightPx = swap ? contentWidthPx : contentHeightPx;
 
   const sheet = createCanvas(sheetWidthPx, sheetHeightPx);
   const ctx = sheet.getContext('2d');
@@ -773,16 +813,22 @@ export async function renderPrintPagePng(
   ctx.save();
   ctx.translate(sheetWidthPx / 2, sheetHeightPx / 2);
   if (rotation) ctx.rotate((rotation * Math.PI) / 180);
+
+  if (bleedPx > 0) {
+    drawBleedEdges(ctx, img, render.widthPx, render.heightPx, bleedPx);
+  }
   ctx.drawImage(img, -render.widthPx / 2, -render.heightPx / 2, render.widthPx, render.heightPx);
   ctx.restore();
 
   drawWatermark(ctx, sheetWidthPx, sheetHeightPx, watermarkText);
 
   const dims = canvasMmDimensions(page.canvas);
+  const withBleedWidthMm = dims.widthMm + bleedMm * 2;
+  const withBleedHeightMm = dims.heightMm + bleedMm * 2;
   return {
     buffer: sheet.toBuffer('image/png'),
-    widthMm: swap ? dims.heightMm : dims.widthMm,
-    heightMm: swap ? dims.widthMm : dims.heightMm,
+    widthMm: swap ? withBleedHeightMm : withBleedWidthMm,
+    heightMm: swap ? withBleedWidthMm : withBleedHeightMm,
     widthPx: sheetWidthPx,
     heightPx: sheetHeightPx,
     dpi,

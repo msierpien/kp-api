@@ -333,6 +333,33 @@ test('krotki wlasny tekst nie zglasza nic', async () => {
   assert.equal(summary.errors.length, 0);
 });
 
+test('ukryty element z wypelnionym polem daje ostrzezenie, nie cisze', async () => {
+  const { validatePrintPackageAnswers } = await import(
+    '../src/services/renderer/answers-validation.service'
+  );
+
+  const layout = layoutWithPages([{ id: 'page-1', layers: [textLayer('layer_name', 'nazwisko')] }]);
+  const answers = { sharedAnswers: {}, items: [{ nazwisko: SHORT_NAME }] };
+
+  // Klient ukryl element. Dane sa wpisane, ale nie maja gdzie sie wydrukowac -
+  // wczesniej walidacja pomijala takie warstwy i milczala.
+  const overrides = { layers: { layer_name: { visible: false } } };
+
+  const summary = await validatePrintPackageAnswers(
+    answers,
+    [NAZWISKO_FIELD] as any,
+    layout,
+    1,
+    overrides
+  );
+
+  assert.equal(summary.isValid, true, 'ukrycie nie moze blokowac zatwierdzenia');
+  const warning = summary.warnings.find((issue) => issue.details?.hiddenLayer);
+  assert.ok(warning, 'obsluga ma zobaczyc, ze tresc nie pojdzie na wydruk');
+  assert.equal(warning?.itemIndex, 0);
+  assert.equal(warning?.fieldLabel, 'Nazwisko');
+});
+
 test('pola wspolne sprawdzane sa raz, bez numeru sztuki', async () => {
   const { validatePrintPackageAnswers } = await import(
     '../src/services/renderer/answers-validation.service'

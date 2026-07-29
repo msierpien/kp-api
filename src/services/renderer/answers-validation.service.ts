@@ -161,6 +161,50 @@ export function buildValidationFields(
   });
 }
 
+/**
+ * Ostrzezenia o polach, ktorych warstwa zostala ukryta przez klienta.
+ *
+ * Ukrycie to nadpisanie klienta, a nie decyzja szablonu: pole nadal jest
+ * wymagane i klient je wypelnia, tylko tresc nie ma gdzie sie wydrukowac.
+ * Pomiar takiej warstwy nie ma sensu (nie ma ramki), ale obsluga musi to
+ * zobaczyc przed drukiem - stad ostrzezenie zamiast ciszy.
+ */
+function hiddenFieldWarnings(
+  fields: FieldValidationConfig[],
+  layout: TemplateLayoutJson,
+  layoutOverrides: unknown,
+  values: Record<string, unknown>,
+  itemIndex?: number,
+  answers?: Record<string, unknown>
+): PrintPackageFieldIssue[] {
+  const hiddenKeys = new Map<string, string>();
+  const visibleKeys = new Set<string>();
+
+  for (const layer of collectLayersForItem(layout, layoutOverrides, itemIndex, answers)) {
+    const fieldKey = getLayerFieldKey(layer);
+    if (!fieldKey) continue;
+    if (layer.visible === false) hiddenKeys.set(fieldKey, layer.name || fieldKey);
+    else visibleKeys.add(fieldKey);
+  }
+
+  return fields
+    .filter((field) => hiddenKeys.has(field.key) && !visibleKeys.has(field.key))
+    // Puste pole zglosi juz zwykla walidacja "wymagane" - tu chodzi o dane,
+    // ktore klient wpisal, a ktore nie pojda na wydruk.
+    .filter((field) => String(values[field.key] ?? '').trim().length > 0)
+    .map((field) => ({
+      field: field.key,
+      fieldLabel: field.label,
+      severity: 'warning' as const,
+      itemIndex,
+      message:
+        itemIndex === undefined
+          ? 'element ukryty na projekcie — ta treść nie pójdzie na wydruk'
+          : `Sztuka ${itemIndex + 1}: element ukryty na projekcie — ta treść nie pójdzie na wydruk`,
+      details: { hiddenLayer: true },
+    }));
+}
+
 /** Prefiks klucza pseudo-pola dla tekstu dopisanego przez klienta. */
 const ADDED_TEXT_KEY_PREFIX = '__layer:';
 
@@ -295,7 +339,17 @@ export async function validatePrintPackageAnswers(
   );
   const sharedLabels = labelsOf(sharedValidationFields, addedText.fields);
   const sharedErrors = describeIssues(sharedResult.errors, sharedLabels);
-  const sharedWarnings = describeIssues(sharedResult.warnings, sharedLabels);
+  const sharedWarnings = [
+    ...describeIssues(sharedResult.warnings, sharedLabels),
+    ...hiddenFieldWarnings(
+      sharedFields,
+      layout,
+      layoutOverrides,
+      answers.sharedAnswers,
+      undefined,
+      answers.sharedAnswers
+    ),
+  ];
   const items: PrintPackageItemValidation[] = [];
 
   for (let itemIndex = 0; itemIndex < qty; itemIndex += 1) {
@@ -312,7 +366,17 @@ export async function validatePrintPackageAnswers(
     const result = await validateAnswers(answers.items[itemIndex] || {}, itemValidationFields);
     const itemLabels = labelsOf(itemValidationFields);
     const errors = describeIssues(result.errors, itemLabels, itemIndex);
-    const warnings = describeIssues(result.warnings, itemLabels, itemIndex);
+    const warnings = [
+      ...describeIssues(result.warnings, itemLabels, itemIndex),
+      ...hiddenFieldWarnings(
+        itemFields,
+        layout,
+        layoutOverrides,
+        answers.items[itemIndex] || {},
+        itemIndex,
+        itemAnswers
+      ),
+    ];
     items.push({
       itemIndex,
       isValid: result.isValid,

@@ -7,6 +7,7 @@ import jwt from '@fastify/jwt';
 import fastifyStatic from '@fastify/static';
 import multipart from '@fastify/multipart';
 import path from 'path';
+import { randomBytes } from 'crypto';
 import { config } from './config';
 import prisma from './lib/prisma';
 import requestContext from '@fastify/request-context';
@@ -57,6 +58,9 @@ const server = Fastify({
   routerOptions: {
     ignoreTrailingSlash: true,
   },
+  // Krotki identyfikator zamiast domyslnego "req-42": klient podaje go
+  // w mailu ("nie dziala, numer 7f3c14"), a obsluga ma czego szukac w logach.
+  genReqId: () => randomBytes(3).toString('hex'),
   logger: {
     level: 'info',
     transport: config.app.isDevelopment

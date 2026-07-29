@@ -33,6 +33,27 @@ interface PersonalizationParams {
   token: string;
 }
 
+/**
+ * Awaria po stronie serwera z numerem zgloszenia.
+ *
+ * Klient pisal "nie dziala", a obsluga nie miala czego szukac w logach -
+ * wszystkie sciezki publiczne konczyly sie samym komunikatem. `request.id`
+ * jest krotki (6 znakow) i trafia do kazdej linii logu tego zadania.
+ */
+function failWithReference(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  error: unknown,
+  message: string
+) {
+  request.log.error({ err: error }, message);
+  return reply.status(500).send({
+    error: 'Internal Server Error',
+    message,
+    requestId: request.id,
+  });
+}
+
 interface SaveDesignBody {
   /** Plaska mapa klucz->wartosc. Pola INDIVIDUAL trafiaja do pierwszej pozycji. */
   answers?: Record<string, string | any>;
@@ -416,11 +437,24 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
             ? { id: `template-${enrichedTemplate.id}`, template: enrichedTemplate }
             : null;
 
+        // Ostatni zapisany podglad. Po zatwierdzeniu portal nie pokazuje juz
+        // edytora, wiec bez tego klient chcacy sprawdzic literowke w nazwisku
+        // mial do dyspozycji wylacznie adres e-mail do biura.
+        const savedPreview = await prisma.asset.findFirst({
+          where: { caseId: personalizationCase.id, assetType: 'PNG_PREVIEW' },
+          orderBy: { createdAt: 'desc' },
+        });
+        const previewUrl =
+          savedPreview && (await fileExists(savedPreview.filePath))
+            ? buildStorageUrl(savedPreview.filePath)
+            : null;
+
         return reply.send({
           id: personalizationCase.id,
           status: personalizationCase.status,
           tokenActive: personalizationCase.tokenActive,
           submittedAt: personalizationCase.submittedAt,
+          previewUrl,
           layoutOverrides: personalizationCase.layoutOverrides,
           validationSummary: personalizationCase.validationSummary,
           answersJson: personalizationCase.answersJson,
@@ -447,11 +481,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           })),
         });
       } catch (error) {
-        fastify.log.error(error);
-        return reply.status(500).send({
-          error: 'Internal Server Error',
-          message: 'Nie udało się pobrać personalizacji',
-        });
+        return failWithReference(request, reply, error, 'Nie udało się pobrać personalizacji');
       }
     }
   );
@@ -614,11 +644,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           updatedAt: updated.updatedAt,
         });
       } catch (error) {
-        fastify.log.error(error);
-        return reply.status(500).send({
-          error: 'Internal Server Error',
-          message: 'Nie udało się zapisać odpowiedzi',
-        });
+        return failWithReference(request, reply, error, 'Nie udało się zapisać odpowiedzi');
       }
     }
   );
@@ -809,11 +835,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           status: previewUrl ? 'PREVIEW_READY' : 'DRAFT',
         });
       } catch (error) {
-        fastify.log.error(error);
-        return reply.status(500).send({
-          error: 'Internal Server Error',
-          message: 'Nie udało się przetworzyć zapytania',
-        });
+        return failWithReference(request, reply, error, 'Nie udało się przetworzyć zapytania');
       }
     }
   );
@@ -1055,11 +1077,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           renderJob: renderJobInfo,
         });
       } catch (error) {
-        fastify.log.error(error);
-        return reply.status(500).send({
-          error: 'Internal Server Error',
-          message: 'Nie udało się zatwierdzić projektu',
-        });
+        return failWithReference(request, reply, error, 'Nie udało się zatwierdzić projektu');
       }
     }
   );
@@ -1219,10 +1237,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
-        return reply.status(500).send({
-          error: 'Internal Server Error',
-          message: 'Nie udało się zapisać podglądu',
-        });
+        return failWithReference(request, reply, error, 'Nie udało się zapisać podglądu');
       }
     }
   );
@@ -1278,11 +1293,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
 
         return reply.send({ decorations: await listDecorations({ tenantId }) });
       } catch (error) {
-        fastify.log.error(error);
-        return reply.status(500).send({
-          error: 'Internal Server Error',
-          message: 'Nie udało się pobrać ozdobników',
-        });
+        return failWithReference(request, reply, error, 'Nie udało się pobrać ozdobników');
       }
     }
   );
@@ -1419,10 +1430,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         if (error instanceof SvgSanitizeError || isUploadValidationError(error)) {
           return reply.status(400).send({ error: 'Upload Failed', message: error.message });
         }
-        return reply.status(500).send({
-          error: 'Internal Server Error',
-          message: 'Nie udało się wgrać pliku',
-        });
+        return failWithReference(request, reply, error, 'Nie udało się wgrać pliku');
       }
     }
   );

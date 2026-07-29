@@ -62,6 +62,43 @@ function targetTenantId(request: FastifyRequest) {
   return typeof tenantId === 'string' && tenantId ? tenantId : undefined;
 }
 
+/**
+ * Wpis audytu z trescia operacji, a nie samym faktem wywolania trasy.
+ *
+ * Automatyczny audyt zapisuje metode, sciezke i parametry - przy czyszczeniu
+ * to za malo. Trzeba wiedziec, ILE i CZEGO zniknelo, bo plikow nie da sie
+ * przywrocic i nie ma po nich innego sladu niz ten wpis.
+ */
+export async function writeMaintenanceAuditLog(
+  request: FastifyRequest,
+  action: string,
+  metadata: Record<string, unknown>
+) {
+  const user = request.user;
+  if (!user) return;
+
+  try {
+    await prisma.auditLog.create({
+      data: {
+        actorUserId: user.userId,
+        actorEmail: user.email,
+        actorRole: user.role,
+        actorTenantId: user.tenantId,
+        action,
+        resource: 'storage',
+        method: request.method,
+        path: requestPath(request.url),
+        statusCode: 200,
+        ipAddress: request.ip,
+        userAgent: userAgent(request),
+        metadataJson: JSON.parse(JSON.stringify(metadata)) as Prisma.JsonObject,
+      },
+    });
+  } catch (error) {
+    request.log.warn({ err: error }, 'Failed to write maintenance audit log');
+  }
+}
+
 export async function writeAdminAuditLog(request: FastifyRequest, reply: FastifyReply) {
   if (!shouldAuditAdminRequest(request.method, reply.statusCode, request.url)) return;
 

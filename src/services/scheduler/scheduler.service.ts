@@ -3,6 +3,7 @@ import type { ScheduledTask } from 'node-cron';
 import prisma from '../../lib/prisma';
 import { syncShopOrders, type SyncResult } from '../sync/sync-orders.service';
 import { cleanupStorage } from '../storage/cleanup-storage.service';
+import { pruneJobHistory } from '../maintenance/job-retention.service';
 import { syncWholesaleProviderForTenant } from '../admin/wholesale.service';
 import { reconcilePrestaShopForTenant } from '../prestashop/prestashop-reconciliation.service';
 import { syncStockForShop } from '../stock/stock-sync.service';
@@ -369,16 +370,27 @@ function scheduleStorageCleanup() {
     async () => {
       console.log('[Scheduler] 🧹 Starting automatic storage cleanup...');
       try {
+        // Czcionki i szablony sa chronione po stronie serwisu - to katalogi
+        // zarzadzane poza tabelami plikow. Wczesniej noc kasowala je jako
+        // "osierocone" razem z ozdobnikami sprzedawcy.
         const stats = await cleanupStorage({
           dryRun: false,
-          olderThanDays: 30, // Usuń orphaned files starsze niż 30 dni
+          olderThanDays: 30,
           removeOrphanedOnly: true,
         });
-        
+
         console.log(
           `[Scheduler] ✅ Storage cleanup complete: ` +
           `${stats.orphanedFilesDeleted} files deleted, ` +
-          `${(stats.spaceSavedBytes / 1024 / 1024).toFixed(2)} MB saved`
+          `${(stats.spaceSavedBytes / 1024 / 1024).toFixed(2)} MB saved, ` +
+          `${stats.skippedTooYoung} skipped (too young)`
+        );
+
+        // Historia zadan rosla bez zadnej retencji - nic jej nie kasowalo.
+        const jobs = await pruneJobHistory();
+        console.log(
+          `[Scheduler] ✅ Job history pruned: ` +
+          `${jobs.renderJobsDeleted} render jobs, ${jobs.printJobsDeleted} print jobs`
         );
       } catch (error) {
         console.error('[Scheduler] ❌ Storage cleanup failed:', error);

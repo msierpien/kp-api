@@ -5,38 +5,134 @@ import { config } from '../../config';
 
 const STORAGE_ROOT = config.storage.path;
 
+/**
+ * Katalogi zarzadzane POZA tabelami plikow.
+ *
+ * Czcionki zyja wylacznie na dysku (`fonts.service` nie ma wpisu w bazie -
+ * `Asset` wymaga `caseId`, wiec nie ma ich gdzie trzymac), a szablony maja
+ * wlasny cykl zycia. Bez tej listy nocne czyszczenie uznawalo je za
+ * osierocone i kasowalo: szablony traciły kroje, a klienci - ozdobniki.
+ *
+ * Zasada: co nie jest opisane w bazie, musi byc opisane TUTAJ. Trzeciej
+ * mozliwosci nie ma - pliku bez wlasciciela nie wolno milczaco skasowac.
+ */
+const PROTECTED_DIRS = new Set(['templates', 'fonts']);
+
+/**
+ * Najmlodszy wiek pliku, ktory wolno rozwazac do usuniecia.
+ *
+ * Worker zapisuje plik (`saveFile`), a rekord w bazie tworzy dopiero
+ * chwile pozniej - w tym oknie plik JEST osierocony. Bez tego progu
+ * czyszczenie uruchomione w trakcie renderu paczki 300 winietek kasowalo
+ * pliki, ktore wlasnie powstaja.
+ */
+const MIN_FILE_AGE_MS = 24 * 60 * 60 * 1000;
+
+/** Kategorie plikow - panel pokazuje je osobno, bo znacza co innego. */
+export type StorageFileKind = 'preview' | 'print' | 'decoration' | 'other';
+
+export const STORAGE_KIND_LABELS: Record<StorageFileKind, string> = {
+  preview: 'Podglądy klienta',
+  print: 'Pliki do druku',
+  decoration: 'Ozdobniki',
+  other: 'Pozostałe',
+};
+
+export interface StorageKindStats {
+  kind: StorageFileKind;
+  files: number;
+  bytes: number;
+}
+
 interface CleanupStats {
   totalFilesScanned: number;
   orphanedFilesFound: number;
   orphanedFilesDeleted: number;
   spaceSavedBytes: number;
+  /** Pliki pominiete, bo sa mlodsze niz `MIN_FILE_AGE_MS`. */
+  skippedTooYoung: number;
+  /** Pliki pominiete, bo leza w katalogu chronionym. */
+  skippedProtected: number;
+  /** Podzial kandydatow wedlug rodzaju - to samo, co widzi panel. */
+  byKind: StorageKindStats[];
+  /** Kilka pierwszych sciezek do podejrzenia przed usunieciem. */
+  sample: string[];
   errors: string[];
 }
 
 interface CleanupOptions {
-  dryRun?: boolean; // Nie usuwa, tylko raportuje
-  olderThanDays?: number; // Usuń preview starsze niż X dni
-  removeOrphanedOnly?: boolean; // Tylko orphaned files (nie w DB)
+  dryRun?: boolean;
+  /** Dodatkowy prog wieku, ponad wymuszone 24 h. */
+  olderThanDays?: number;
+  removeOrphanedOnly?: boolean;
+}
+
+/** Ile sciezek pokazac w podgladzie przed usunieciem. */
+const SAMPLE_LIMIT = 20;
+
+/** Czy sciezka lezy w katalogu, ktorego nie wolno ruszac. */
+function isProtected(relativePath: string): boolean {
+  const [topLevel] = relativePath.split(path.sep);
+  return PROTECTED_DIRS.has(topLevel);
+}
+
+/** Dlaczego plik zostaje albo leci. */
+export type CleanupVerdict = 'known' | 'protected' | 'too-young' | 'orphaned';
+
+/**
+ * Jedyne miejsce, w ktorym zapada decyzja o usunieciu pliku.
+ *
+ * Trzy bariery, kazda z osobna juz raz zawiodla:
+ * - `knownInDb` - plik opisany w ktorejkolwiek tabeli plikow (brakowalo
+ *   `DecorationAsset`, wiec ozdobniki byly "osierocone"),
+ * - katalog chroniony (czcionki nie maja wpisu w bazie i nie moga miec),
+ * - wiek (plik swiezo zapisany przez workera nie ma jeszcze rekordu).
+ */
+export function cleanupVerdict(input: {
+  relativePath: string;
+  ageMs: number;
+  knownInDb: boolean;
+  minAgeMs?: number;
+}): CleanupVerdict {
+  if (input.knownInDb) return 'known';
+  if (isProtected(input.relativePath)) return 'protected';
+  if (input.ageMs < Math.max(MIN_FILE_AGE_MS, input.minAgeMs ?? 0)) return 'too-young';
+  return 'orphaned';
+}
+
+/** Rodzaj pliku rozpoznany po sciezce - zgodnie z tym, jak zapisuje je worker. */
+export function classifyStorageFile(relativePath: string): StorageFileKind {
+  const [topLevel] = relativePath.split(path.sep);
+  if (topLevel === 'decorations') return 'decoration';
+
+  const fileName = path.basename(relativePath);
+  if (fileName.startsWith('preview-')) return 'preview';
+  if (fileName.startsWith('final-') || fileName.startsWith('print-package')) return 'print';
+
+  return 'other';
 }
 
 /**
- * Znajduje wszystkie pliki w storage
+ * Znajduje wszystkie pliki w storage (bez katalogow chronionych).
  */
-async function getAllStorageFiles(): Promise<string[]> {
+async function getAllStorageFiles(): Promise<{ files: string[]; protectedCount: number }> {
   const files: string[] = [];
-  
+  let protectedCount = 0;
+
   async function scanDir(dir: string): Promise<void> {
     try {
       const entries = await fs.readdir(dir, { withFileTypes: true });
-      
+
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
-        
+
         if (entry.isDirectory()) {
-          // Skip hidden directories and templates (managed separately)
-          if (!entry.name.startsWith('.') && entry.name !== 'templates') {
-            await scanDir(fullPath);
+          if (entry.name.startsWith('.')) continue;
+          if (isProtected(path.relative(STORAGE_ROOT, fullPath))) {
+            protectedCount += 1;
+            continue;
           }
+          await scanDir(fullPath);
         } else if (entry.isFile() && !entry.name.startsWith('.')) {
           files.push(fullPath);
         }
@@ -45,41 +141,53 @@ async function getAllStorageFiles(): Promise<string[]> {
       console.error(`[Cleanup] Error scanning ${dir}:`, error);
     }
   }
-  
+
   await scanDir(STORAGE_ROOT);
-  return files;
+  return { files, protectedCount };
 }
 
 /**
- * Pobiera wszystkie ścieżki plików z bazy danych
+ * Sciezki plikow znane bazie - ze WSZYSTKICH tabel, ktore trzymaja pliki.
+ *
+ * `DecorationAsset` byl tu pominiety, wiec biblioteka ozdobnikow sprzedawcy
+ * kwalifikowala sie do skasowania jako "osierocona".
  */
 async function getAllDatabaseFilePaths(): Promise<Set<string>> {
-  const assets = await prisma.asset.findMany({
-    select: { filePath: true },
-  });
-  
-  const templateAssets = await prisma.templateAsset.findMany({
-    select: { filePath: true },
-  });
-  
+  const [assets, templateAssets, decorations] = await Promise.all([
+    prisma.asset.findMany({ select: { filePath: true } }),
+    prisma.templateAsset.findMany({ select: { filePath: true } }),
+    prisma.decorationAsset.findMany({ select: { filePath: true } }),
+  ]);
+
   const paths = new Set<string>();
-  
-  // Normalizuj ścieżki z DB (relatywne)
-  assets.forEach(asset => {
-    const fullPath = path.join(STORAGE_ROOT, asset.filePath);
-    paths.add(fullPath);
-  });
-  
-  templateAssets.forEach(asset => {
-    const fullPath = path.join(STORAGE_ROOT, asset.filePath);
-    paths.add(fullPath);
-  });
-  
+
+  for (const row of [...assets, ...templateAssets, ...decorations]) {
+    paths.add(path.join(STORAGE_ROOT, row.filePath));
+  }
+
   return paths;
 }
 
+function summarizeByKind(entries: Array<{ relativePath: string; size: number }>): StorageKindStats[] {
+  const totals = new Map<StorageFileKind, StorageKindStats>();
+
+  for (const entry of entries) {
+    const kind = classifyStorageFile(entry.relativePath);
+    const current = totals.get(kind) || { kind, files: 0, bytes: 0 };
+    current.files += 1;
+    current.bytes += entry.size;
+    totals.set(kind, current);
+  }
+
+  return [...totals.values()].sort((a, b) => b.bytes - a.bytes);
+}
+
 /**
- * Główna funkcja cleanup storage
+ * Czyszczenie osieroconych plikow.
+ *
+ * "Osierocony" = nie ma go w zadnej tabeli plikow ORAZ nie lezy w katalogu
+ * chronionym ORAZ jest starszy niz doba. Wszystkie trzy warunki musza byc
+ * spelnione - kazdy z osobna juz raz okazal sie za slaby.
  */
 export async function cleanupStorage(options: CleanupOptions = {}): Promise<CleanupStats> {
   const {
@@ -88,89 +196,89 @@ export async function cleanupStorage(options: CleanupOptions = {}): Promise<Clea
     removeOrphanedOnly = true,
   } = options;
 
-  console.log('[Cleanup] Starting storage cleanup', {
-    dryRun,
-    olderThanDays,
-    removeOrphanedOnly,
-  });
+  console.log('[Cleanup] Starting storage cleanup', { dryRun, olderThanDays, removeOrphanedOnly });
 
   const stats: CleanupStats = {
     totalFilesScanned: 0,
     orphanedFilesFound: 0,
     orphanedFilesDeleted: 0,
     spaceSavedBytes: 0,
+    skippedTooYoung: 0,
+    skippedProtected: 0,
+    byKind: [],
+    sample: [],
     errors: [],
   };
 
   try {
-    // 1. Znajdź wszystkie pliki w storage
-    const allFiles = await getAllStorageFiles();
+    const { files: allFiles } = await getAllStorageFiles();
     stats.totalFilesScanned = allFiles.length;
-    
+
     console.log(`[Cleanup] Found ${allFiles.length} files in storage`);
 
-    // 2. Pobierz wszystkie ścieżki z bazy
     const dbFilePaths = await getAllDatabaseFilePaths();
-    
     console.log(`[Cleanup] Found ${dbFilePaths.size} files referenced in database`);
 
-    // 3. Znajdź orphaned files (w storage ale nie w DB)
-    const orphanedFiles: string[] = [];
     const now = Date.now();
-    
-    for (const file of allFiles) {
-      if (!dbFilePaths.has(file)) {
-        // Jeśli jest filtr wieku, sprawdź datę modyfikacji
-        if (olderThanDays) {
-          try {
-            const stat = await fs.stat(file);
-            const fileAge = (now - stat.mtimeMs) / (1000 * 60 * 60 * 24); // dni
-            
-            if (fileAge < olderThanDays) {
-              continue; // Plik jest za młody, pomiń
-            }
-          } catch (error) {
-            stats.errors.push(`Cannot stat file: ${file}`);
-            continue;
-          }
-        }
-        
-        orphanedFiles.push(file);
-      }
-    }
-    
-    stats.orphanedFilesFound = orphanedFiles.length;
-    
-    console.log(`[Cleanup] Found ${orphanedFiles.length} orphaned files`);
+    // Wymuszona doba, a `olderThanDays` moze prog tylko podniesc.
+    const minAgeMs = Math.max(MIN_FILE_AGE_MS, (olderThanDays || 0) * 24 * 60 * 60 * 1000);
 
-    // 4. Usuń orphaned files
-    if (removeOrphanedOnly && orphanedFiles.length > 0) {
-      for (const file of orphanedFiles) {
+    const orphaned: Array<{ fullPath: string; relativePath: string; size: number }> = [];
+
+    for (const file of allFiles) {
+      const relativePath = path.relative(STORAGE_ROOT, file);
+      const knownInDb = dbFilePaths.has(file);
+
+      let stat;
+      try {
+        stat = await fs.stat(file);
+      } catch {
+        stats.errors.push(`Cannot stat file: ${file}`);
+        continue;
+      }
+
+      const verdict = cleanupVerdict({
+        relativePath,
+        ageMs: now - stat.mtimeMs,
+        knownInDb,
+        minAgeMs,
+      });
+
+      if (verdict === 'too-young') stats.skippedTooYoung += 1;
+      if (verdict === 'protected') stats.skippedProtected += 1;
+      if (verdict !== 'orphaned') continue;
+
+      orphaned.push({ fullPath: file, relativePath, size: stat.size });
+    }
+
+    stats.orphanedFilesFound = orphaned.length;
+    stats.byKind = summarizeByKind(orphaned);
+    stats.sample = orphaned.slice(0, SAMPLE_LIMIT).map((entry) => entry.relativePath);
+
+    console.log(`[Cleanup] Found ${orphaned.length} orphaned files`);
+
+    if (removeOrphanedOnly && orphaned.length > 0) {
+      for (const entry of orphaned) {
+        if (dryRun) {
+          stats.spaceSavedBytes += entry.size;
+          continue;
+        }
+
         try {
-          const stat = await fs.stat(file);
-          
-          if (!dryRun) {
-            await fs.unlink(file);
-            stats.orphanedFilesDeleted++;
-            stats.spaceSavedBytes += stat.size;
-            console.log(`[Cleanup] Deleted: ${file} (${(stat.size / 1024).toFixed(2)} KB)`);
-          } else {
-            stats.spaceSavedBytes += stat.size;
-            console.log(`[Cleanup] Would delete: ${file} (${(stat.size / 1024).toFixed(2)} KB)`);
-          }
+          await fs.unlink(entry.fullPath);
+          stats.orphanedFilesDeleted += 1;
+          stats.spaceSavedBytes += entry.size;
         } catch (error) {
-          const msg = `Error deleting ${file}: ${error instanceof Error ? error.message : 'Unknown'}`;
+          const msg = `Error deleting ${entry.relativePath}: ${error instanceof Error ? error.message : 'Unknown'}`;
           stats.errors.push(msg);
           console.error(`[Cleanup] ${msg}`);
         }
       }
     }
 
-    // 5. Cleanup pustych folderów
     if (!dryRun && stats.orphanedFilesDeleted > 0) {
       await cleanupEmptyDirectories(STORAGE_ROOT);
     }
-
   } catch (error) {
     const msg = `Fatal error during cleanup: ${error instanceof Error ? error.message : 'Unknown'}`;
     stats.errors.push(msg);
@@ -181,6 +289,7 @@ export async function cleanupStorage(options: CleanupOptions = {}): Promise<Clea
     filesScanned: stats.totalFilesScanned,
     orphanedFound: stats.orphanedFilesFound,
     deleted: stats.orphanedFilesDeleted,
+    tooYoung: stats.skippedTooYoung,
     spaceSaved: `${(stats.spaceSavedBytes / 1024 / 1024).toFixed(2)} MB`,
     errors: stats.errors.length,
   });
@@ -189,30 +298,28 @@ export async function cleanupStorage(options: CleanupOptions = {}): Promise<Clea
 }
 
 /**
- * Usuwa puste katalogi rekursywnie
+ * Usuwa puste katalogi rekursywnie (poza chronionymi).
  */
 async function cleanupEmptyDirectories(dir: string): Promise<void> {
   try {
     const entries = await fs.readdir(dir, { withFileTypes: true });
-    
-    // Rekursywnie sprawdź podkatalogi
+
     for (const entry of entries) {
-      if (entry.isDirectory() && !entry.name.startsWith('.')) {
-        const fullPath = path.join(dir, entry.name);
-        await cleanupEmptyDirectories(fullPath);
-      }
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      const fullPath = path.join(dir, entry.name);
+      if (isProtected(path.relative(STORAGE_ROOT, fullPath))) continue;
+      await cleanupEmptyDirectories(fullPath);
     }
-    
-    // Sprawdź czy katalog jest pusty po usunięciu podkatalogów
+
     const remaining = await fs.readdir(dir);
-    const hasVisibleFiles = remaining.some(name => !name.startsWith('.'));
-    
+    const hasVisibleFiles = remaining.some((name) => !name.startsWith('.'));
+
     if (!hasVisibleFiles && dir !== STORAGE_ROOT) {
       await fs.rmdir(dir);
       console.log(`[Cleanup] Removed empty directory: ${dir}`);
     }
-  } catch (error) {
-    // Ignoruj błędy przy usuwaniu katalogów
+  } catch {
+    // Ignoruj bledy przy usuwaniu katalogow
   }
 }
 
@@ -221,26 +328,20 @@ async function cleanupEmptyDirectories(dir: string): Promise<void> {
  */
 export async function cleanupCasePreview(caseId: string): Promise<void> {
   console.log(`[Cleanup] Cleaning up old previews for case ${caseId}`);
-  
+
   try {
-    // Znajdź wszystkie PNG_PREVIEW dla tego case
     const previews = await prisma.asset.findMany({
-      where: {
-        caseId,
-        assetType: 'PNG_PREVIEW',
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
+      where: { caseId, assetType: 'PNG_PREVIEW' },
+      orderBy: { createdAt: 'desc' },
     });
-    
+
     // Zachowaj tylko najnowszy, usuń resztę
     if (previews.length > 1) {
-      const toDelete = previews.slice(1); // Wszystkie oprócz pierwszego (najnowszego)
-      
+      const toDelete = previews.slice(1);
+
       for (const preview of toDelete) {
         const fullPath = path.join(STORAGE_ROOT, preview.filePath);
-        
+
         try {
           await fs.unlink(fullPath);
           await prisma.asset.delete({ where: { id: preview.id } });
@@ -256,3 +357,4 @@ export async function cleanupCasePreview(caseId: string): Promise<void> {
 }
 
 export type { CleanupStats, CleanupOptions };
+export { MIN_FILE_AGE_MS, PROTECTED_DIRS };

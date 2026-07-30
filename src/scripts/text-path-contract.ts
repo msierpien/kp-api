@@ -13,17 +13,13 @@ import fs from 'fs/promises';
 import path from 'path';
 import { IText, Path, StaticCanvas, FabricText } from 'fabric/node';
 
-// Po opublikowaniu 0.5.0 zamienic na zwykly import z pakietu:
-//   import { buildTextPathD, ... } from '@msierpien/kp-template-core';
-// Do czasu publikacji czytamy `dist` z lokalnego repo obok.
-const core = require('../../../kp-template-core/dist/index.js');
-const {
+import {
   buildTextPathD,
   getTextPathArcLength,
   getTextPathAnchorOffset,
   getTextPathBBox,
   resolveTextPathStartOffset,
-} = core;
+} from '@msierpien/kp-template-core';
 
 const OUT_DIR = path.join(process.cwd(), 'storage', 'tmp');
 const DPI = 300;

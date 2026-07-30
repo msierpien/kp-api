@@ -35,6 +35,12 @@ interface FieldConfig {
   // Layout config
   width?: number; // max width w px
   maxLines?: number;
+  /**
+   * Pole renderuje sie po krzywej - `width` jest wtedy dlugoscia luku,
+   * a nie szerokoscia ramki. Zmienia tylko tresc komunikatu: mechanika
+   * pomiaru jest ta sama, wiec nie ma tu drugiej sciezki walidacji.
+   */
+  onArc?: boolean;
   font?: {
     family?: string;
     size?: number;
@@ -294,14 +300,19 @@ async function validateField(
         // klienta liczba, ktorej sami nie umiemy obronic.
         errors.push({
           field: fieldConfig.key,
-          message: measured
-            ? `Linia ${i + 1} w polu "${fieldConfig.label}" jest za długa`
-            : `Linia ${i + 1} w polu "${fieldConfig.label}" może być za długa (brak kroju w rejestrze — pomiar przybliżony)`,
+          message: fieldConfig.onArc
+            ? measured
+              ? `Napis "${fieldConfig.label}" nie mieści się na łuku`
+              : `Napis "${fieldConfig.label}" może nie zmieścić się na łuku (brak kroju w rejestrze — pomiar przybliżony)`
+            : measured
+              ? `Linia ${i + 1} w polu "${fieldConfig.label}" jest za długa`
+              : `Linia ${i + 1} w polu "${fieldConfig.label}" może być za długa (brak kroju w rejestrze — pomiar przybliżony)`,
           severity: measured ? 'error' : 'warning',
           details: {
             actualWidth: Math.round(lineWidth),
             maxWidth: maxWidth,
             measured,
+            ...(fieldConfig.onArc ? { onArc: true } : {}),
           },
         });
       }

@@ -419,6 +419,10 @@ async function layerToFabricObject(
       height: undefined,
       // Obrotem steruje `startAngle` w geometrii, nie `angle` obiektu.
       angle: 0,
+      // Jawnie, zeby nie zalezec od domyslnej wartosci biblioteki: cache
+      // rysuje obiekt na canvasie o rozmiarze bboksu SCIEZKI i obcina glify,
+      // ktore z niej wystaja. W przegladarce to wlasnie ucinalo napis.
+      objectCaching: false,
     } as any);
 
     // Szerokosc napisu mierzymy przed dolozeniem sciezki - potem `width`

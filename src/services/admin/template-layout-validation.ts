@@ -13,7 +13,10 @@ export type { TemplateLayoutWarning };
 type TemplateFormFieldKeySource = Array<{ fields: Array<{ key: string }> }> | null;
 
 function isFieldMappedTextLayer(layer: TemplateLayoutInput['layers'][number]) {
-  return layer.type === 'text' || layer.type === 'textbox';
+  // `text_path` tez wiaze sie z polem formularza - bez tego ostrzezenia
+  // o brakujacym, nieistniejacym albo zdublowanym `fieldKey` omijalyby
+  // warstwe po luku, choc dotycza jej tak samo.
+  return layer.type === 'text' || layer.type === 'textbox' || layer.type === 'text_path';
 }
 
 export function validateTemplateLayoutStructure(layout: TemplateLayoutInput) {

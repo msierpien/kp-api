@@ -10,6 +10,7 @@ import {
   type TemplateLayoutJson,
 } from '../../types/template-layout';
 import { validateAnswers } from './text-validator.service';
+import { getTextPathArcLength } from '@msierpien/kp-template-core';
 
 export type FieldValidationConfig = PersonalizationAnswerField & {
   label: string;
@@ -57,7 +58,10 @@ function getCanvasDpi(layout: TemplateLayoutJson) {
 }
 
 function getLayerFieldKey(layer: Layer): string | null {
-  if (layer.type !== 'text' && layer.type !== 'textbox') return null;
+  // `text_path` MUSI tu byc: bez tego odpowiedzi klienta dla pola na luku
+  // nie sa w ogole mierzone - warunek nie rzuca bledu, tylko po cichu
+  // pomija warstwe.
+  if (layer.type !== 'text' && layer.type !== 'textbox' && layer.type !== 'text_path') return null;
   const fieldKey = (layer.properties as any)?.fieldKey;
   return typeof fieldKey === 'string' && fieldKey.trim() ? fieldKey : null;
 }
@@ -99,6 +103,35 @@ function collectLayersForItem(
 /** Geometria ramki, wzgledem ktorej walidator mierzy tekst. */
 function describeLayerBox(layer: Layer | undefined, dpi: number) {
   const props = layer?.properties as any;
+
+  // Tekst po luku nie ma ramki - jego "szerokosc" to dlugosc krzywej.
+  // Ta sama liczba, ktora edytor pokazuje projektantowi w bloku Kontrola,
+  // idzie tutaj jako granica dla odpowiedzi klienta.
+  if (layer?.type === 'text_path') {
+    const fontSize = typeof props?.fontSize === 'number'
+      ? fontSizeToValidatorPx(props.fontSize, props.fontUnit, dpi)
+      : undefined;
+
+    return {
+      width: getTextPathArcLength(
+        {
+          pathShape: props?.pathShape === 'circle' ? 'circle' : 'arc',
+          radiusMm: Number(props?.radiusMm) || 20,
+          startAngle: Number(props?.startAngle) || 0,
+          sweepAngle: Number(props?.sweepAngle ?? 180),
+        },
+        dpi
+      ),
+      // Napis po luku jest jednoliniowy - druga linia nie mialaby wlasnej krzywej.
+      maxLines: 1,
+      onArc: true,
+      font: props ? {
+        family: props.fontFamily || 'Inter',
+        size: fontSize,
+        weight: Number(props.fontWeight || 400),
+      } : undefined,
+    };
+  }
   const fontSize = typeof props?.fontSize === 'number'
     ? fontSizeToValidatorPx(props.fontSize, props.fontUnit, dpi)
     : undefined;
@@ -246,7 +279,7 @@ export function buildAddedTextValidation(
   for (const layer of collectLayersForItem(layout, layoutOverrides, itemIndex, answers)) {
     if (!addedIds.has(layer.id)) continue;
     if (layer.visible === false) continue;
-    if (layer.type !== 'text' && layer.type !== 'textbox') continue;
+    if (layer.type !== 'text' && layer.type !== 'textbox' && layer.type !== 'text_path') continue;
     // Element wpiety w kolumne listy gosci ma `fieldKey` i idzie zwykla sciezka.
     if (getLayerFieldKey(layer)) continue;
 

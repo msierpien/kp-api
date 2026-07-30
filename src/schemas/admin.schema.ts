@@ -546,6 +546,41 @@ const textboxPropertiesSchema = z.object({
   clientFontWeight: z.boolean().optional(),
 });
 
+/**
+ * Tekst po krzywej.
+ *
+ * Bez tego schematu `z.object` po cichu wycialby CALA warstwe przy zapisie
+ * layoutu - projektant dodalby luk, zapisal i zobaczyl pusta kartke, bez
+ * zadnego bledu.
+ */
+const textPathPropertiesSchema = z.object({
+  type: z.literal('text_path'),
+  fieldKey: z.string().optional(),
+  text: z.string().optional(),
+  placeholder: z.string().optional(),
+  // Geometria prowadnicy - liczy ja pakiet, tutaj tylko wpuszczamy wartosci.
+  pathShape: z.enum(['arc', 'circle']).default('arc'),
+  radiusMm: z.number().positive(),
+  startAngle: z.number().default(0),
+  sweepAngle: z.number().min(-360).max(360).default(180),
+  pathSide: z.enum(['left', 'right']).default('left'),
+  pathAlign: z.enum(['baseline', 'center', 'ascender', 'descender']).default('baseline'),
+  textPathAlign: z.enum(['start', 'center', 'end']).default('center'),
+  pathD: z.string().optional(),
+  fontSize: z.number().positive(),
+  fontUnit: z.enum(['px', 'pt']).default('pt'),
+  fontFamily: z.string().min(1),
+  fontWeight: z.number().int().min(100).max(900).default(400),
+  fontStyle: z.enum(['normal', 'italic']).default('normal'),
+  fill: z.string().default('#000000'),
+  textTransform: z.enum(['none', 'uppercase', 'lowercase', 'capitalize']).optional(),
+  letterSpacing: z.number().optional(),
+  clientFontSize: z.boolean().optional(),
+  clientFontFamily: z.boolean().optional(),
+  clientColor: z.boolean().optional(),
+  clientFontWeight: z.boolean().optional(),
+});
+
 const shapePropertiesSchema = z.object({
   type: z.literal('shape'),
   shapeType: z.enum(['rectangle', 'circle', 'ellipse', 'line']),
@@ -569,6 +604,7 @@ const layerPropertiesSchema = z.discriminatedUnion('type', [
   textFieldPropertiesSchema,
   staticTextPropertiesSchema,
   textboxPropertiesSchema,
+  textPathPropertiesSchema,
   shapePropertiesSchema,
   cutLinePropertiesSchema,
 ]);
@@ -576,7 +612,7 @@ const layerPropertiesSchema = z.discriminatedUnion('type', [
 const layerBaseSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
-  type: z.enum(['background', 'image', 'text', 'static_text', 'textbox', 'shape', 'cut_line']),
+  type: z.enum(['background', 'image', 'text', 'static_text', 'textbox', 'text_path', 'shape', 'cut_line']),
   visible: z.boolean().default(true),
   locked: z.boolean().default(false),
   opacity: z.number().min(0).max(1).default(1),

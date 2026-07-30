@@ -1,5 +1,5 @@
 import { loadImage, registerFont } from 'canvas';
-import { StaticCanvas, FabricImage, IText, Textbox } from 'fabric/node';
+import { StaticCanvas, FabricImage, IText, Textbox, Path } from 'fabric/node';
 import type { TemplateLayoutJson, TemplatePage, PrintLayout, Layer, TextFieldProperties, TextBoxProperties, TextStyleRange, ImageProperties, MockupConfig } from '../../types/template-layout';
 import {
   buildFabricTextStyles,
@@ -8,6 +8,12 @@ import {
   resolveCharStyles,
 } from '../../types/template-layout';
 import { isSvgPath, rasterizeSvgFile } from './svg-raster.service';
+import {
+  buildTextPathD,
+  getTextPathAnchorOffset,
+  getTextPathArcLength,
+  resolveTextPathStartOffset,
+} from '@msierpien/kp-template-core';
 import { drawImageInQuad, quadToPixels, type Quad } from '../../lib/mockup-warp';
 import { mergeLayoutWithOverrides } from '../../lib/layout-overrides';
 import path from 'path';
@@ -148,7 +154,16 @@ async function loadLayoutFonts(layout: TemplateLayoutJson): Promise<void> {
   const needed = new Map<string, { family: string; weight: number; style: 'normal' | 'italic' }>();
 
   for (const layer of layout.layers) {
-    if (layer.type !== 'text' && layer.type !== 'static_text' && layer.type !== 'textbox') continue;
+    // `text_path` MUSI byc tutaj: bez rejestracji kroju przed renderem
+    // napis po luku wyszedlby domyslna czcionka node-canvas.
+    if (
+      layer.type !== 'text' &&
+      layer.type !== 'static_text' &&
+      layer.type !== 'textbox' &&
+      layer.type !== 'text_path'
+    ) {
+      continue;
+    }
 
     const props = layer.properties as any;
     const family = String(props.fontFamily || '').trim();
@@ -359,6 +374,69 @@ async function layerToFabricObject(
 
     applyTextStyleRanges(staticText, value, props, dpi, scale);
     return staticText;
+  }
+
+  // Tekst po krzywej
+  if (layer.type === 'text_path') {
+    const props = layer.properties as any;
+
+    const geometry = {
+      pathShape: props.pathShape === 'circle' ? ('circle' as const) : ('arc' as const),
+      radiusMm: Number(props.radiusMm) || 20,
+      startAngle: Number(props.startAngle) || 0,
+      sweepAngle: Number(props.sweepAngle ?? 180),
+    };
+
+    const fieldKey = typeof props.fieldKey === 'string' ? props.fieldKey : '';
+    const rawValue = fieldKey ? answers[fieldKey] : props.text;
+    const value = String(rawValue ?? props.text ?? '');
+    if (!value.trim()) return null;
+
+    // Ta sama funkcja co w edytorze, tylko BEZ mnozenia przez skale podgladu -
+    // renderer pracuje w pikselach projektu. To jedyna roznica miedzy
+    // podgladem i drukiem i jedyne miejsce, gdzie wolno jej wystapic.
+    const pathD = buildTextPathD(geometry, dpi);
+    const arcLength = getTextPathArcLength(geometry, dpi);
+    const anchor = getTextPathAnchorOffset(geometry, dpi);
+
+    const textPath = new IText(value, {
+      ...common,
+      charSpacing: Number(props.letterSpacing) || 0,
+      fontSize: fontSizeToRenderPx(props.fontSize, getFontUnit(props.fontUnit), dpi, scale),
+      fontFamily: props.fontFamily,
+      fontWeight: String(props.fontWeight || 400),
+      fontStyle: props.fontStyle || 'normal',
+      fill: props.fill,
+      originX: 'center',
+      originY: 'center',
+      // `layer.x/y` to srodek okregu - kotwica fabrica siedzi w srodku bboksu
+      // prowadnicy, wiec dokladamy to samo przesuniecie, co edytor.
+      left: (layer.x + anchor.dx) * scale,
+      top: (layer.y + anchor.dy) * scale,
+      // Warstwa jest jednoliniowa; `width`/`height` z `common` opisuja zasieg
+      // krzywej i nie moga sluzyc do dopasowania tekstu.
+      width: undefined,
+      height: undefined,
+      // Obrotem steruje `startAngle` w geometrii, nie `angle` obiektu.
+      angle: 0,
+    } as any);
+
+    // Szerokosc napisu mierzymy przed dolozeniem sciezki - potem `width`
+    // obiektu opisuje krzywa, nie tekst.
+    const textWidth = Number((textPath as any).width) || 0;
+
+    (textPath as any).set({
+      path: new Path(pathD, { fill: '', stroke: '' } as any),
+      pathSide: props.pathSide === 'right' ? 'right' : 'left',
+      pathAlign: props.pathAlign || 'baseline',
+      pathStartOffset: resolveTextPathStartOffset(
+        props.textPathAlign === 'start' || props.textPathAlign === 'end' ? props.textPathAlign : 'center',
+        arcLength,
+        textWidth
+      ),
+    });
+
+    return textPath;
   }
 
   // TextBox

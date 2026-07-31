@@ -173,18 +173,44 @@ describe('dlugosc napisu na luku', () => {
 });
 
 describe('ostrzezenia szablonu', () => {
-  test('warstwa po luku bez fieldKey nie jest pomijana w ostrzezeniach', async () => {
+  test('luk bez fieldKey to tekst staly, nie blad projektanta', async () => {
     const { collectTemplateLayoutWarnings } = await import(
       '../src/services/admin/template-layout-validation'
     );
 
-    const layout = layoutWithArc('');
+    // "ZAPRASZAMY" po luku nie musi brac sie z formularza - tak samo jak
+    // `textbox` bez klucza. Ostrzezenie o BRAKU klucza dotyczy wylacznie
+    // typu `text`, ktory z definicji podstawia odpowiedz klienta.
+    const warnings = collectTemplateLayoutWarnings(layoutWithArc(''), [
+      { fields: [{ key: 'haslo' }] },
+    ]);
+
+    assert.ok(
+      !warnings.some((warning) => warning.layerId === 'arc-1'),
+      'tekst staly po luku nie moze zglaszac braku fieldKey'
+    );
+  });
+
+  test('zdublowany fieldKey na luku jest zglaszany', async () => {
+    const { collectTemplateLayoutWarnings } = await import(
+      '../src/services/admin/template-layout-validation'
+    );
+
+    // Dwie warstwy z tym samym kluczem to konflikt niezaleznie od tego,
+    // czy druga jest w ramce, czy po luku.
+    const layout = layoutWithArc('haslo');
+    layout.layers.push({
+      ...layout.layers[0],
+      id: 'text-2',
+      type: 'text',
+      properties: { type: 'text', fieldKey: 'haslo', placeholder: '', fontSize: 20, fontFamily: 'Arial', fontWeight: 400, fontStyle: 'normal', fill: '#000', textAlign: 'center', lineHeight: 1.2, maxLines: 1, textTransform: 'none', editable: true },
+    });
+
     const warnings = collectTemplateLayoutWarnings(layout, [{ fields: [{ key: 'haslo' }] }]);
 
-    // Tlo tez zglosi swoje ostrzezenie - interesuje nas to o warstwie po luku.
     assert.ok(
-      warnings.some((warning) => warning.layerId === 'arc-1'),
-      'warstwa po luku ma dostac ostrzezenie o fieldKey'
+      warnings.some((warning) => warning.code === 'TEXT_LAYER_FIELD_KEY_DUPLICATED'),
+      'duplikat klucza ma byc zgloszony'
     );
   });
 

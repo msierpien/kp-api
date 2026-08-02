@@ -33,6 +33,8 @@ export interface SyncWholesaleProviderOptions {
 
 const ACTIVE_WHOLESALE_SYNC_STATUSES = ['PENDING', 'PROCESSING'];
 const DEFAULT_WHOLESALE_SYNC_BATCH_SIZE = 500;
+const WHOLESALE_APPLY_TRANSACTION_TIMEOUT_MS = 120_000;
+const WHOLESALE_APPLY_TRANSACTION_MAX_WAIT_MS = 15_000;
 const ZERO = new Prisma.Decimal(0);
 
 export async function getWholesaleSyncLogs(providerId: string, query: WholesaleSyncLogsQuery = {}) {
@@ -468,6 +470,9 @@ async function applyWholesaleFeed(input: {
       });
     }
     return createdResult.count;
+  }, {
+    maxWait: WHOLESALE_APPLY_TRANSACTION_MAX_WAIT_MS,
+    timeout: WHOLESALE_APPLY_TRANSACTION_TIMEOUT_MS,
   });
 
   return {

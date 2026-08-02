@@ -50,5 +50,6 @@ test('wholesale sync keeps mapped offers missing from feed as zero-stock mapping
   assert.match(mappedUpdate, /lastKnownStock: ZERO/);
   assert.doesNotMatch(mappedUpdate, /isActive: false/);
   assert.match(unmappedUpdate, /isActive: false/);
+  assert.match(body, /timeout: WHOLESALE_APPLY_TRANSACTION_TIMEOUT_MS/);
   assert.match(body, /missingHandled: missingMappedIds\.length \+ missingUnmappedIds\.length/);
 });

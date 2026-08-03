@@ -155,4 +155,105 @@ export async function registerWholesaleMappingRoutes(fastify: FastifyInstance) {
       return reply.status(status).send({ error: 'Error', message });
     }
   });
+
+  // ─── Ręczne mapowania dla providera typu PRODUCER (producent wewnętrzny) ───
+
+  const producerMappingBody = {
+    externalName: { type: ['string', 'null'] },
+    externalEan: { type: ['string', 'null'] },
+    warehouseProductId: { type: ['string', 'null'] },
+    lastKnownStock: { type: ['number', 'null'], minimum: 0 },
+    lastKnownPrice: { type: ['number', 'null'], minimum: 0 },
+    warehouseAvailableAt: { type: ['string', 'null'] },
+    isActive: { type: 'boolean' },
+  } as const;
+
+  fastify.post('/providers/:id/mappings', {
+    schema: {
+      tags: ['wholesale'],
+      summary: 'Dodaj produkt producenta (ręczne mapowanie)',
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      body: {
+        type: 'object',
+        required: ['externalSku'],
+        properties: { externalSku: { type: 'string', minLength: 1 }, ...producerMappingBody },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: wholesaleService.ProducerMappingInput }>, reply: FastifyReply) => {
+    try {
+      const mapping = await wholesaleService.createProducerMapping(request.params.id, request.body);
+      return reply.status(201).send(mapping);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd dodawania produktu producenta';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.patch('/mappings/:id', {
+    schema: {
+      tags: ['wholesale'],
+      summary: 'Edytuj produkt producenta (stan, cena, dostępność)',
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      body: { type: 'object', properties: producerMappingBody },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: wholesaleService.ProducerMappingUpdateInput }>, reply: FastifyReply) => {
+    try {
+      const mapping = await wholesaleService.updateProducerMapping(request.params.id, request.body);
+      return reply.send(mapping);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd edycji produktu producenta';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.delete('/mappings/:id', {
+    schema: {
+      tags: ['wholesale'],
+      summary: 'Usuń produkt producenta',
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await wholesaleService.deleteProducerMapping(request.params.id);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd usuwania produktu producenta';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  fastify.put('/providers/:id/mappings/bulk', {
+    schema: {
+      tags: ['wholesale'],
+      summary: 'Zapisz zbiorczo produkty producenta (upsert po SKU)',
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      body: {
+        type: 'object',
+        required: ['items'],
+        properties: {
+          items: {
+            type: 'array',
+            maxItems: 1000,
+            items: {
+              type: 'object',
+              required: ['externalSku'],
+              properties: { externalSku: { type: 'string', minLength: 1 }, ...producerMappingBody },
+            },
+          },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string }; Body: { items: wholesaleService.ProducerMappingInput[] } }>, reply: FastifyReply) => {
+    try {
+      const result = await wholesaleService.bulkUpsertProducerMappings(request.params.id, request.body.items);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd zbiorczego zapisu produktów producenta';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
 }

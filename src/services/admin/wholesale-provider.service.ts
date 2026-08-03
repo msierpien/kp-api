@@ -4,6 +4,7 @@ import prisma from '../../lib/prisma';
 import { publishInventoryToShops } from '../stock/stock-sync.service';
 import {
   buildProviderConfig,
+  buildProducerConfig,
   clampPreviewLimit,
   collectColumns,
   fetchFeed,
@@ -42,7 +43,7 @@ export interface WholesaleProvidersQuery {
 
 export interface CreateWholesaleProviderInput {
   name: string;
-  feedUrl: string;
+  feedUrl?: string;
   platform?: WholesalePlatform;
   preset?: WholesalePreset;
   delimiter?: string;
@@ -379,7 +380,13 @@ export async function getWholesaleDiagnostics(): Promise<WholesaleDiagnosticsRes
 
 export async function createWholesaleProvider(input: CreateWholesaleProviderInput) {
   const tenantId = requireTenantId();
-  const config = buildProviderConfig(input);
+  const isProducer = input.platform === 'PRODUCER';
+
+  if (!isProducer && !input.feedUrl?.trim()) {
+    throw new Error('Adres feedu (feedUrl) jest wymagany dla hurtowni z feedem');
+  }
+
+  const config = isProducer ? buildProducerConfig(input) : buildProviderConfig({ ...input, feedUrl: input.feedUrl!.trim() });
   const syncInterval = validateWholesaleSyncInterval(input.syncInterval ?? 1440);
 
   return prisma.wholesaleProvider.create({
@@ -387,9 +394,10 @@ export async function createWholesaleProvider(input: CreateWholesaleProviderInpu
       tenantId,
       name: input.name.trim(),
       platform: input.platform ?? 'CSV_FEED',
-      feedUrl: input.feedUrl.trim(),
+      // Producent nie ma feedu; syncEnabled zawsze false (sync bramkowany na CSV_FEED).
+      feedUrl: isProducer ? null : input.feedUrl!.trim(),
       configJson: config as unknown as Prisma.InputJsonValue,
-      syncEnabled: input.syncEnabled ?? true,
+      syncEnabled: isProducer ? false : (input.syncEnabled ?? true),
       syncInterval,
       leadTimeDays: normalizeOptionalLeadTimeDays(input.leadTimeDays),
       isActive: input.isActive ?? true,
@@ -423,17 +431,26 @@ export async function updateWholesaleProvider(id: string, input: UpdateWholesale
     input.minimumStockForSale !== undefined
   ) {
     const currentConfig = parseProviderConfig(provider.configJson);
-    const nextConfig = buildProviderConfig({
-      preset: input.preset ?? currentConfig.preset ?? 'CUSTOM',
-      delimiter: input.delimiter ?? currentConfig.delimiter,
-      fieldMapping: input.fieldMapping ?? currentConfig.fieldMapping,
-      availabilityRule: input.availabilityRule ?? currentConfig.availabilityRule,
-      feedSafety: input.feedSafety ?? currentConfig.feedSafety,
-      minimumStockForSale: input.minimumStockForSale ?? currentConfig.minimumStockForSale,
-      name: provider.name,
-      feedUrl: provider.feedUrl,
-    });
-    data.configJson = nextConfig as unknown as Prisma.InputJsonValue;
+    if (provider.platform === 'PRODUCER') {
+      // Producent: bez feedu/mapowania kolumn; aktualizujemy tylko dostępność i min. stan.
+      const nextConfig = buildProducerConfig({
+        availabilityRule: input.availabilityRule ?? currentConfig.availabilityRule,
+        minimumStockForSale: input.minimumStockForSale ?? currentConfig.minimumStockForSale,
+      });
+      data.configJson = nextConfig as unknown as Prisma.InputJsonValue;
+    } else {
+      const nextConfig = buildProviderConfig({
+        preset: input.preset ?? currentConfig.preset ?? 'CUSTOM',
+        delimiter: input.delimiter ?? currentConfig.delimiter,
+        fieldMapping: input.fieldMapping ?? currentConfig.fieldMapping,
+        availabilityRule: input.availabilityRule ?? currentConfig.availabilityRule,
+        feedSafety: input.feedSafety ?? currentConfig.feedSafety,
+        minimumStockForSale: input.minimumStockForSale ?? currentConfig.minimumStockForSale,
+        name: provider.name,
+        feedUrl: provider.feedUrl ?? '',
+      });
+      data.configJson = nextConfig as unknown as Prisma.InputJsonValue;
+    }
   }
 
   const updated = await prisma.wholesaleProvider.update({ where: { id }, data });

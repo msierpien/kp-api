@@ -187,6 +187,7 @@ export async function processWholesaleSyncJob(data: WholesaleSyncJobData) {
     });
 
     const config = parseProviderConfig(provider.configJson);
+    if (!provider.feedUrl) throw new Error('Provider nie ma feedUrl (sync obsługuje tylko providerów z feedem)');
     const csvText = await fetchFeed(provider.feedUrl);
     const records = parseCsv(csvText, config.delimiter ?? ';');
     const limitedRecords = limit ? records.slice(0, limit) : records;

@@ -37,11 +37,11 @@ export async function registerWholesaleProviderRoutes(fastify: FastifyInstance) 
       summary: 'Utwórz providera hurtowni CSV',
       body: {
         type: 'object',
-        required: ['name', 'feedUrl'],
+        required: ['name'],
         properties: {
           name: { type: 'string', minLength: 1 },
           feedUrl: { type: 'string', minLength: 1 },
-          platform: { type: 'string', enum: ['CSV_FEED', 'XML_FEED', 'REST_API'], default: 'CSV_FEED' },
+          platform: { type: 'string', enum: ['CSV_FEED', 'XML_FEED', 'REST_API', 'PRODUCER'], default: 'CSV_FEED' },
           preset: { type: 'string', enum: ['GODAN', 'PARTYDECO', 'CUSTOM'] },
           delimiter: { type: 'string', default: ';' },
           fieldMapping: { type: 'object', additionalProperties: true },
@@ -185,7 +185,7 @@ export async function registerWholesaleProviderRoutes(fastify: FastifyInstance) 
         properties: {
           name: { type: 'string', minLength: 1 },
           feedUrl: { type: 'string', minLength: 1 },
-          platform: { type: 'string', enum: ['CSV_FEED', 'XML_FEED', 'REST_API'] },
+          platform: { type: 'string', enum: ['CSV_FEED', 'XML_FEED', 'REST_API', 'PRODUCER'] },
           preset: { type: 'string', enum: ['GODAN', 'PARTYDECO', 'CUSTOM'] },
           delimiter: { type: 'string' },
           fieldMapping: { type: 'object', additionalProperties: true },

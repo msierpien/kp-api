@@ -475,3 +475,163 @@ function parseProductIds(productIds?: string) {
 
   return ids;
 }
+
+// ─── Ręczne CRUD mapowań dla providera typu PRODUCER (producent wewnętrzny) ───
+// Dla feedowych hurtowni stan/cenę/dostępność ustawia sync; producent zarządza tym ręcznie w panelu.
+
+export interface ProducerMappingInput {
+  externalSku: string;
+  externalName?: string | null;
+  externalEan?: string | null;
+  warehouseProductId?: string | null;
+  lastKnownStock?: number | null;
+  lastKnownPrice?: number | null;
+  warehouseAvailableAt?: string | null;
+  isActive?: boolean;
+}
+
+export type ProducerMappingUpdateInput = Partial<Omit<ProducerMappingInput, 'externalSku'>>;
+
+async function assertProducerProvider(providerId: string, tenantId: string) {
+  const provider = await prisma.wholesaleProvider.findFirst({ where: { id: providerId, tenantId } });
+  if (!provider) throw new Error('Provider nie znaleziony');
+  if (provider.platform !== 'PRODUCER') {
+    throw new Error('Ręczna edycja mapowań jest dostępna tylko dla providera typu PRODUCER');
+  }
+  return provider;
+}
+
+async function assertWarehouseProduct(warehouseProductId: string | null | undefined, tenantId: string) {
+  if (!warehouseProductId) return;
+  const product = await prisma.warehouseProduct.findFirst({ where: { id: warehouseProductId, tenantId } });
+  if (!product) throw new Error('Produkt magazynowy nie znaleziony');
+}
+
+function toDecimal(value: number | null | undefined) {
+  if (value === null || value === undefined) return null;
+  if (!Number.isFinite(value) || value < 0) throw new Error('Wartość musi być liczbą nieujemną');
+  return new Prisma.Decimal(value);
+}
+
+function toDate(value: string | null | undefined) {
+  if (value === null || value === undefined || value === '') return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) throw new Error('Nieprawidłowa data dostępności');
+  return date;
+}
+
+export async function createProducerMapping(providerId: string, input: ProducerMappingInput) {
+  const tenantId = requireTenantId();
+  await assertProducerProvider(providerId, tenantId);
+  const sku = input.externalSku?.trim();
+  if (!sku) throw new Error('SKU jest wymagane');
+  await assertWarehouseProduct(input.warehouseProductId, tenantId);
+
+  return prisma.wholesaleProductMapping.create({
+    data: {
+      tenantId,
+      providerId,
+      externalSku: sku,
+      externalName: input.externalName?.trim() || null,
+      externalEan: input.externalEan?.trim() || null,
+      warehouseProductId: input.warehouseProductId ?? null,
+      lastKnownStock: toDecimal(input.lastKnownStock),
+      lastKnownPrice: toDecimal(input.lastKnownPrice),
+      warehouseAvailableAt: toDate(input.warehouseAvailableAt),
+      isActive: input.isActive ?? true,
+      lastSyncAt: new Date(),
+    },
+    include: { warehouseProduct: { include: { catalog: true } } },
+  });
+}
+
+export async function updateProducerMapping(mappingId: string, input: ProducerMappingUpdateInput) {
+  const tenantId = requireTenantId();
+  const mapping = await prisma.wholesaleProductMapping.findFirst({
+    where: { id: mappingId, tenantId },
+    include: { provider: { select: { platform: true } } },
+  });
+  if (!mapping) throw new Error('Mapowanie nie znalezione');
+  if (mapping.provider.platform !== 'PRODUCER') {
+    throw new Error('Ręczna edycja mapowań jest dostępna tylko dla providera typu PRODUCER');
+  }
+  await assertWarehouseProduct(input.warehouseProductId, tenantId);
+
+  const data: Prisma.WholesaleProductMappingUpdateInput = { lastSyncAt: new Date() };
+  if (input.externalName !== undefined) data.externalName = input.externalName?.trim() || null;
+  if (input.externalEan !== undefined) data.externalEan = input.externalEan?.trim() || null;
+  if (input.warehouseProductId !== undefined) {
+    data.warehouseProduct = input.warehouseProductId
+      ? { connect: { id: input.warehouseProductId } }
+      : { disconnect: true };
+  }
+  if (input.lastKnownStock !== undefined) data.lastKnownStock = toDecimal(input.lastKnownStock);
+  if (input.lastKnownPrice !== undefined) data.lastKnownPrice = toDecimal(input.lastKnownPrice);
+  if (input.warehouseAvailableAt !== undefined) data.warehouseAvailableAt = toDate(input.warehouseAvailableAt);
+  if (input.isActive !== undefined) data.isActive = input.isActive;
+
+  return prisma.wholesaleProductMapping.update({
+    where: { id: mappingId },
+    data,
+    include: { warehouseProduct: { include: { catalog: true } } },
+  });
+}
+
+export async function deleteProducerMapping(mappingId: string) {
+  const tenantId = requireTenantId();
+  const mapping = await prisma.wholesaleProductMapping.findFirst({
+    where: { id: mappingId, tenantId },
+    include: { provider: { select: { platform: true } } },
+  });
+  if (!mapping) throw new Error('Mapowanie nie znalezione');
+  if (mapping.provider.platform !== 'PRODUCER') {
+    throw new Error('Usuwanie mapowań ręcznie jest dostępne tylko dla providera typu PRODUCER');
+  }
+  await prisma.wholesaleProductMapping.delete({ where: { id: mappingId } });
+  return { deleted: true };
+}
+
+export async function bulkUpsertProducerMappings(providerId: string, items: ProducerMappingInput[]) {
+  const tenantId = requireTenantId();
+  await assertProducerProvider(providerId, tenantId);
+  if (!Array.isArray(items) || items.length === 0) return { upserted: 0 };
+  if (items.length > 1000) throw new Error('Maksymalnie 1000 pozycji na raz');
+
+  let upserted = 0;
+  for (const item of items) {
+    const sku = item.externalSku?.trim();
+    if (!sku) continue;
+    await assertWarehouseProduct(item.warehouseProductId, tenantId);
+    const common = {
+      externalName: item.externalName?.trim() || null,
+      externalEan: item.externalEan?.trim() || null,
+      lastKnownStock: toDecimal(item.lastKnownStock),
+      lastKnownPrice: toDecimal(item.lastKnownPrice),
+      warehouseAvailableAt: toDate(item.warehouseAvailableAt),
+      isActive: item.isActive ?? true,
+      lastSyncAt: new Date(),
+    };
+    await prisma.wholesaleProductMapping.upsert({
+      where: { providerId_externalSku: { providerId, externalSku: sku } },
+      create: {
+        tenantId,
+        providerId,
+        externalSku: sku,
+        warehouseProductId: item.warehouseProductId ?? null,
+        ...common,
+      },
+      update: {
+        ...common,
+        ...(item.warehouseProductId !== undefined
+          ? {
+              warehouseProduct: item.warehouseProductId
+                ? { connect: { id: item.warehouseProductId } }
+                : { disconnect: true },
+            }
+          : {}),
+      },
+    });
+    upserted += 1;
+  }
+  return { upserted };
+}

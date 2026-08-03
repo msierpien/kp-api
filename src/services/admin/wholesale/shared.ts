@@ -143,6 +143,26 @@ export function parseProviderConfig(configJson: unknown): WholesaleProviderConfi
   };
 }
 
+/**
+ * Konfiguracja providera typu PRODUCER (producent wewnętrzny, bez feedu).
+ * Nie potrzebuje mapowania kolumn CSV; ustawia sensowne domyślne dla dostępności.
+ * fieldMapping jest zaślepką (sku/name), żeby ścieżki wołające parseProviderConfig
+ * na tym providerze nie rzucały (produkt zarządzany ręcznie, nie z feedu).
+ */
+export function buildProducerConfig(input: {
+  availabilityRule?: WholesaleAvailabilityRule;
+  minimumStockForSale?: number;
+}): WholesaleProviderConfig {
+  return {
+    preset: 'CUSTOM',
+    delimiter: ';',
+    availabilityRule: normalizeAvailabilityRule(input.availabilityRule, 'CUSTOM'),
+    feedSafety: normalizeFeedSafety(undefined),
+    minimumStockForSale: normalizeMinimumStockForSale(input.minimumStockForSale),
+    fieldMapping: { sku: 'sku', name: 'name' } as FieldMapping,
+  };
+}
+
 export function normalizeFeedSafety(input?: Partial<WholesaleFeedSafetyConfig>): WholesaleFeedSafetyConfig {
   const minItems = Number(input?.minItems ?? DEFAULT_FEED_SAFETY.minItems);
   const maxDropPercent = Number(input?.maxDropPercent ?? DEFAULT_FEED_SAFETY.maxDropPercent);

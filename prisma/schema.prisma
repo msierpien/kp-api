@@ -1386,6 +1386,7 @@ enum WholesalePlatform {
   CSV_FEED
   XML_FEED
   REST_API
+  PRODUCER
 }
 
 model WarehouseProduct {
@@ -2076,7 +2077,7 @@ model WholesaleProvider {
   tenantId     String            @map("tenant_id")
   name         String
   platform     WholesalePlatform @default(CSV_FEED)
-  feedUrl      String            @map("feed_url") @db.Text
+  feedUrl      String?           @map("feed_url") @db.Text
   configJson   Json?             @map("config_json")
   syncEnabled  Boolean           @default(true) @map("sync_enabled")
   syncInterval Int               @default(1440) @map("sync_interval")

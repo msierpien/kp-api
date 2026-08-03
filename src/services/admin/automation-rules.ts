@@ -21,6 +21,8 @@ export interface AutomationContext {
   caseId: string;
   trigger: string;
   caseData?: any;
+  orderId?: string;
+  invoiceId?: string;
   previousStatus?: string;
   newStatus?: string;
 }

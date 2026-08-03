@@ -12,13 +12,7 @@ import { buildIfirmaDomesticInvoicePayload, type IfirmaInvoiceSettingsSnapshot }
 import { PrestaShopClient, type PrestaShopOrderDetails } from '../prestashop/prestashop-client';
 import { getDecryptedIfirmaSettings } from './ifirma-settings.service';
 import { createTenantEmailService } from './email-settings.service';
-import { confirmDocument } from './warehouse-documents.service';
-
-type InvoiceWarehouseDocumentAction =
-  | { status: 'NONE'; reason: string }
-  | { status: 'REQUIRES_CONFIRMATION'; documentId: string; documentNumber: string; reason: string }
-  | { status: 'AUTO_CONFIRMED'; documentId: string; documentNumber: string }
-  | { status: 'FAILED'; documentId: string; documentNumber: string; reason: string };
+import { triggerInvoiceIssuedAutomations } from './automation.service';
 
 function orderWhere(orderId: string) {
   const tenantId = getTenantId();
@@ -130,7 +124,7 @@ export async function issueOrderInvoice(orderId: string) {
   }
 
   const warehouseDocumentAction = issued.status === 'ISSUED'
-    ? await handleInvoiceWarehouseDocument(order.id)
+    ? await triggerInvoiceIssuedAutomations({ orderId: order.id, invoiceId: issued.id })
     : { status: 'NONE' as const, reason: 'Faktura nie została wystawiona' };
   const refreshed = await prisma.salesDocument.findUnique({ where: { id: issued.id } });
 
@@ -138,50 +132,6 @@ export async function issueOrderInvoice(orderId: string) {
     ...(refreshed ?? issued),
     warehouseDocumentAction,
   };
-}
-
-async function handleInvoiceWarehouseDocument(orderId: string): Promise<InvoiceWarehouseDocumentAction> {
-  const tenantId = getTenantId();
-  const document = await prisma.warehouseDocument.findFirst({
-    where: {
-      orderId,
-      type: 'WZ',
-      status: 'DRAFT',
-      ...(tenantId ? { tenantId } : {}),
-    },
-    include: { items: true },
-    orderBy: { createdAt: 'asc' },
-  });
-
-  if (!document) {
-    return { status: 'NONE', reason: 'Brak roboczego WZ dla zamówienia' };
-  }
-
-  const allItemsScanned = document.items.length > 0 && document.items.every((item) => Boolean(item.scannedEan?.trim()));
-  if (!allItemsScanned) {
-    return {
-      status: 'REQUIRES_CONFIRMATION',
-      documentId: document.id,
-      documentNumber: document.number,
-      reason: 'WZ ma pozycje bez skanu EAN',
-    };
-  }
-
-  try {
-    await confirmDocument(document.id);
-    return {
-      status: 'AUTO_CONFIRMED',
-      documentId: document.id,
-      documentNumber: document.number,
-    };
-  } catch (error) {
-    return {
-      status: 'FAILED',
-      documentId: document.id,
-      documentNumber: document.number,
-      reason: error instanceof Error ? error.message : 'Nie udało się zatwierdzić WZ',
-    };
-  }
 }
 
 export async function retryInvoice(invoiceId: string) {

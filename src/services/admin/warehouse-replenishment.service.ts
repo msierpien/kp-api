@@ -5,9 +5,17 @@ import { createDocument } from './warehouse-documents.service';
 import { STOCK_RESERVATION_ORDER_OPERATIONAL_STATUSES } from '../../lib/order-statuses';
 import { reserveOrder } from './warehouse-reservations.service';
 import { resolveMinimumStockForSale } from './wholesale/shared';
+import {
+  buildWholesaleOrderCsvContent,
+  detectWholesaleOrderCsvTemplate,
+  providerPresetFromConfig,
+  wholesaleOrderCsvHeader,
+  type WholesaleOrderCsvTemplate,
+} from './wholesale/order-csv-template';
 
 export type ReplenishmentSource = 'order' | 'low' | 'all';
-export type ReplenishmentCsvFormat = 'ean' | 'symbol' | 'full';
+/** `supplier` = szablon importu dostawcy (PartyDeco `code;count`, GoDan `Kod produktu/Ean,...`). */
+export type ReplenishmentCsvFormat = 'supplier' | 'ean' | 'symbol' | 'full';
 export type ReplenishmentCsvSeparator = ';' | ',' | '\t';
 
 export interface ReplenishmentQuery {
@@ -63,6 +71,9 @@ export interface ReplenishmentProviderGroup {
   providerEmail: string | null;
   providerLeadTimeDays: number | null;
   providerLastSyncAt: Date | null;
+  /** Szablon pliku importu dostawcy — steruje nagłówkami i separatorem w eksporcie CSV. */
+  providerCsvTemplate: WholesaleOrderCsvTemplate;
+  providerCsvHeader: string[];
   items: ReplenishmentItem[];
   itemsCount: number;
   totalQuantity: number;
@@ -204,6 +215,7 @@ interface ReplenishmentProviderAccumulator {
   providerEmail: string | null;
   providerLeadTimeDays: number | null;
   providerLastSyncAt: Date | null;
+  providerPreset: WholesaleOrderCsvTemplate | null;
   items: Map<string, ReplenishmentItemAccumulator>;
 }
 
@@ -266,8 +278,8 @@ function normalizeLimit(value?: number) {
 }
 
 function normalizeCsvFormat(format?: ReplenishmentCsvFormat) {
-  if (format === undefined) return 'full';
-  if (!['ean', 'symbol', 'full'].includes(format)) throw new Error('Nieprawidłowy format CSV');
+  if (format === undefined) return 'supplier';
+  if (!['supplier', 'ean', 'symbol', 'full'].includes(format)) throw new Error('Nieprawidłowy format CSV');
   return format;
 }
 
@@ -300,6 +312,7 @@ function providerFromOffer(offer: BestOffer): ReplenishmentProviderAccumulator {
     providerEmail: extractProviderEmail(offer.provider.configJson),
     providerLeadTimeDays: offer.provider.leadTimeDays,
     providerLastSyncAt: offer.provider.lastSyncAt ?? null,
+    providerPreset: providerPresetFromConfig(offer.provider.configJson),
     items: new Map(),
   };
 }
@@ -942,12 +955,16 @@ function finalizeProviders(providers: Map<string, ReplenishmentProviderAccumulat
         })
         .sort((a, b) => a.name.localeCompare(b.name, 'pl'));
 
+      const csvTemplate = detectWholesaleOrderCsvTemplate(provider.providerName, [provider.providerPreset]);
+
       return {
         providerId: provider.providerId,
         providerName: provider.providerName,
         providerEmail: provider.providerEmail,
         providerLeadTimeDays: provider.providerLeadTimeDays,
         providerLastSyncAt: provider.providerLastSyncAt,
+        providerCsvTemplate: csvTemplate,
+        providerCsvHeader: wholesaleOrderCsvHeader(csvTemplate),
         items,
         itemsCount: items.length,
         totalQuantity: roundQuantity(items.reduce((sum, item) => sum + item.quantity, 0)),
@@ -1146,7 +1163,7 @@ function csvEscape(value: string | number | null | undefined, separator: Repleni
   return `"${text.replace(/"/g, '""')}"`;
 }
 
-function buildCsvRows(items: ReplenishmentItem[], format: ReplenishmentCsvFormat) {
+function buildCsvRows(items: ReplenishmentItem[], format: Exclude<ReplenishmentCsvFormat, 'supplier'>) {
   if (format === 'ean') {
     return {
       header: ['EAN', 'Ilosc'],
@@ -1189,11 +1206,36 @@ function todayFileDate() {
 
 export async function buildReplenishmentCsv(providerId: string, input: ReplenishmentCsvInput = {}): Promise<ReplenishmentCsvResult> {
   const format = normalizeCsvFormat(input.format);
-  const separator = normalizeCsvSeparator(input.separator);
-  const includeHeader = input.includeHeader !== false;
   const response = await getReplenishment({ ...input, providerId });
   const provider = getProviderOrThrow(response, providerId);
   const items = applyQuantityOverrides(provider.items, input.items);
+
+  // Szablon dostawcy ma sztywne naglowki i separator - import po ich stronie odrzuca inne pliki.
+  if (format === 'supplier') {
+    const sourceRows = items
+      .map((item) => ({
+        code: (item.supplierSku ?? item.ean ?? item.sku ?? '').trim(),
+        quantity: item.quantity,
+        unit: item.unit,
+      }))
+      .filter((row) => row.code);
+    if (sourceRows.length === 0) throw new Error('Brak pozycji z kodem dostawcy do eksportu CSV');
+
+    const csv = buildWholesaleOrderCsvContent(provider.providerCsvTemplate, sourceRows);
+    return {
+      providerId,
+      providerName: provider.providerName,
+      filename: `zamowienie-${slugify(provider.providerName)}-${todayFileDate()}.csv`,
+      content: csv.content,
+      mimeType: 'text/csv;charset=utf-8',
+      rows: csv.rows,
+      format,
+      separator: csv.separator,
+    };
+  }
+
+  const separator = normalizeCsvSeparator(input.separator);
+  const includeHeader = input.includeHeader !== false;
   const csvRows = buildCsvRows(items, format);
   const rows = [
     ...(includeHeader ? [csvRows.header] : []),

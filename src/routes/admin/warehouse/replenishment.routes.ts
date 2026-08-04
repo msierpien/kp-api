@@ -81,7 +81,7 @@ export async function registerWarehouseReplenishmentRoutes(fastify: FastifyInsta
           lowStockThreshold: { type: 'number', default: 1 },
           page: { type: 'integer', minimum: 1, default: 1 },
           limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
-          format: { type: 'string', enum: ['ean', 'symbol', 'full'], default: 'full' },
+          format: { type: 'string', enum: ['supplier', 'ean', 'symbol', 'full'], default: 'supplier' },
           separator: separatorSchema,
           includeHeader: { type: 'boolean', default: true },
           items: {

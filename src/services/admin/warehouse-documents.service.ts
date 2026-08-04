@@ -5,6 +5,12 @@ import { syncStockForProducts } from '../stock/stock-sync.service';
 import { consumeDocumentReservations, releaseDocumentReservations, reserveOrder } from './warehouse-reservations.service';
 import { buildShippingInfoDescription, extractOrderShippingInfo } from '../orders/order-shipping-info.service';
 import { STOCK_RESERVATION_ORDER_OPERATIONAL_STATUSES } from '../../lib/order-statuses';
+import {
+  buildWholesaleOrderCsvContent,
+  detectWholesaleOrderCsvTemplate,
+  providerPresetFromConfig,
+  type WholesaleOrderCsvSourceRow,
+} from './wholesale/order-csv-template';
 
 // ─── Documents ───────────────────────────────────────────────────────────────
 
@@ -504,52 +510,6 @@ function todayFileDate() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function formatCsvQuantity(value: number) {
-  const rounded = Math.round(value * 1000) / 1000;
-  if (Number.isInteger(rounded)) return String(rounded);
-  return String(rounded).replace('.', ',');
-}
-
-function csvEscape(value: string | number | null | undefined, separator: ',' | ';') {
-  const text = value === null || value === undefined ? '' : String(value);
-  if (!text.includes(separator) && !text.includes('"') && !text.includes('\n') && !text.includes('\r')) return text;
-  return `"${text.replace(/"/g, '""')}"`;
-}
-
-function normalizeCsvUnit(value: string | null | undefined, template: WholesaleOrderCsvTemplate) {
-  const unit = value?.trim() || 'szt';
-  if (template === 'GODAN' && /^szt\.?$/i.test(unit)) return 'szt.';
-  return unit;
-}
-
-type WholesaleOrderCsvTemplate = 'GODAN' | 'PARTYDECO' | 'GENERIC';
-
-type WholesaleOrderCsvRow = {
-  code: string;
-  quantity: number;
-  unit: string;
-  providerPreset: WholesaleOrderCsvTemplate | null;
-};
-
-function providerPresetFromConfig(configJson: Prisma.JsonValue | null | undefined): WholesaleOrderCsvTemplate | null {
-  const config = metadataRecord(configJson);
-  const preset = typeof config.preset === 'string' ? config.preset.toUpperCase() : '';
-  if (preset === 'GODAN' || preset === 'PARTYDECO') return preset;
-  return null;
-}
-
-function detectWholesaleOrderCsvTemplate(providerName: string | null, rows: WholesaleOrderCsvRow[]): WholesaleOrderCsvTemplate {
-  const presets = rows.map((row) => row.providerPreset).filter(Boolean);
-  if (presets.includes('PARTYDECO')) return 'PARTYDECO';
-  if (presets.includes('GODAN')) return 'GODAN';
-
-  const normalizedName = (providerName ?? '').toLowerCase();
-  if (normalizedName.includes('partydeco')) return 'PARTYDECO';
-  if (normalizedName.includes('godan')) return 'GODAN';
-
-  return 'GENERIC';
-}
-
 function pickWholesaleMappingForProvider(item: any, providerId: string | null) {
   const mappings = Array.isArray(item.product?.wholesaleMappings)
     ? item.product.wholesaleMappings
@@ -564,7 +524,7 @@ function buildWholesaleOrderCsv(documents: any[]): Omit<WholesaleOrderCsvExportR
   const firstMetadata = firstDocument ? firstDocument.metadataJson as Prisma.JsonValue | null : null;
   const providerId = metadataString(firstMetadata, 'providerId');
   let providerName = metadataString(firstMetadata, 'providerName');
-  const rows: WholesaleOrderCsvRow[] = [];
+  const rows: WholesaleOrderCsvSourceRow[] = [];
 
   for (const document of documents) {
     const documentProviderId = metadataString(document.metadataJson as Prisma.JsonValue | null, 'providerId') ?? providerId;
@@ -595,45 +555,17 @@ function buildWholesaleOrderCsv(documents: any[]): Omit<WholesaleOrderCsvExportR
 
   if (rows.length === 0) throw new Error('Brak pozycji z kodem dostawcy do eksportu CSV');
 
-  const template = detectWholesaleOrderCsvTemplate(providerName, rows);
-  const separator: ',' | ';' = template === 'GODAN' ? ',' : ';';
-  const aggregated = new Map<string, WholesaleOrderCsvRow>();
-
-  for (const row of rows) {
-    const unit = normalizeCsvUnit(row.unit, template);
-    const key = template === 'GODAN' ? `${row.code}|${unit}` : row.code;
-    const existing = aggregated.get(key);
-    if (existing) {
-      existing.quantity += row.quantity;
-    } else {
-      aggregated.set(key, { ...row, unit });
-    }
-  }
-
-  const exportRows = Array.from(aggregated.values())
-    .filter((row) => row.quantity > 0)
-    .sort((a, b) => a.code.localeCompare(b.code, 'pl'));
-  if (exportRows.length === 0) throw new Error('Brak pozycji z dodatnią ilością do eksportu CSV');
-
-  const csvRows = template === 'GODAN'
-    ? [
-        ['Kod produktu/Ean', 'Ilość', 'Jednostka miary'],
-        ...exportRows.map((row) => [row.code, formatCsvQuantity(row.quantity), row.unit]),
-      ]
-    : [
-        ['code', 'count'],
-        ...exportRows.map((row) => [row.code, formatCsvQuantity(row.quantity)]),
-      ];
-  const content = `${csvRows.map((row) => row.map((cell) => csvEscape(cell, separator)).join(separator)).join('\n')}\n`;
+  const template = detectWholesaleOrderCsvTemplate(providerName, rows.map((row) => row.providerPreset ?? null));
+  const csv = buildWholesaleOrderCsvContent(template, rows);
   const documentPart = documents.length === 1 ? `-${slugify(documents[0].number)}` : '';
 
   return {
     providerId,
     providerName,
     filename: `zamowienie-${slugify(providerName ?? 'dostawca')}${documentPart}-${todayFileDate()}.csv`,
-    content,
+    content: csv.content,
     mimeType: 'text/csv;charset=utf-8',
-    rows: exportRows.length,
+    rows: csv.rows,
   };
 }
 

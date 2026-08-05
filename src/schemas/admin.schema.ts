@@ -190,6 +190,8 @@ export const createTemplateSchema = z.object({
   version: z.number().int().positive().default(1),
   editorType: z.enum(['SIMPLE', 'ADVANCED']).default('ADVANCED'),
   isActive: z.boolean().default(true),
+  /** Etykiety biblioteki - normalizowane w serwisie, nie tutaj. */
+  tags: z.array(z.string().max(40)).max(20).optional(),
   layout: z.any().optional(),
 });
 
@@ -201,6 +203,8 @@ export const updateTemplateMetadataSchema = z.object({
   version: z.number().int().positive().optional(),
   editorType: z.enum(['SIMPLE', 'ADVANCED']).optional(),
   isActive: z.boolean().optional(),
+  // Brak pola = „nie ruszaj tagow”. Pusta tablica = „skasuj wszystkie”.
+  tags: z.array(z.string().max(40)).max(20).optional(),
 });
 
 export type TemplateFormInput = z.infer<typeof templateFormSchema>;

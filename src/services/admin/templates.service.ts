@@ -5,6 +5,7 @@ import { normalizeCanvasConfig } from '../../types/template-layout';
 import { buildDeletedFieldKeySet, buildFieldRenameMap, migrateLayoutFieldKeys, removeDeletedFieldLayers } from './template-field-key-migration';
 import { assertTemplateVersion, templateVersionToken } from './template-version';
 import { ConflictError, NotFoundError } from '../../lib/errors';
+import { formatTagLabel, normalizeTags } from '../../lib/template-tags';
 
 export async function listTemplates() {
   const templates = await prisma.personalizationTemplate.findMany({
@@ -16,6 +17,7 @@ export async function listTemplates() {
       version: true,
       editorType: true,
       isActive: true,
+      tags: true,
       thumbnailUrl: true,
       layoutJson: true,
       createdAt: true,
@@ -48,6 +50,7 @@ export async function listTemplates() {
       version: template.version,
       editorType: template.editorType,
       isActive: template.isActive,
+      tags: template.tags ?? [],
       thumbnailUrl: template.thumbnailUrl,
       layout: summarizeTemplateLayout(template.layoutJson),
       fieldCount: fields.length,
@@ -274,10 +277,11 @@ export async function createTemplate(input: CreateTemplateInput) {
       version: input.version,
       editorType: input.editorType,
       isActive: input.isActive,
+      tags: normalizeTags(input.tags),
       ...(layoutJson ? { layoutJson: layoutJson as any } : {}),
       // tenantId will be added automatically by Prisma middleware
     } as any,
-    select: { id: true, name: true, code: true, description: true, version: true, editorType: true, isActive: true, createdAt: true },
+    select: { id: true, name: true, code: true, description: true, version: true, editorType: true, isActive: true, tags: true, createdAt: true },
   });
 
   return template;
@@ -316,8 +320,10 @@ export async function updateTemplateMetadata(templateId: string, input: UpdateTe
       ...(input.version && { version: input.version }),
       ...(input.editorType && { editorType: input.editorType }),
       ...(input.isActive !== undefined && { isActive: input.isActive }),
+      // Brak pola = „nie ruszaj”; pusta tablica = swiadome skasowanie.
+      ...(input.tags !== undefined && { tags: normalizeTags(input.tags) }),
     },
-    select: { id: true, name: true, code: true, description: true, version: true, editorType: true, isActive: true, createdAt: true },
+    select: { id: true, name: true, code: true, description: true, version: true, editorType: true, isActive: true, tags: true, createdAt: true },
   });
 
   return template;
@@ -374,4 +380,28 @@ function summarizeTemplateLayout(layoutJson: unknown) {
     height,
     formatPreset: typeof normalizedCanvas.formatPreset === 'string' ? normalizedCanvas.formatPreset : null,
   };
+}
+
+/**
+ * Tagi uzywane w bibliotece wraz z liczba szablonow.
+ *
+ * Zasila i podpowiedzi przy edycji szablonu, i chipy filtrujace nad lista.
+ * Sortowanie po liczbie uzyc, nie alfabetycznie: sprzedawca czesciej siega
+ * po „slub” niz po tag, ktory wpisal raz i zapomnial.
+ */
+export async function listTemplateTags() {
+  const templates = await prisma.personalizationTemplate.findMany({
+    select: { tags: true },
+  });
+
+  const counts = new Map<string, number>();
+  for (const template of templates) {
+    for (const tag of template.tags ?? []) {
+      counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+  }
+
+  return [...counts.entries()]
+    .map(([tag, count]) => ({ tag, label: formatTagLabel(tag), count }))
+    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag, 'pl'));
 }

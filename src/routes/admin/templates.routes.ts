@@ -15,6 +15,7 @@ import {
 } from '../../schemas/admin.schema';
 import {
   listTemplates,
+  listTemplateTags,
   getTemplateForm,
   replaceTemplateForm,
   duplicateTemplate,
@@ -49,6 +50,7 @@ const templateItemResponseSchema = {
     version: { type: 'number' },
     editorType: { type: 'string', enum: ['SIMPLE', 'ADVANCED'] },
     isActive: { type: 'boolean' },
+    tags: { type: 'array', items: { type: 'string' } },
     thumbnailUrl: { type: ['string', 'null'] },
     layout: {
       type: ['object', 'null'],
@@ -151,6 +153,29 @@ export async function templatesRoutes(fastify: FastifyInstance) {
     return reply.send(templates);
   });
 
+  // GET /admin/templates/tags - slownik biblioteki
+  fastify.get('/tags', {
+    schema: {
+      tags: ['templates'],
+      summary: 'Tagi używane w bibliotece szablonów wraz z liczbą użyć',
+      response: {
+        200: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              tag: { type: 'string' },
+              label: { type: 'string' },
+              count: { type: 'number' },
+            },
+          },
+        },
+      },
+    },
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
+    return reply.send(await listTemplateTags());
+  });
+
   // POST /admin/templates
   fastify.post<{ Body: CreateTemplateInput }>(
     '/',
@@ -166,6 +191,7 @@ export async function templatesRoutes(fastify: FastifyInstance) {
             code: { type: 'string' },
             description: { type: 'string' },
             editorType: { type: 'string', enum: ['SIMPLE', 'ADVANCED'] },
+            tags: { type: 'array', items: { type: 'string' } },
             layout: { type: 'object', additionalProperties: true },
           },
         },
@@ -225,6 +251,7 @@ export async function templatesRoutes(fastify: FastifyInstance) {
             name: { type: 'string' },
             description: { type: 'string' },
             editorType: { type: 'string', enum: ['SIMPLE', 'ADVANCED'] },
+            tags: { type: 'array', items: { type: 'string' } },
           },
         },
         response: {

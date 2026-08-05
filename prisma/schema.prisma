@@ -671,6 +671,15 @@ model PersonalizationTemplate {
   description  String?
   version      Int      @default(1)
   editorType   TemplateEditorType @default(ADVANCED) @map("editor_type")
+  /// Etykiety porzadkujace biblioteke szablonow: okazja ("slub", "chrzest"),
+  /// rodzaj produktu ("zaproszenie", "winietka"), cokolwiek jeszcze przyda
+  /// sie sprzedawcy. Jeden szablon ma ich kilka - "winietka slubna" to i
+  /// okazja, i rodzaj, wiec pojedyncza kategoria by tego nie objela.
+  ///
+  /// Zapisywane w postaci znormalizowanej (male litery, bez ogonkow) -
+  /// dzieki temu "Slub", "slub" i "ŚLUB" to ten sam tag. Etykieta widoczna
+  /// dla czlowieka powstaje przy wyswietlaniu.
+  tags         String[] @default([])
   isActive     Boolean  @default(true) @map("is_active")
   layoutJson   Json?    @map("layout_json") // TemplateLayoutJson - pozycje pól, warstwy, czcionki
   thumbnailUrl String?  @map("thumbnail_url") // URL miniatury szablonu

@@ -18,6 +18,9 @@ import { createCanvas } from 'canvas'
 
 const prisma = new PrismaClient()
 
+/** Slug tenanta, do ktorego nalezy szablon (nadpisywalny przez TENANT_SLUG). */
+const TENANT_SLUG = 'kreatywne-papierki'
+
 const TEMPLATE_CODE = 'SLUB_LINIA'
 const TEMPLATE_NAME = 'Ślub Linia'
 const TEMPLATE_DESCRIPTION =
@@ -512,19 +515,35 @@ async function ensureLineAsset(templateId: string) {
   })
 }
 
-async function main() {
-  // `tenantId` normalnie dokłada middleware Prismy z kontekstu zadania -
-  // skrypt takiego kontekstu nie ma, wiec bierzemy tenanta z bazy.
-  const reference = await prisma.personalizationTemplate.findFirst({ select: { tenantId: true } })
-  if (!reference) throw new Error('Brak jakiegokolwiek szablonu - nie wiadomo, do ktorego tenanta wpiac nowy')
-  const tenantId = reference.tenantId
+/**
+ * Tenant docelowy.
+ *
+ * `tenantId` normalnie dokłada middleware Prismy z kontekstu zadania - skrypt
+ * takiego kontekstu nie ma. Wskazujemy tenanta JAWNIE po slugu, bo baza niesie
+ * tez tenanta seedowego i testowe (`default-tenant-id`, `codex-smoke-*`), a
+ * szablon wpiety do niewlasciwego nie pojawi sie na liscie w panelu.
+ */
+async function resolveTenantId() {
+  const slug = process.env.TENANT_SLUG || TENANT_SLUG
+  const tenant = await prisma.tenant.findFirst({ where: { slug }, select: { id: true, name: true } })
+  if (!tenant) throw new Error(`Brak tenanta o slugu "${slug}"`)
+  return tenant.id
+}
 
-  const found = await prisma.personalizationTemplate.findFirst({ where: { tenantId, code: TEMPLATE_CODE } })
+async function main() {
+  const tenantId = await resolveTenantId()
+
+  // Szablon moze juz istniec pod innym tenantem (np. po uruchomieniu starszej
+  // wersji skryptu) - wtedy go przepinamy, zamiast tworzyc duplikat.
+  const found =
+    (await prisma.personalizationTemplate.findFirst({ where: { tenantId, code: TEMPLATE_CODE } })) ??
+    (await prisma.personalizationTemplate.findFirst({ where: { code: TEMPLATE_CODE } }))
 
   const template = found
     ? await prisma.personalizationTemplate.update({
         where: { id: found.id },
         data: {
+          tenantId,
           name: TEMPLATE_NAME,
           description: TEMPLATE_DESCRIPTION,
           editorType: 'ADVANCED',

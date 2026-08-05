@@ -1,8 +1,16 @@
 import prisma from '../../lib/prisma';
-import { decrypt } from '../../lib/encryption';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
-import type { AiProvider } from '../../schemas/admin.schema';
-import { normalizeAiModelId } from './ai-models';
+import {
+  AiLimitExceededError,
+  DEFAULT_TIMEOUT_MS,
+  assertAiLimits,
+  extractJson,
+  getProviderApiKey,
+  resolveProviderAndModel,
+  runAiCall,
+} from '../ai/provider-client';
+
+export { AiLimitExceededError };
 
 type AiContentAction = 'GENERATE' | 'IMPROVE' | 'SHORTEN' | 'SEO';
 
@@ -36,50 +44,12 @@ type NormalizedProposal = {
   notes: string[];
 };
 
-type AiUsage = {
-  inputTokens?: number | null;
-  outputTokens?: number | null;
-  totalTokens?: number | null;
-};
-
-type AiCallResult = {
-  text: string;
-  usage?: AiUsage;
-};
-
 type GenerateContext = {
   tenantId: string;
   userId?: string | null;
   source?: 'INLINE' | 'BULK';
   bulkJobId?: string | null;
   bulkJobItemId?: string | null;
-};
-
-export class AiLimitExceededError extends Error {
-  statusCode = 429;
-
-  constructor(message: string) {
-    super(message);
-    this.name = 'AiLimitExceededError';
-  }
-}
-
-const providerKeyField: Record<AiProvider, 'openaiApiKey' | 'anthropicApiKey' | 'deepseekApiKey'> = {
-  OPENAI: 'openaiApiKey',
-  ANTHROPIC: 'anthropicApiKey',
-  DEEPSEEK: 'deepseekApiKey',
-};
-
-const textModelField: Record<AiProvider, 'openaiTextModel' | 'anthropicTextModel' | 'deepseekTextModel'> = {
-  OPENAI: 'openaiTextModel',
-  ANTHROPIC: 'anthropicTextModel',
-  DEEPSEEK: 'deepseekTextModel',
-};
-
-const visionModelField: Record<AiProvider, 'openaiVisionModel' | 'anthropicVisionModel' | 'deepseekVisionModel'> = {
-  OPENAI: 'openaiVisionModel',
-  ANTHROPIC: 'anthropicVisionModel',
-  DEEPSEEK: 'deepseekVisionModel',
 };
 
 function requireTenantId() {
@@ -90,39 +60,6 @@ function requireTenantId() {
 
 function getUserId() {
   return getTenantContext()?.userId || null;
-}
-
-function dayStart() {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date;
-}
-
-function monthStart() {
-  const date = new Date();
-  date.setDate(1);
-  date.setHours(0, 0, 0, 0);
-  return date;
-}
-
-async function assertAiLimits(tenantId: string, settings: any) {
-  const countedStatuses = ['PENDING', 'PROCESSING', 'SUCCESS'];
-  const [dailyCount, monthlyCount] = await Promise.all([
-    prisma.aiUsageLog.count({
-      where: { tenantId, status: { in: countedStatuses }, createdAt: { gte: dayStart() } },
-    }),
-    prisma.aiUsageLog.count({
-      where: { tenantId, status: { in: countedStatuses }, createdAt: { gte: monthStart() } },
-    }),
-  ]);
-
-  if (dailyCount >= (settings.dailyLimit ?? 200)) {
-    throw new AiLimitExceededError(`Przekroczono dzienny limit AI (${dailyCount}/${settings.dailyLimit ?? 200}).`);
-  }
-
-  if (monthlyCount >= (settings.monthlyLimit ?? 5000)) {
-    throw new AiLimitExceededError(`Przekroczono miesieczny limit AI (${monthlyCount}/${settings.monthlyLimit ?? 5000}).`);
-  }
 }
 
 async function getProductForAi(productId: string, tenantId: string) {
@@ -170,12 +107,16 @@ function slugify(value: string) {
     .slice(0, 120);
 }
 
-function extractJson(value: string) {
-  const trimmed = value.trim();
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) return trimmed;
-  const match = trimmed.match(/\{[\s\S]*\}/);
-  return match?.[0] ?? trimmed;
-}
+/** Pola propozycji trafiajace do dziennika zuzycia (bez `notes`). */
+const PROPOSAL_FIELDS = [
+  'name',
+  'shortDescriptionHtml',
+  'longDescriptionHtml',
+  'metaTitle',
+  'metaDescription',
+  'metaKeywords',
+  'linkRewrite',
+] as const;
 
 function normalizeProposal(raw: any, fallbackName: string): NormalizedProposal {
   const name = String(raw?.name ?? fallbackName ?? '').trim();
@@ -244,122 +185,6 @@ function buildPrompt(input: AiContentProposalInput, product: any, template: any)
   ].join('\n');
 }
 
-async function fetchImageAsAnthropicBlock(imageUrl: string, timeoutMs: number) {
-  const response = await fetch(imageUrl, { signal: AbortSignal.timeout(timeoutMs) });
-  if (!response.ok) return null;
-
-  const contentType = response.headers.get('content-type') ?? 'image/jpeg';
-  const buffer = Buffer.from(await response.arrayBuffer());
-  return {
-    type: 'image',
-    source: {
-      type: 'base64',
-      media_type: contentType,
-      data: buffer.toString('base64'),
-    },
-  };
-}
-
-async function callOpenAi(apiKey: string, model: string, prompt: string, imageUrl: string | null | undefined, timeoutMs: number): Promise<AiCallResult> {
-  const userContent: any[] = [{ type: 'text', text: prompt }];
-  if (imageUrl) userContent.push({ type: 'image_url', image_url: { url: imageUrl } });
-
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    signal: AbortSignal.timeout(timeoutMs),
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: 'Jestes asystentem e-commerce. Odpowiadasz wyłącznie poprawnym JSON.' },
-        { role: 'user', content: userContent },
-      ],
-    }),
-  });
-
-  const payload: any = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload?.error?.message ?? 'OpenAI request failed');
-  return {
-    text: String(payload?.choices?.[0]?.message?.content ?? ''),
-    usage: {
-      inputTokens: payload?.usage?.prompt_tokens ?? null,
-      outputTokens: payload?.usage?.completion_tokens ?? null,
-      totalTokens: payload?.usage?.total_tokens ?? null,
-    },
-  };
-}
-
-async function callAnthropic(apiKey: string, model: string, prompt: string, imageUrl: string | null | undefined, timeoutMs: number): Promise<AiCallResult> {
-  const content: any[] = [{ type: 'text', text: prompt }];
-  if (imageUrl) {
-    const imageBlock = await fetchImageAsAnthropicBlock(imageUrl, Math.min(timeoutMs, 30000));
-    if (imageBlock) content.unshift(imageBlock);
-  }
-
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    signal: AbortSignal.timeout(timeoutMs),
-    headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 1600,
-      system: 'Jestes asystentem e-commerce. Odpowiadasz wyłącznie poprawnym JSON.',
-      messages: [{ role: 'user', content }],
-    }),
-  });
-
-  const payload: any = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload?.error?.message ?? 'Anthropic request failed');
-  const inputTokens = payload?.usage?.input_tokens ?? null;
-  const outputTokens = payload?.usage?.output_tokens ?? null;
-  return {
-    text: String(payload?.content?.find((part: any) => part?.type === 'text')?.text ?? ''),
-    usage: {
-      inputTokens,
-      outputTokens,
-      totalTokens: inputTokens != null && outputTokens != null ? Number(inputTokens) + Number(outputTokens) : null,
-    },
-  };
-}
-
-async function callDeepSeek(apiKey: string, model: string, prompt: string, timeoutMs: number): Promise<AiCallResult> {
-  const response = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    signal: AbortSignal.timeout(timeoutMs),
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: 'Jestes asystentem e-commerce. Odpowiadasz wyłącznie poprawnym JSON.' },
-        { role: 'user', content: prompt },
-      ],
-    }),
-  });
-
-  const payload: any = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload?.error?.message ?? 'DeepSeek request failed');
-  return {
-    text: String(payload?.choices?.[0]?.message?.content ?? ''),
-    usage: {
-      inputTokens: payload?.usage?.prompt_tokens ?? null,
-      outputTokens: payload?.usage?.completion_tokens ?? null,
-      totalTokens: payload?.usage?.total_tokens ?? null,
-    },
-  };
-}
-
 export async function generateWarehouseProductContentProposal(productId: string, input: AiContentProposalInput) {
   const tenantId = requireTenantId();
   return generateWarehouseProductContentProposalForTenant(productId, input, {
@@ -378,89 +203,51 @@ export async function generateWarehouseProductContentProposalForTenant(productId
   if (!settings) throw new Error('Brak konfiguracji AI');
   await assertAiLimits(tenantId, settings);
 
-  const textProvider = (settings.textProvider ?? settings.activeProvider) as AiProvider;
-  const visionProvider = (settings.visionProvider ?? (settings.activeProvider === 'DEEPSEEK' ? 'OPENAI' : settings.activeProvider)) as AiProvider;
-  const provider = (input.imageUrl ? visionProvider : textProvider) as AiProvider;
-  const encryptedKey = settings[providerKeyField[provider]];
-  if (!encryptedKey) throw new Error(`Brak klucza API dla dostawcy ${provider}`);
-
-  const configuredModel = input.imageUrl && provider !== 'DEEPSEEK' && settings[visionModelField[provider]]
-    ? settings[visionModelField[provider]]
-    : settings[textModelField[provider]];
-  const selectedModel = normalizeAiModelId(configuredModel);
-
-  if (!selectedModel) throw new Error(`Brak modelu dla dostawcy ${provider}`);
+  const { provider, model } = resolveProviderAndModel(settings, {
+    needsVision: Boolean(input.imageUrl),
+  });
+  const apiKey = getProviderApiKey(settings, provider);
 
   const templateId = input.templateId || settings.defaultPromptTemplateId;
   const template = templateId
     ? await prisma.aiPromptTemplate.findFirst({ where: { id: templateId, tenantId, isActive: true } })
     : await prisma.aiPromptTemplate.findFirst({ where: { tenantId, isDefault: true, isActive: true } });
 
-  const prompt = buildPrompt(input, product, template);
-  const apiKey = decrypt(encryptedKey);
-  const timeoutMs = settings.timeoutMs ?? 45000;
-  const usageLog = await prisma.aiUsageLog.create({
-    data: {
-      tenantId,
-      userId: context.userId ?? null,
-      warehouseProductId: productId,
-      aiBulkContentJobId: context.bulkJobId ?? null,
-      aiBulkContentJobItemId: context.bulkJobItemId ?? null,
-      provider,
-      model: selectedModel,
-      action: input.action,
-      status: 'PROCESSING',
-      source: context.source ?? 'INLINE',
-      usedImage: Boolean(input.imageUrl && provider !== 'DEEPSEEK'),
-      promptTemplateId: template?.id ?? null,
-      startedAt: new Date(),
-    },
-  });
+  const usedImage = Boolean(input.imageUrl && provider !== 'DEEPSEEK');
 
-  let result: AiCallResult;
-  try {
-    result = provider === 'OPENAI'
-      ? await callOpenAi(apiKey, selectedModel, prompt, input.imageUrl, timeoutMs)
-      : provider === 'ANTHROPIC'
-        ? await callAnthropic(apiKey, selectedModel, prompt, input.imageUrl, timeoutMs)
-        : await callDeepSeek(apiKey, selectedModel, prompt, timeoutMs);
-  } catch (error) {
-    await prisma.aiUsageLog.update({
-      where: { id: usageLog.id },
-      data: {
-        status: 'FAILED',
-        errorMessage: error instanceof Error ? error.message : 'Unknown AI provider error',
-        completedAt: new Date(),
-      },
-    });
-    throw error;
-  }
+  const result = await runAiCall({
+    tenantId,
+    userId: context.userId ?? null,
+    provider,
+    model,
+    action: input.action,
+    source: context.source ?? 'INLINE',
+    apiKey,
+    prompt: buildPrompt(input, product, template),
+    systemPrompt: 'Jestes asystentem e-commerce. Odpowiadasz wyłącznie poprawnym JSON.',
+    imageUrl: input.imageUrl,
+    timeoutMs: settings.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    promptTemplateId: template?.id ?? null,
+    warehouseProductId: productId,
+    bulkJobId: context.bulkJobId ?? null,
+    bulkJobItemId: context.bulkJobItemId ?? null,
+    // Ksztalt propozycji jest staly (normalizeProposal zawsze zwraca ten sam
+    // zestaw pol), wiec metadanych nie ma po co liczyc z odpowiedzi modelu -
+    // parsowanie JSON w tym miejscu wywracaloby wpis juz oznaczony jako udany.
+    buildMetadata: () => ({ proposalFields: PROPOSAL_FIELDS }),
+  });
 
   const parsed = JSON.parse(extractJson(result.text));
   const fallbackName = input.current?.name || product.name;
   const proposal = normalizeProposal(parsed, fallbackName);
 
-  await prisma.aiUsageLog.update({
-    where: { id: usageLog.id },
-    data: {
-      status: 'SUCCESS',
-      inputTokens: result.usage?.inputTokens ?? null,
-      outputTokens: result.usage?.outputTokens ?? null,
-      totalTokens: result.usage?.totalTokens ?? null,
-      metadataJson: {
-        proposalFields: Object.keys(proposal).filter((key) => key !== 'notes'),
-      },
-      completedAt: new Date(),
-    },
-  });
-
   return {
     provider,
-    model: selectedModel,
+    model,
     templateId: template?.id ?? null,
     action: input.action,
-    usedImage: Boolean(input.imageUrl && provider !== 'DEEPSEEK'),
-    usageLogId: usageLog.id,
+    usedImage,
+    usageLogId: result.usageLogId,
     proposal,
   };
 }

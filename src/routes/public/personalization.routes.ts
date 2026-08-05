@@ -7,7 +7,19 @@ import { getCaseLayout } from '../../lib/case-layout';
 import { saveFile, fileExists, buildStorageUrl } from '../../services/storage/local-storage.service';
 import { enqueueCasePrintPackage } from '../../services/admin/cases.service';
 import { listFonts } from '../../services/admin/fonts.service';
-import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
+import { ZodError } from 'zod';
+import {
+  FEATURE_AI_EDITOR_ASSISTANT,
+  FEATURE_PERSONALIZATION_EDITOR,
+  tenantHasFeature,
+} from '../../lib/features';
+import {
+  AiEditorDisabledError,
+  AiLimitExceededError,
+  auditEditorDesign,
+  generateEditorText,
+  proposeEditorLayout,
+} from '../../services/ai/editor-agent.service';
 import {
   MAX_PREVIEW_UPLOAD_BYTES,
   assertAllowedImageUpload,
@@ -1431,6 +1443,249 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           return reply.status(400).send({ error: 'Upload Failed', message: error.message });
         }
         return failWithReference(request, reply, error, 'Nie udało się wgrać pliku');
+      }
+    }
+  );
+
+  // ============================================
+  // Asystent AI w edytorze
+  // ============================================
+
+  /**
+   * Wspolna brama dla trzech akcji asystenta.
+   *
+   * Kolejnosc sprawdzen jest celowa: najpierw sprawa i token (czy w ogole
+   * jest o czym rozmawiac), potem flaga edytora, na koncu osobna flaga
+   * asystenta. Dopiero potem cokolwiek dotyka modelu - tam zaczynaja sie
+   * koszty.
+   */
+  async function resolveAiEditorContext(
+    request: FastifyRequest<{ Params: PersonalizationParams }>,
+    reply: FastifyReply
+  ): Promise<{ caseId: string; tenantId: string } | null> {
+    const personalizationCase = await prisma.personalizationCase.findUnique({
+      where: { customerTokenHash: hashToken(request.params.token) },
+      select: {
+        id: true,
+        status: true,
+        tokenActive: true,
+        customerTokenExpiresAt: true,
+        order: { select: { shop: { select: { tenantId: true } } } },
+        orderItem: { select: { order: { select: { shop: { select: { tenantId: true } } } } } },
+      },
+    });
+
+    if (!personalizationCase) {
+      reply.status(404).send({ error: 'Not Found', message: 'Nie znaleziono personalizacji' });
+      return null;
+    }
+    if (!assertTokenUsable(personalizationCase, reply)) return null;
+    if (!assertCaseWritable(personalizationCase, reply)) return null;
+    if (!(await assertPersonalizationFeatureEnabled(personalizationCase, reply))) return null;
+
+    const tenantId =
+      personalizationCase.order?.shop?.tenantId ||
+      personalizationCase.orderItem?.order?.shop?.tenantId;
+
+    if (!tenantId || !(await tenantHasFeature(tenantId, FEATURE_AI_EDITOR_ASSISTANT))) {
+      reply.status(403).send({
+        error: 'Forbidden',
+        message: 'Asystent AI nie jest dostępny dla tego sklepu',
+      });
+      return null;
+    }
+
+    return { caseId: personalizationCase.id, tenantId };
+  }
+
+  /** Awaria dostawcy modelu nie moze wygladac jak blad aplikacji. */
+  function replyAiError(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    error: unknown,
+    fallback: string
+  ) {
+    if (error instanceof AiEditorDisabledError) {
+      return reply.status(403).send({ error: 'Forbidden', message: error.message });
+    }
+    if (error instanceof AiLimitExceededError) {
+      return reply.status(429).send({ error: 'Too Many Requests', message: error.message });
+    }
+    if (error instanceof ZodError) {
+      return reply.status(400).send({ error: 'Bad Request', message: 'Nieprawidłowe dane zapytania' });
+    }
+    request.log.error({ err: error }, '[AiEditor] call failed');
+    // 502, nie 500: to awaria po stronie dostawcy modelu, a portal dziala.
+    return reply.status(502).send({
+      error: 'Bad Gateway',
+      message: fallback,
+      requestId: request.id,
+    });
+  }
+
+  const aiRouteConfig = {
+    config: { rateLimit: { ...RATE_LIMITS.publicAiAssist, keyGenerator: tokenRateLimitKey } },
+    schema: {
+      tags: ['personalization'],
+      security: [],
+      params: { type: 'object', properties: { token: { type: 'string' } } },
+      body: { type: 'object', additionalProperties: true },
+      response: {
+        200: { type: 'object', additionalProperties: true },
+        400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        403: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        429: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        502: { type: 'object', additionalProperties: true },
+      },
+    },
+  };
+
+  fastify.post<{ Params: PersonalizationParams; Body: unknown }>(
+    '/:token/ai/text',
+    { ...aiRouteConfig, schema: { ...aiRouteConfig.schema, summary: 'Asystent: treść napisu' } },
+    async (request, reply) => {
+      addSecurityHeaders(reply);
+      const context = await resolveAiEditorContext(request, reply);
+      if (!context) return;
+
+      try {
+        const result = await generateEditorText(request.body as never, {
+          tenantId: context.tenantId,
+          personalizationCaseId: context.caseId,
+          source: 'CLIENT_EDITOR',
+        });
+        return reply.send(result);
+      } catch (error) {
+        return replyAiError(request, reply, error, 'Asystent nie odpowiedział. Spróbuj ponownie.');
+      }
+    }
+  );
+
+  fastify.post<{ Params: PersonalizationParams; Body: unknown }>(
+    '/:token/ai/layout',
+    { ...aiRouteConfig, schema: { ...aiRouteConfig.schema, summary: 'Asystent: poprawa układu' } },
+    async (request, reply) => {
+      addSecurityHeaders(reply);
+      const context = await resolveAiEditorContext(request, reply);
+      if (!context) return;
+
+      try {
+        const result = await proposeEditorLayout(request.body as never, {
+          tenantId: context.tenantId,
+          personalizationCaseId: context.caseId,
+          source: 'CLIENT_EDITOR',
+        });
+        return reply.send(result);
+      } catch (error) {
+        return replyAiError(request, reply, error, 'Asystent nie odpowiedział. Spróbuj ponownie.');
+      }
+    }
+  );
+
+  fastify.post<{ Params: PersonalizationParams; Body: unknown }>(
+    '/:token/ai/audit',
+    { ...aiRouteConfig, schema: { ...aiRouteConfig.schema, summary: 'Asystent: audyt projektu' } },
+    async (request, reply) => {
+      addSecurityHeaders(reply);
+      const context = await resolveAiEditorContext(request, reply);
+      if (!context) return;
+
+      try {
+        const result = await auditEditorDesign(request.body as never, {
+          tenantId: context.tenantId,
+          personalizationCaseId: context.caseId,
+          source: 'CLIENT_EDITOR',
+        });
+        return reply.send(result);
+      } catch (error) {
+        return replyAiError(request, reply, error, 'Asystent nie odpowiedział. Spróbuj ponownie.');
+      }
+    }
+  );
+
+  // ============================================
+  // "Poproscie grafika" - kanal do czlowieka
+  // ============================================
+
+  fastify.post<{ Params: PersonalizationParams; Body: { message?: string } }>(
+    '/:token/help-request',
+    {
+      config: {
+        rateLimit: { ...RATE_LIMITS.personalizationHelpRequest, keyGenerator: tokenRateLimitKey },
+      },
+      schema: {
+        tags: ['personalization'],
+        summary: 'Zgłoszenie do grafika',
+        security: [],
+        params: { type: 'object', properties: { token: { type: 'string' } } },
+        body: {
+          type: 'object',
+          required: ['message'],
+          properties: { message: { type: 'string', minLength: 10, maxLength: 2000 } },
+        },
+        response: {
+          201: { type: 'object', additionalProperties: true },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          403: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        addSecurityHeaders(reply);
+
+        const personalizationCase = await prisma.personalizationCase.findUnique({
+          where: { customerTokenHash: hashToken(request.params.token) },
+          select: {
+            id: true,
+            status: true,
+            tokenActive: true,
+            customerTokenExpiresAt: true,
+            order: { select: { shop: { select: { tenantId: true } } } },
+            orderItem: { select: { order: { select: { shop: { select: { tenantId: true } } } } } },
+          },
+        });
+
+        if (!personalizationCase) {
+          return reply.status(404).send({ error: 'Not Found', message: 'Nie znaleziono personalizacji' });
+        }
+        if (!assertTokenUsable(personalizationCase, reply)) return;
+        if (!assertCaseWritable(personalizationCase, reply)) return;
+
+        const tenantId =
+          personalizationCase.order?.shop?.tenantId ||
+          personalizationCase.orderItem?.order?.shop?.tenantId;
+
+        if (!tenantId) {
+          return reply.status(403).send({ error: 'Forbidden', message: 'Brak przypisania sprawy do sklepu' });
+        }
+
+        const message = String(request.body?.message ?? '').trim();
+        if (message.length < 10) {
+          return reply.status(400).send({
+            error: 'Bad Request',
+            message: 'Opisz krótko, co mamy poprawić (min. 10 znaków).',
+          });
+        }
+
+        const helpRequest = await prisma.caseHelpRequest.create({
+          data: {
+            tenantId,
+            personalizationCaseId: personalizationCase.id,
+            message,
+          },
+          select: { id: true, status: true, createdAt: true },
+        });
+
+        request.log.info(
+          { caseId: personalizationCase.id, helpRequestId: helpRequest.id },
+          '[HelpRequest] Klient poprosil o pomoc grafika'
+        );
+
+        return reply.status(201).send(helpRequest);
+      } catch (error) {
+        return failWithReference(request, reply, error, 'Nie udało się wysłać zgłoszenia');
       }
     }
   );

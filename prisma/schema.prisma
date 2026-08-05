@@ -43,6 +43,7 @@ model Tenant {
   decorationAssets      DecorationAsset[]
   aiPromptTemplates     AiPromptTemplate[]
   aiUsageLogs           AiUsageLog[]
+  caseHelpRequests      CaseHelpRequest[]
   aiBulkContentJobs     AiBulkContentJob[]
   aiBulkContentJobItems AiBulkContentJobItem[]
   warehouseProducts     WarehouseProduct[]
@@ -819,6 +820,8 @@ model PersonalizationCase {
   renderJobs     RenderJob[]
   assets         Asset[]
   printJobs      PrintJob[]
+  helpRequests   CaseHelpRequest[]
+  aiUsageLogs    AiUsageLog[]
 
   @@index([orderId])
   @@index([status])
@@ -1046,7 +1049,7 @@ model AiSettings {
   deepseekApiKey          String?   @map("deepseek_api_key")
   openaiTextModel         String    @default("gpt-4.1-mini") @map("openai_text_model")
   openaiVisionModel       String    @default("gpt-4.1-mini") @map("openai_vision_model")
-  anthropicTextModel      String    @default("claude-sonnet-4-6") @map("anthropic_text_model")
+  anthropicTextModel      String    @default("claude-sonnet-5") @map("anthropic_text_model")
   anthropicVisionModel    String    @default("claude-haiku-4-5") @map("anthropic_vision_model")
   deepseekTextModel       String    @default("deepseek-chat") @map("deepseek_text_model")
   deepseekVisionModel     String?   @map("deepseek_vision_model")
@@ -1057,6 +1060,19 @@ model AiSettings {
   defaultPromptTemplateId String?   @map("default_prompt_template_id")
   toneJson                Json?     @map("tone_json")
   rulesJson               Json?     @map("rules_json")
+  /// Asystent w edytorze klienta. Osobny od generatora opisow produktow:
+  /// inne zadanie, inny budzet i inne ryzyko - to jedyne miejsce, gdzie
+  /// wywolanie modelu inicjuje klient koncowy, a nie pracownik sklepu.
+  /// Domyslnie WYLACZONY - sprzedawca musi go wlaczyc swiadomie.
+  editorEnabled           Boolean   @default(false) @map("editor_enabled")
+  /// NULL = dziedziczy `textProvider` / model tekstowy dostawcy.
+  editorProvider          String?   @map("editor_provider")
+  editorModel             String?   @map("editor_model")
+  editorDailyLimit        Int       @default(50) @map("editor_daily_limit")
+  /// Twardy limit na jedna sprawe klienta - bezpiecznik przed petla
+  /// "generuj jeszcze raz" na kilkaset zlotych.
+  editorPerCaseLimit      Int       @default(10) @map("editor_per_case_limit")
+  editorSystemPrompt      String?   @map("editor_system_prompt") @db.Text
   lastTestProvider        String?   @map("last_test_provider")
   lastTestStatus          String?   @map("last_test_status")
   lastTestAt              DateTime? @map("last_test_at")
@@ -1142,6 +1158,10 @@ model AiUsageLog {
   tenantId               String    @map("tenant_id")
   userId                 String?   @map("user_id")
   warehouseProductId     String?   @map("warehouse_product_id")
+  /// Sprawa klienta, jesli wywolanie przyszlo z asystenta w edytorze.
+  /// Bez tego pola nie da sie ani wyegzekwowac limitu na sprawe, ani
+  /// odpowiedziec na pytanie "ile nas kosztowala ta personalizacja".
+  personalizationCaseId  String?   @map("personalization_case_id")
   aiBulkContentJobId     String?   @map("ai_bulk_content_job_id")
   aiBulkContentJobItemId String?   @map("ai_bulk_content_job_item_id")
   provider               String
@@ -1164,14 +1184,46 @@ model AiUsageLog {
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   product WarehouseProduct? @relation(fields: [warehouseProductId], references: [id], onDelete: SetNull)
+  personalizationCase PersonalizationCase? @relation(fields: [personalizationCaseId], references: [id], onDelete: SetNull)
   bulkJob AiBulkContentJob? @relation(fields: [aiBulkContentJobId], references: [id], onDelete: SetNull)
   bulkJobItem AiBulkContentJobItem? @relation(fields: [aiBulkContentJobItemId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, createdAt])
   @@index([tenantId, status])
   @@index([warehouseProductId])
+  @@index([personalizationCaseId])
   @@index([aiBulkContentJobId])
   @@map("ai_usage_logs")
+}
+
+/// Zgloszenie klienta "Poproscie grafika".
+///
+/// Klient, ktory nie chce (albo nie potrafi) poprawic projektu sam, musi miec
+/// droge do czlowieka - inaczej albo zatwierdza cos, z czego nie jest
+/// zadowolony, albo pisze maila bez zwiazku ze sprawa. Osobny model, a nie
+/// dopisek do `notesInternal`: zgloszenie ma status i historie, a nie jest
+/// kolejnym akapitem w polu tekstowym.
+model CaseHelpRequest {
+  id                    String    @id @default(cuid())
+  tenantId              String    @map("tenant_id")
+  personalizationCaseId String    @map("personalization_case_id")
+  /// Opis klienta - co ma poprawic grafik.
+  message               String    @db.Text
+  /// PENDING | IN_PROGRESS | HANDLED | CANCELLED
+  status                String    @default("PENDING")
+  handledByUserId       String?   @map("handled_by_user_id")
+  handledAt             DateTime? @map("handled_at")
+  /// Odpowiedz obslugi - trafia do klienta razem z poprawionym projektem.
+  responseNote          String?   @map("response_note") @db.Text
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  tenant              Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  personalizationCase PersonalizationCase @relation(fields: [personalizationCaseId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([personalizationCaseId])
+  @@map("case_help_requests")
 }
 
 model AiBulkContentJob {

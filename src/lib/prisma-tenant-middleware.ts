@@ -52,6 +52,7 @@ export const TENANT_MODELS = new Set([
   'CustomerReturnRequest',
   'ReturnShippingPayment',
   'DecorationAsset',
+  'CaseHelpRequest',
 ]);
 
 const DEBUG_TENANT_CONTEXT = process.env.DEBUG_TENANT_CONTEXT === 'true';

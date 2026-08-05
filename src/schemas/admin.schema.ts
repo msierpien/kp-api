@@ -289,7 +289,7 @@ export const aiSettingsSchema = z.object({
   deepseekApiKey: z.string().optional().nullable(),
   openaiTextModel: z.string().min(1).default('gpt-4.1-mini'),
   openaiVisionModel: z.string().min(1).default('gpt-4.1-mini'),
-  anthropicTextModel: z.string().min(1).default('claude-sonnet-4-6'),
+  anthropicTextModel: z.string().min(1).default('claude-sonnet-5'),
   anthropicVisionModel: z.string().min(1).default('claude-haiku-4-5'),
   deepseekTextModel: z.string().min(1).default('deepseek-chat'),
   deepseekVisionModel: z.string().optional().nullable(),
@@ -300,6 +300,15 @@ export const aiSettingsSchema = z.object({
   defaultPromptTemplateId: z.string().optional().nullable(),
   toneJson: z.any().optional().nullable(),
   rulesJson: z.any().optional().nullable(),
+  // Asystent w edytorze klienta. Osobne limity od generatora opisow -
+  // to jedyna funkcja, w ktorej wywolanie modelu inicjuje klient koncowy.
+  editorEnabled: z.boolean().default(false),
+  /** Puste = dziedziczy dostawce i model tekstowy z ustawien powyzej. */
+  editorProvider: aiProviderSchema.optional().nullable(),
+  editorModel: z.string().max(120).optional().nullable(),
+  editorDailyLimit: z.coerce.number().int().min(1).max(10000).default(50),
+  editorPerCaseLimit: z.coerce.number().int().min(1).max(200).default(10),
+  editorSystemPrompt: z.string().max(4000).optional().nullable(),
 });
 
 export const aiProviderTestSchema = z.object({

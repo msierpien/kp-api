@@ -73,4 +73,22 @@ export const RATE_LIMITS = {
     timeWindow: '1 minute',
     groupId: 'public-asset-upload',
   },
+  /**
+   * Asystent AI w edytorze klienta.
+   *
+   * Kazde wywolanie to realny koszt u dostawcy modelu, wiec limit jest
+   * ciasny. To trzeci bezpiecznik obok limitu dziennego tenanta i twardego
+   * limitu na sprawe - ten pilnuje tempa, tamte calosci.
+   */
+  publicAiAssist: {
+    max: 5,
+    timeWindow: '1 minute',
+    groupId: 'public-ai-assist',
+  },
+  /** Zgloszenie "Poproscie grafika" - klient robi to raz, moze dwa. */
+  personalizationHelpRequest: {
+    max: 3,
+    timeWindow: '10 minutes',
+    groupId: 'personalization-help-request',
+  },
 } as const;

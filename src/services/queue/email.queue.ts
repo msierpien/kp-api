@@ -27,7 +27,25 @@ export interface TestEmailJob {
   message?: string;
 }
 
-export type EmailJobData = PersonalizationEmailJob | TestEmailJob;
+/**
+ * Powiadomienie dla obslugi: klient poprosil grafika o pomoc.
+ *
+ * Bez niego zgloszenie ladowalo w bazie i nikt sie o nim nie dowiadywal,
+ * a klient widzial w portalu obietnice "grafik wprowadzi zmiany".
+ */
+export interface HelpRequestEmailJob {
+  to: string;
+  shopName: string;
+  orderReference: string;
+  customerName?: string | null;
+  productName?: string | null;
+  message: string;
+  /** Link do sprawy w panelu - obsluga ma trafic prosto do projektu. */
+  caseUrl?: string | null;
+  helpRequestId: string;
+}
+
+export type EmailJobData = PersonalizationEmailJob | TestEmailJob | HelpRequestEmailJob;
 
 /**
  * BullMQ Queue for email sending
@@ -64,6 +82,21 @@ export async function queuePersonalizationEmail(data: PersonalizationEmailJob) {
   });
 
   logger.info({ jobId: job.id, to: data.to }, 'Queued personalization email');
+  return job;
+}
+
+/**
+ * Powiadomienie o zgloszeniu do grafika.
+ *
+ * `jobId` po id zgloszenia - ponowne wywolanie tej samej sprawy nie wysle
+ * drugiego maila, gdyby zapis i kolejkowanie zostaly kiedys ponowione.
+ */
+export async function queueHelpRequestEmail(data: HelpRequestEmailJob) {
+  const job = await emailQueue.add('help-request', data, {
+    jobId: `help-request-${data.helpRequestId}`,
+  });
+
+  logger.info({ jobId: job.id, to: data.to }, 'Queued help request email');
   return job;
 }
 

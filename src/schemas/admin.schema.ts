@@ -302,12 +302,16 @@ export const aiSettingsSchema = z.object({
   rulesJson: z.any().optional().nullable(),
   // Asystent w edytorze klienta. Osobne limity od generatora opisow -
   // to jedyna funkcja, w ktorej wywolanie modelu inicjuje klient koncowy.
-  editorEnabled: z.boolean().default(false),
+  //
+  // Wszystkie pola sa OPCJONALNE bez wartosci domyslnej, i to celowo:
+  // z `default(false)` zapis ustawien z panelu, ktory tych pol nie zna,
+  // po cichu wylaczalby asystenta. Brak pola = "nie ruszaj", a nie "wylacz".
+  editorEnabled: z.boolean().optional(),
   /** Puste = dziedziczy dostawce i model tekstowy z ustawien powyzej. */
   editorProvider: aiProviderSchema.optional().nullable(),
   editorModel: z.string().max(120).optional().nullable(),
-  editorDailyLimit: z.coerce.number().int().min(1).max(10000).default(50),
-  editorPerCaseLimit: z.coerce.number().int().min(1).max(200).default(10),
+  editorDailyLimit: z.coerce.number().int().min(1).max(10000).optional(),
+  editorPerCaseLimit: z.coerce.number().int().min(1).max(200).optional(),
   editorSystemPrompt: z.string().max(4000).optional().nullable(),
 });
 

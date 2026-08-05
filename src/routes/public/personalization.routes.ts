@@ -20,6 +20,7 @@ import {
   generateEditorText,
   proposeEditorLayout,
 } from '../../services/ai/editor-agent.service';
+import { createCaseHelpRequest } from '../../services/admin/case-help-requests.service';
 import {
   MAX_PREVIEW_UPLOAD_BYTES,
   assertAllowedImageUpload,
@@ -1693,13 +1694,13 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           });
         }
 
-        const helpRequest = await prisma.caseHelpRequest.create({
-          data: {
-            tenantId,
-            personalizationCaseId: personalizationCase.id,
-            message,
-          },
-          select: { id: true, status: true, createdAt: true },
+        // Serwis zapisuje zgloszenie I kolejkuje powiadomienie dla obslugi.
+        // Bez tego drugiego klient dostawal potwierdzenie, a po drugiej
+        // stronie nie dzialo sie nic.
+        const helpRequest = await createCaseHelpRequest({
+          tenantId,
+          personalizationCaseId: personalizationCase.id,
+          message,
         });
 
         request.log.info(

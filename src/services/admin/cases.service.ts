@@ -145,6 +145,13 @@ export async function getCases(query: CasesQueryInput): Promise<CasesListRespons
             quantity: true,
           },
         },
+        // Sam licznik otwartych zgloszen - lista ma pokazac, ze klient czeka
+        // na reakcje, bez dociagania tresci kazdego zgloszenia.
+        _count: {
+          select: {
+            helpRequests: { where: { status: { in: ['PENDING', 'IN_PROGRESS'] } } },
+          },
+        },
         template: {
           select: {
             name: true,
@@ -194,6 +201,7 @@ export async function getCases(query: CasesQueryInput): Promise<CasesListRespons
       emailFailedAt: c.emailFailedAt,
       emailError: c.emailError,
       emailAttempts: c.emailAttempts,
+      openHelpRequests: c._count?.helpRequests ?? 0,
     } as CaseListItem;
   });
 

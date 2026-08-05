@@ -28,6 +28,12 @@ import {
   listCasePrintAssets,
   toPrintJobDto,
 } from '../../services/print/print-job.service';
+import {
+  HELP_REQUEST_STATUSES,
+  listCaseHelpRequests,
+  updateCaseHelpRequest,
+  type HelpRequestStatus,
+} from '../../services/admin/case-help-requests.service';
 import { isAppError } from '../../lib/errors';
 import prisma from '../../lib/prisma';
 import { config } from '../../config';
@@ -677,6 +683,89 @@ export async function casesRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           error: 'Internal Server Error',
           message: 'Nie udało się pobrać tokena',
+        });
+      }
+    }
+  );
+
+  // ============================================
+  // Zgloszenia "Poproscie grafika"
+  // ============================================
+
+  fastify.get<{ Params: CaseIdParams }>(
+    '/:id/help-requests',
+    {
+      schema: {
+        tags: ['cases'],
+        summary: 'Zgłoszenia klienta do grafika dla tej sprawy',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: true,
+            properties: {
+              helpRequests: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            },
+          },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: CaseIdParams }>, reply: FastifyReply) => {
+      try {
+        const params = caseIdParamsSchema.safeParse(request.params);
+        if (!params.success) {
+          return reply.status(400).send({ error: 'Validation Error', message: params.error.errors[0].message });
+        }
+
+        return reply.send({ helpRequests: await listCaseHelpRequests(params.data.id) });
+      } catch (error) {
+        fastify.log.error(error);
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Nie udało się pobrać zgłoszeń',
+        });
+      }
+    }
+  );
+
+  fastify.patch<{ Params: { id: string; helpRequestId: string }; Body: { status?: string; responseNote?: string | null } }>(
+    '/:id/help-requests/:helpRequestId',
+    {
+      schema: {
+        tags: ['cases'],
+        summary: 'Zmień status zgłoszenia do grafika',
+        params: {
+          type: 'object',
+          properties: { id: { type: 'string' }, helpRequestId: { type: 'string' } },
+        },
+        body: {
+          type: 'object',
+          properties: {
+            status: { type: 'string', enum: [...HELP_REQUEST_STATUSES] },
+            responseNote: { type: 'string', nullable: true, maxLength: 2000 },
+          },
+        },
+        response: {
+          200: { type: 'object', additionalProperties: true },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const updated = await updateCaseHelpRequest(request.params.helpRequestId, {
+          status: request.body?.status as HelpRequestStatus | undefined,
+          responseNote: request.body?.responseNote,
+        });
+        return reply.send(updated);
+      } catch (error: any) {
+        fastify.log.error(error);
+        if (String(error?.message).includes('nie znalezione')) {
+          return reply.status(404).send({ error: 'Not Found', message: 'Zgłoszenie nie istnieje' });
+        }
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Nie udało się zaktualizować zgłoszenia',
         });
       }
     }

@@ -210,12 +210,21 @@ export async function updateAiSettings(input: AiSettingsInput) {
     defaultPromptTemplateId: input.defaultPromptTemplateId ?? null,
     toneJson: input.toneJson ?? Prisma.JsonNull,
     rulesJson: input.rulesJson ?? Prisma.JsonNull,
-    editorEnabled: input.editorEnabled,
-    editorProvider: input.editorProvider ?? null,
-    editorModel: normalizeAiModelId(input.editorModel) ?? null,
-    editorDailyLimit: input.editorDailyLimit,
-    editorPerCaseLimit: input.editorPerCaseLimit,
-    editorSystemPrompt: input.editorSystemPrompt ?? null,
+    // Pola asystenta aktualizujemy tylko wtedy, gdy przyszly w zadaniu.
+    // Panel, ktory ich nie zna, nie ma prawa wylaczyc asystenta przy zapisie
+    // czegos zupelnie innego (np. limitu generatora opisow).
+    ...(input.editorEnabled !== undefined ? { editorEnabled: input.editorEnabled } : {}),
+    ...(input.editorProvider !== undefined ? { editorProvider: input.editorProvider } : {}),
+    ...(input.editorModel !== undefined
+      ? { editorModel: normalizeAiModelId(input.editorModel) ?? null }
+      : {}),
+    ...(input.editorDailyLimit !== undefined ? { editorDailyLimit: input.editorDailyLimit } : {}),
+    ...(input.editorPerCaseLimit !== undefined
+      ? { editorPerCaseLimit: input.editorPerCaseLimit }
+      : {}),
+    ...(input.editorSystemPrompt !== undefined
+      ? { editorSystemPrompt: input.editorSystemPrompt }
+      : {}),
     ...(keyUpdates.openaiApiKey !== undefined ? { openaiApiKey: keyUpdates.openaiApiKey } : {}),
     ...(keyUpdates.anthropicApiKey !== undefined ? { anthropicApiKey: keyUpdates.anthropicApiKey } : {}),
     ...(keyUpdates.deepseekApiKey !== undefined ? { deepseekApiKey: keyUpdates.deepseekApiKey } : {}),

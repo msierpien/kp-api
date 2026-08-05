@@ -119,6 +119,8 @@ export interface CaseListItem {
   emailFailedAt: Date | null;
   emailError: string | null;
   emailAttempts: number;
+  /** Otwarte zgloszenia klienta do grafika (PENDING/IN_PROGRESS). */
+  openHelpRequests: number;
 }
 
 export interface SyncLogItem {

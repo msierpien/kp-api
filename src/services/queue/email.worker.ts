@@ -1,7 +1,12 @@
 import { Worker } from 'bullmq';
 import { config } from '../../config';
 import { emailService } from '../email/email.service';
-import type { EmailJobData, PersonalizationEmailJob, TestEmailJob } from './email.queue';
+import type {
+  EmailJobData,
+  HelpRequestEmailJob,
+  PersonalizationEmailJob,
+  TestEmailJob,
+} from './email.queue';
 import prisma from '../../lib/prisma';
 
 /**
@@ -27,6 +32,8 @@ export function startEmailWorker() {
           return await processPersonalizationEmail(data as PersonalizationEmailJob);
         } else if (name === 'test') {
           return await processTestEmail(data as TestEmailJob);
+        } else if (name === 'help-request') {
+          return await processHelpRequestEmail(data as HelpRequestEmailJob);
         } else {
           throw new Error(`Unknown email job type: ${name}`);
         }
@@ -115,6 +122,40 @@ async function processPersonalizationEmail(data: PersonalizationEmailJob): Promi
       console.error(`[EmailWorker] Failed to update case ${data.caseId}:`, error);
     }
   }
+
+  return { success };
+}
+
+/**
+ * Powiadomienie dla obslugi o zgloszeniu klienta.
+ *
+ * Tresc idzie prosto z tego, co klient wpisal - obsluga ma wiedziec, co
+ * poprawic, bez otwierania panelu. Link do sprawy jest dla tych, ktorzy
+ * chca od razu zabrac sie za projekt.
+ */
+async function processHelpRequestEmail(data: HelpRequestEmailJob): Promise<{ success: boolean }> {
+  if (!emailService.isConfigured()) {
+    throw new Error('Email service not configured');
+  }
+
+  const lines = [
+    `Klient prosi o pomoc przy projekcie (zamówienie ${data.orderReference}).`,
+    '',
+    data.customerName ? `Klient: ${data.customerName}` : null,
+    data.productName ? `Produkt: ${data.productName}` : null,
+    '',
+    'Treść zgłoszenia:',
+    data.message,
+    '',
+    data.caseUrl ? `Sprawa w panelu: ${data.caseUrl}` : null,
+  ].filter((line) => line !== null);
+
+  const success = await emailService.sendAutomationEmail({
+    to: data.to,
+    subject: `Prośba o pomoc grafika — zamówienie ${data.orderReference}`,
+    body: lines.join('\n'),
+    shopName: data.shopName,
+  });
 
   return { success };
 }

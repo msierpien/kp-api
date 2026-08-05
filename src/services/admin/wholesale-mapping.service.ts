@@ -4,6 +4,7 @@ import {
   assertProviderBelongsToTenant,
   requireTenantId,
 } from './wholesale/shared';
+import { resolveCatalogForProduct } from './warehouse-catalogs.service';
 
 export interface WholesaleMappingsQuery {
   page?: number;
@@ -634,4 +635,126 @@ export async function bulkUpsertProducerMappings(providerId: string, items: Prod
     upserted += 1;
   }
   return { upserted };
+}
+
+export interface EnsureProducerWarehouseProductsInput {
+  /** Katalog docelowy dla nowych produktów; brak = katalog domyślny tenanta. */
+  catalogId?: string | null;
+  /** Przypnij istniejące produkty (te już powiązane też) do katalogu docelowego. */
+  moveExistingToCatalog?: boolean;
+  importEan?: boolean;
+}
+
+export interface EnsureProducerWarehouseProductsResult {
+  catalogId: string;
+  catalogName: string;
+  created: number;
+  linked: number;
+  moved: number;
+  alreadyMapped: number;
+}
+
+/**
+ * Domyka lukę producenta: dla każdego mapowania bez produktu magazynowego
+ * podpina istniejący produkt o tym samym SKU, a jak takiego nie ma — zakłada
+ * nowy w wybranym katalogu. Bez tego dostępność z tabeli producenta nigdzie nie
+ * trafia, bo stock-sync czyta wyłącznie mapowania z `warehouseProductId`.
+ */
+export async function ensureProducerWarehouseProducts(
+  providerId: string,
+  input: EnsureProducerWarehouseProductsInput = {},
+): Promise<EnsureProducerWarehouseProductsResult> {
+  const tenantId = requireTenantId();
+  await assertProducerProvider(providerId, tenantId);
+
+  const { moveExistingToCatalog = false, importEan = true } = input;
+  const catalog = await resolveCatalogForProduct(tenantId, input.catalogId ?? undefined);
+
+  const mappings = await prisma.wholesaleProductMapping.findMany({
+    where: { tenantId, providerId },
+    orderBy: { externalSku: 'asc' },
+  });
+  if (mappings.length === 0) {
+    return { catalogId: catalog.id, catalogName: catalog.name, created: 0, linked: 0, moved: 0, alreadyMapped: 0 };
+  }
+
+  const unmapped = mappings.filter((mapping) => !mapping.warehouseProductId);
+  const existingBySku = new Map(
+    (
+      await prisma.warehouseProduct.findMany({
+        where: { tenantId, sku: { in: unmapped.map((mapping) => mapping.externalSku) } },
+        select: { id: true, sku: true },
+      })
+    ).map((product) => [product.sku, product.id] as const),
+  );
+
+  const result: EnsureProducerWarehouseProductsResult = {
+    catalogId: catalog.id,
+    catalogName: catalog.name,
+    created: 0,
+    linked: 0,
+    moved: 0,
+    alreadyMapped: mappings.length - unmapped.length,
+  };
+  const mappedProductIds = mappings
+    .map((mapping) => mapping.warehouseProductId)
+    .filter((id): id is string => Boolean(id));
+
+  for (const mapping of unmapped) {
+    const existingId = existingBySku.get(mapping.externalSku);
+    let productId = existingId;
+
+    if (productId) {
+      result.linked += 1;
+    } else {
+      const product = await prisma.warehouseProduct.create({
+        data: {
+          tenantId,
+          catalogId: catalog.id,
+          sku: mapping.externalSku,
+          name: mapping.externalName || mapping.externalSku,
+          unit: 'szt',
+          purchasePrice: mapping.lastKnownPrice,
+          isActive: true,
+        },
+      });
+      productId = product.id;
+      result.created += 1;
+
+      if (importEan && mapping.externalEan) {
+        const existingBarcode = await prisma.warehouseProductBarcode.findFirst({
+          where: { tenantId, ean: mapping.externalEan },
+          select: { id: true },
+        });
+        if (!existingBarcode) {
+          await prisma.warehouseProductBarcode.create({
+            data: {
+              tenantId,
+              warehouseProductId: product.id,
+              ean: mapping.externalEan,
+              quantityMultiplier: new Prisma.Decimal(1),
+              isPrimary: true,
+              isActive: true,
+            },
+          });
+        }
+      }
+    }
+
+    await prisma.wholesaleProductMapping.update({
+      where: { id: mapping.id },
+      data: { warehouseProductId: productId },
+    });
+    mappedProductIds.push(productId);
+  }
+
+  if (moveExistingToCatalog && mappedProductIds.length > 0) {
+    const moved = await prisma.warehouseProduct.updateMany({
+      where: { tenantId, id: { in: mappedProductIds }, catalogId: { not: catalog.id } },
+      data: { catalogId: catalog.id },
+    });
+    result.moved = moved.count;
+  }
+
+  return result;
 }

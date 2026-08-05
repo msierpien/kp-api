@@ -225,6 +225,34 @@ export async function registerWholesaleMappingRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.post('/providers/:id/mappings/ensure-products', {
+    schema: {
+      tags: ['wholesale'],
+      summary: 'Utwórz lub powiąż produkty magazynowe dla wszystkich pozycji producenta',
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+      body: {
+        type: 'object',
+        properties: {
+          catalogId: { type: ['string', 'null'] },
+          moveExistingToCatalog: { type: 'boolean', default: false },
+          importEan: { type: 'boolean', default: true },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{
+    Params: { id: string };
+    Body: wholesaleService.EnsureProducerWarehouseProductsInput;
+  }>, reply: FastifyReply) => {
+    try {
+      const result = await wholesaleService.ensureProducerWarehouseProducts(request.params.id, request.body ?? {});
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd tworzenia produktów magazynowych producenta';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   fastify.put('/providers/:id/mappings/bulk', {
     schema: {
       tags: ['wholesale'],

@@ -29,6 +29,15 @@ import {
   toPrintJobDto,
 } from '../../services/print/print-job.service';
 import {
+  AiEditorDisabledError,
+  AiLimitExceededError,
+  auditEditorDesign,
+  generateEditorText,
+  proposeEditorLayout,
+  type EditorAgentContext,
+} from '../../services/ai/editor-agent.service';
+import { getTenantContext, getTenantId } from '../../lib/tenant-context';
+import {
   HELP_REQUEST_STATUSES,
   listCaseHelpRequests,
   updateCaseHelpRequest,
@@ -770,4 +779,81 @@ export async function casesRoutes(fastify: FastifyInstance) {
       }
     }
   );
+
+  // ============================================
+  // Asystent AI dla obslugi
+  // ============================================
+
+  /**
+   * Te same trzy akcje, ktore ma klient w edytorze - tyle ze wolane przez
+   * pracownika, zwykle po zgloszeniu "poproscie grafika". Limit na sprawe
+   * celowo NIE obowiazuje: to praca obslugi, a nie klient klikajacy
+   * „jeszcze raz" - jego licznik nie ma tu czego pilnowac. Limity tenanta
+   * (dzienny i miesieczny) dzialaja normalnie.
+   */
+  const aiActions = {
+    text: generateEditorText,
+    layout: proposeEditorLayout,
+    audit: auditEditorDesign,
+  } as const;
+
+  for (const [action, run] of Object.entries(aiActions)) {
+    fastify.post<{ Params: CaseIdParams; Body: unknown }>(
+      `/:id/ai/${action}`,
+      {
+        schema: {
+          tags: ['cases'],
+          summary: `Asystent AI dla sprawy (${action})`,
+          params: { type: 'object', properties: { id: { type: 'string' } } },
+          body: { type: 'object', additionalProperties: true },
+          response: {
+            200: { type: 'object', additionalProperties: true },
+            403: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+            404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+            429: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+            502: { type: 'object', additionalProperties: true },
+          },
+        },
+      },
+      async (request, reply) => {
+        const params = caseIdParamsSchema.safeParse(request.params);
+        if (!params.success) {
+          return reply.status(400).send({ error: 'Validation Error', message: params.error.errors[0].message });
+        }
+
+        const context = getTenantContext();
+        const tenantId = getTenantId() || context?.tenantId;
+        if (!tenantId) {
+          return reply.status(403).send({ error: 'Forbidden', message: 'Brak kontekstu firmy' });
+        }
+
+        try {
+          const result = await (run as (input: never, ctx: EditorAgentContext) => Promise<unknown>)(
+            request.body as never,
+            {
+              tenantId,
+              userId: context?.userId ?? null,
+              // Bez `personalizationCaseId` limit na sprawe sie nie liczy,
+              // ale wywolanie i tak trafia do dziennika po tenancie.
+              source: 'ADMIN_EDITOR',
+            }
+          );
+          return reply.send(result);
+        } catch (error: any) {
+          if (error instanceof AiEditorDisabledError) {
+            return reply.status(403).send({ error: 'Forbidden', message: error.message });
+          }
+          if (error instanceof AiLimitExceededError) {
+            return reply.status(429).send({ error: 'Too Many Requests', message: error.message });
+          }
+          fastify.log.error({ err: error }, '[AiEditor][admin] call failed');
+          return reply.status(502).send({
+            error: 'Bad Gateway',
+            message: 'Asystent nie odpowiedział. Spróbuj ponownie.',
+            requestId: request.id,
+          });
+        }
+      }
+    );
+  }
 }

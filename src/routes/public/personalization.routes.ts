@@ -461,11 +461,35 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
             ? buildStorageUrl(savedPreview.filePath)
             : null;
 
+        // Czy portal ma w ogole pokazac asystenta. Bez tej flagi ikona
+        // wisialaby w szynie u kazdego klienta i dopiero klikniecie
+        // ujawnialoby, ze sprzedawca funkcji nie wlaczyl. Flaga niesie tez
+        // zgodnosc w druga strone: starsze API jej nie zwraca, wiec nowy
+        // portal po prostu nie pokaze narzedzia.
+        const caseTenantId =
+          personalizationCase.order?.shop?.tenantId ||
+          (personalizationCase.orderItem as any)?.order?.shop?.tenantId;
+        // Dwie zgody musza sie zejsc: flaga tenanta i wlacznik w ustawieniach
+        // AI. Sprawdzamy je w tej kolejnosci - flaga jest z cache, ustawienia
+        // z bazy, wiec przy wylaczonej fladze nie ma po co pytac dalej.
+        const aiAssistantEnabled = caseTenantId
+          ? (await tenantHasFeature(caseTenantId, FEATURE_AI_EDITOR_ASSISTANT)) &&
+            Boolean(
+              (
+                await prisma.aiSettings.findUnique({
+                  where: { tenantId: caseTenantId },
+                  select: { editorEnabled: true },
+                })
+              )?.editorEnabled
+            )
+          : false;
+
         return reply.send({
           id: personalizationCase.id,
           status: personalizationCase.status,
           tokenActive: personalizationCase.tokenActive,
           submittedAt: personalizationCase.submittedAt,
+          aiAssistantEnabled,
           previewUrl,
           layoutOverrides: personalizationCase.layoutOverrides,
           validationSummary: personalizationCase.validationSummary,

@@ -2,6 +2,7 @@ import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
 import { Prisma, WarehouseReservationSource, WarehouseReservationStatus } from '@prisma/client';
 import { syncStockForProducts } from '../stock/stock-sync.service';
+import { isActiveOrderOperationalStatus, isShippedOrderOperationalStatus } from '../../lib/order-statuses';
 import { resolveMinimumStockForSale } from './wholesale/shared';
 
 type Tx = Prisma.TransactionClient;
@@ -506,6 +507,33 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
   });
   if (!orderHeader) throw new Error('Zamówienie nie znalezione');
 
+  // Zamowienie wyslane/zamkniete nie przyjmuje nowych rezerwacji — towar juz
+  // wyjechal albo nigdy nie wyjedzie; "Odswiez rezerwacje" nie moze zablokowac
+  // stanu drugi raz.
+  if (
+    isShippedOrderOperationalStatus(orderHeader.operationalStatus)
+    || !isActiveOrderOperationalStatus(orderHeader.operationalStatus)
+  ) {
+    return {
+      orderId: orderHeader.id,
+      reserved: 0,
+      unchanged: 0,
+      updated: 0,
+      partial: 0,
+      missingMapping: 0,
+      missingStock: 0,
+      issues: [{
+        orderItemId: '',
+        sku: '',
+        productName: '',
+        requestedQuantity: 0,
+        reservedQuantity: 0,
+        status: 'UNCHANGED',
+        message: `Zamówienie w statusie ${orderHeader.operationalStatus} nie przyjmuje rezerwacji`,
+      }],
+    };
+  }
+
   const settings = await getWarehouseSettings(prisma, orderHeader.shop.tenantId);
   const mappings = await prisma.shopProductMapping.findMany({
     where: {
@@ -547,6 +575,23 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
       missingStock: 0,
       issues: [],
     };
+
+    // Pozycje zatwierdzonego WZ bez rezerwacji (sciezka DETACH) tez oznaczaja
+    // wydany towar — bez tego "Odswiez rezerwacje" zablokowaloby stan drugi raz.
+    const unlinkedIssuedItems = await tx.warehouseDocumentItem.findMany({
+      where: {
+        reservationId: null,
+        document: { orderId: order.id, type: 'WZ', status: 'CONFIRMED' },
+      },
+      select: { productId: true, quantity: true },
+    });
+    const unlinkedIssuedByProduct = new Map<string, Prisma.Decimal>();
+    for (const issuedItem of unlinkedIssuedItems) {
+      unlinkedIssuedByProduct.set(
+        issuedItem.productId,
+        (unlinkedIssuedByProduct.get(issuedItem.productId) ?? new Prisma.Decimal(0)).plus(issuedItem.quantity),
+      );
+    }
 
     for (const item of order.items) {
       const requestedQuantity = new Prisma.Decimal(item.quantity);
@@ -617,9 +662,16 @@ export async function reserveOrder(orderId: string): Promise<OrderReservationRes
           status: 'CONSUMED',
         },
       });
-      const consumedQuantity = consumedReservations
+      let consumedQuantity = consumedReservations
         .filter((reservation) => reservation.warehouseProductId === warehouseProductId)
         .reduce((sum, reservation) => sum.plus(reservation.quantity), new Prisma.Decimal(0));
+
+      const unlinkedIssued = unlinkedIssuedByProduct.get(warehouseProductId);
+      if (unlinkedIssued?.gt(0) && consumedQuantity.lt(requestedQuantity)) {
+        const covered = Prisma.Decimal.min(unlinkedIssued, requestedQuantity.minus(consumedQuantity));
+        consumedQuantity = consumedQuantity.plus(covered);
+        unlinkedIssuedByProduct.set(warehouseProductId, unlinkedIssued.minus(covered));
+      }
 
       if (consumedQuantity.gte(requestedQuantity)) {
         const issue: OrderReservationIssue = {
@@ -902,6 +954,11 @@ export async function consumeDocumentReservations(
     if (reservation.status !== 'ACTIVE') {
       throw new Error('Tylko aktywna rezerwacja może zostać skonsumowana przez WZ');
     }
+    if (reservation.source === 'WHOLESALE_BACKORDER') {
+      // Backorder nie zajal stanu — konsumpcja zostawilaby wydanie bez sladu na
+      // currentStock. Takie pozycje obsluguje sciezka DETACH_CANCEL w confirmDocument.
+      throw new Error('Rezerwacja hurtowa (backorder) nie może zostać skonsumowana przez WZ');
+    }
 
     await tx.warehouseReservation.update({
       where: { id: reservation.id },
@@ -927,7 +984,8 @@ export async function releaseDocumentReservations(
     if (reservation.warehouseProductId !== item.productId) {
       throw new Error('Rezerwacja dokumentu dotyczy innego produktu');
     }
-    if (reservation.status === 'RELEASED') continue;
+    // RELEASED i CANCELLED juz nie trzymaja stanu — nie ma czego zwracac.
+    if (reservation.status === 'RELEASED' || reservation.status === 'CANCELLED') continue;
     if (reservation.status !== 'CONSUMED' && reservation.status !== 'ACTIVE') {
       throw new Error('Tylko aktywna albo skonsumowana rezerwacja może zostać zwolniona przez anulowanie WZ');
     }

@@ -8,8 +8,9 @@ import {
 import { decrypt } from '../../lib/encryption';
 import { emailService } from '../email/email.service';
 import { generateAccessToken, getTokenExpiryDate } from '../../lib/token';
-import { createWzForOrder, finalizeOrderShipment, shouldAutoCreateWzForTenant } from '../admin/warehouse-documents.service';
-import { releaseOrderReservations, reserveOrder } from '../admin/warehouse-reservations.service';
+import { createWzForOrder, shouldAutoCreateWzForTenant } from '../admin/warehouse-documents.service';
+import { reserveOrder } from '../admin/warehouse-reservations.service';
+import { applyOrderStatusWarehouseEffects } from '../orders/order-status-warehouse-effects.service';
 import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
 import {
   getInventoryPublicationDecision,
@@ -25,7 +26,6 @@ import {
 import { resolveOrderSyncFromDate } from './order-sync-date';
 import {
   inferOperationalStatusFromShopStatus,
-  isShippedOrderOperationalStatus,
   isStockReservationOrderOperationalStatus,
 } from '../../lib/order-statuses';
 import type { OrderOperationalStatus } from '../../lib/order-statuses';
@@ -434,7 +434,8 @@ async function importPrestaShopOrderWithContext(
       result.errors.push(`Order ${externalOrderId}: status not refreshed: ${message}`);
     }
 
-    if (options.reserveStock && isStockReservationOrderOperationalStatus(currentStatus?.operationalStatus ?? existingOrder.operationalStatus)) {
+    const statusForEffects = currentStatus?.operationalStatus ?? existingOrder.operationalStatus;
+    if (options.reserveStock && isStockReservationOrderOperationalStatus(statusForEffects)) {
       try {
         await reserveOrder(existingOrder.id);
         if (options.autoCreateWz) {
@@ -444,18 +445,13 @@ async function importPrestaShopOrderWithContext(
         const message = reservationError instanceof Error ? reservationError.message : 'Unknown reservation error';
         result.errors.push(`Order ${externalOrderId}: reservation not updated: ${message}`);
       }
-    } else if (currentStatus && isShippedOrderOperationalStatus(currentStatus.operationalStatus)) {
-      // Wysylka: rezerwacje musza zejsc ze stanu dokumentem WZ, a nie wrocic na magazyn.
-      const shipment = await finalizeOrderShipment(existingOrder.id);
-      if (shipment.status === 'FAILED') {
-        result.errors.push(`Order ${externalOrderId}: WZ not closed on shipment: ${shipment.reason}`);
-      }
-    } else if (currentStatus && !isStockReservationOrderOperationalStatus(currentStatus.operationalStatus)) {
-      try {
-        await releaseOrderReservations(existingOrder.id);
-      } catch (reservationError) {
-        const message = reservationError instanceof Error ? reservationError.message : 'Unknown reservation release error';
-        result.errors.push(`Order ${externalOrderId}: reservation not released: ${message}`);
+    } else if (currentStatus) {
+      // Wspolna logika: SHIPPED/DELIVERED domyka WZ, anulacje/zwroty zwalniaja ACTIVE,
+      // statusy niezmapowane nie ruszaja rezerwacji.
+      const effects = await applyOrderStatusWarehouseEffects(existingOrder.id, currentStatus.operationalStatus);
+      result.errors.push(...effects.errors.map((message) => `Order ${externalOrderId}: ${message}`));
+      for (const warning of effects.warnings) {
+        console.warn(`[Sync] Order ${externalOrderId}: ${warning}`);
       }
     }
 

@@ -9,6 +9,7 @@ import {
   inferOperationalStatusFromShopStatus,
 } from '../../lib/order-statuses';
 import type { OrderOperationalStatus } from '../../lib/order-statuses';
+import { applyOrderStatusWarehouseEffects } from '../orders/order-status-warehouse-effects.service';
 import {
   findShopOrderStatusRecord,
   listShopOrderStatusRecords,
@@ -167,35 +168,55 @@ export async function updateOrderStatus(orderId: string, input: UpdateOrderStatu
     externalStatusId = await findMappedExternalStatusId(order.shopId, operationalStatus);
   }
 
+  let updatedOrder: Awaited<ReturnType<typeof prisma.order.findUnique>> = null;
   if (!externalStatusId || order.shop.platform !== 'PRESTASHOP') {
-    return prisma.order.findUnique({ where: { id: order.id } });
+    updatedOrder = await prisma.order.findUnique({ where: { id: order.id } });
+  } else {
+    const status = await findShopOrderStatusRecord(order.shopId, externalStatusId);
+
+    try {
+      await createClient(order.shop).createOrderHistory({
+        orderId: order.externalOrderId,
+        orderStateId: externalStatusId,
+      });
+
+      updatedOrder = await prisma.order.update({
+        where: { id: order.id },
+        data: {
+          externalStatusId,
+          externalStatusName: status?.name ?? null,
+          ...(status ? { operationalStatus: inferOperationalStatusFromShopStatus(status) } : {}),
+          statusSyncedAt: new Date(),
+          statusSyncError: null,
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się zsynchronizować statusu z PrestaShop';
+      updatedOrder = await prisma.order.update({
+        where: { id: order.id },
+        data: {
+          statusSyncError: message,
+        },
+      });
+    }
   }
 
-  const status = await findShopOrderStatusRecord(order.shopId, externalStatusId);
-
-  try {
-    await createClient(order.shop).createOrderHistory({
-      orderId: order.externalOrderId,
-      orderStateId: externalStatusId,
-    });
-
-    return prisma.order.update({
-      where: { id: order.id },
-      data: {
-        externalStatusId,
-        externalStatusName: status?.name ?? null,
-        ...(status ? { operationalStatus: inferOperationalStatusFromShopStatus(status) } : {}),
-        statusSyncedAt: new Date(),
-        statusSyncError: null,
-      },
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Nie udało się zsynchronizować statusu z PrestaShop';
-    return prisma.order.update({
-      where: { id: order.id },
-      data: {
-        statusSyncError: message,
-      },
-    });
+  // Reczna zmiana statusu w panelu musi miec te same skutki magazynowe co webhook:
+  // wyslane domyka WZ, anulacje/zwroty zwalniaja aktywne rezerwacje.
+  const finalStatus = updatedOrder?.operationalStatus ?? operationalStatus;
+  if (finalStatus) {
+    const effects = await applyOrderStatusWarehouseEffects(order.id, finalStatus);
+    for (const warning of effects.warnings) {
+      console.warn(`[OrderStatus] Order ${order.orderReference}: ${warning}`);
+    }
+    if (effects.errors.length > 0) {
+      // Blad domkniecia WZ nie moze przejsc bezglosnie — operator widzi go w panelu.
+      updatedOrder = await prisma.order.update({
+        where: { id: order.id },
+        data: { statusSyncError: effects.errors.join('; ') },
+      });
+    }
   }
+
+  return updatedOrder;
 }

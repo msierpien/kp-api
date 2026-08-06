@@ -644,6 +644,80 @@ export async function getStockDiscrepancies(query: StockDiscrepanciesQuery = {})
   return { data, total: data.length };
 }
 
+/**
+ * Sieroty przeplywu rezerwacje-dokumenty: stany, ktore nie powinny istniec po
+ * domknieciu zamowienia. Kazda pozycja tutaj oznacza, ze currentStock moze byc
+ * przeklamany albo ze cos czeka na reczna decyzje.
+ */
+export async function getReservationOrphans() {
+  const tenantId = requireTenantId();
+  const staleDraftCutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+
+  const [staleActiveReservations, deadLinkedItems, staleDrafts] = await Promise.all([
+    // (a) ACTIVE rezerwacje zamowien, ktore juz wyszly albo sa zamkniete.
+    prisma.warehouseReservation.findMany({
+      where: {
+        tenantId,
+        status: 'ACTIVE',
+        order: { operationalStatus: { in: ['SHIPPED', 'DELIVERED', 'CANCELLED', 'RETURNED', 'PARTIALLY_RETURNED'] } },
+      },
+      include: {
+        warehouseProduct: { select: { sku: true, name: true } },
+        order: { select: { orderReference: true, operationalStatus: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    }),
+    // (b) Pozycje WZ wskazujace martwe rezerwacje (RELEASED/CANCELLED).
+    prisma.warehouseDocumentItem.findMany({
+      where: {
+        document: { tenantId, type: 'WZ', status: { not: 'CANCELLED' } },
+        reservation: { status: { in: ['RELEASED', 'CANCELLED'] } },
+      },
+      include: {
+        document: { select: { number: true, status: true } },
+        product: { select: { sku: true, name: true } },
+        reservation: { select: { status: true, source: true } },
+      },
+    }),
+    // (c) Robocze WZ starsze niz 14 dni.
+    prisma.warehouseDocument.findMany({
+      where: { tenantId, type: 'WZ', status: 'DRAFT', createdAt: { lt: staleDraftCutoff } },
+      include: { order: { select: { orderReference: true, operationalStatus: true } } },
+      orderBy: { createdAt: 'asc' },
+    }),
+  ]);
+
+  return {
+    staleActiveReservations: staleActiveReservations.map((reservation) => ({
+      id: reservation.id,
+      sku: reservation.warehouseProduct.sku,
+      productName: reservation.warehouseProduct.name,
+      quantity: Number(reservation.quantity),
+      source: reservation.source,
+      orderReference: reservation.order.orderReference,
+      orderStatus: reservation.order.operationalStatus,
+      createdAt: reservation.createdAt,
+    })),
+    deadLinkedDocumentItems: deadLinkedItems.map((item) => ({
+      id: item.id,
+      documentNumber: item.document.number,
+      documentStatus: item.document.status,
+      sku: item.product.sku,
+      productName: item.product.name,
+      quantity: Number(item.quantity),
+      reservationStatus: item.reservation?.status ?? null,
+      reservationSource: item.reservation?.source ?? null,
+    })),
+    staleDraftDocuments: staleDrafts.map((document) => ({
+      id: document.id,
+      number: document.number,
+      createdAt: document.createdAt,
+      orderReference: document.order?.orderReference ?? null,
+      orderStatus: document.order?.operationalStatus ?? null,
+    })),
+  };
+}
+
 function normalizeLowStockThreshold(value?: number) {
   if (value === undefined) return 1;
   if (!Number.isFinite(value)) throw new Error('lowStockThreshold musi być liczbą');

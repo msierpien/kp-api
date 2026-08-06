@@ -91,6 +91,8 @@ export interface CreateWzForOrderInput {
   saveAsDraft?: boolean;
   forceConfirm?: boolean;
   scans?: OrderPackingScanInput[];
+  /** Wewnetrzne: ponowna proba po konflikcie unikalnosci — bez kolejnego retry. */
+  retryAfterConflict?: boolean;
 }
 
 export interface CreateZhForOrderResult {
@@ -835,6 +837,107 @@ export async function createPzFromWholesaleOrder(id: string, input: CreatePzFrom
   };
 }
 
+/**
+ * DRAFT WZ to karta pakowania — pozycje musza odpowiadac biezacym ACTIVE rezerwacjom
+ * LOCAL_STOCK zamowienia. Po realokacji (PZ zamienia backorder na rezerwacje lokalna
+ * z nowym id) albo cyklu release→reserve stare pozycje wskazuja martwe rezerwacje.
+ * Ta funkcja przebudowuje pozycje draftu, zachowujac skany EAN. Pozycje bez nastepcy
+ * (rezerwacja zwolniona, brak nowej) zostaja — confirmDocument zdejmie ich stan
+ * sciezka DETACH.
+ */
+async function syncWzDraftItemsWithReservations(documentId: string) {
+  const document = await prisma.warehouseDocument.findUnique({
+    where: { id: documentId },
+    include: {
+      items: {
+        include: { reservation: { select: { id: true, status: true, source: true, orderItemId: true } } },
+      },
+    },
+  });
+  if (!document || document.type !== 'WZ' || document.status !== 'DRAFT' || !document.orderId) return;
+
+  const activeLocal = await prisma.warehouseReservation.findMany({
+    where: {
+      tenantId: document.tenantId,
+      orderId: document.orderId,
+      status: 'ACTIVE',
+      source: 'LOCAL_STOCK',
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+  const activeById = new Map(activeLocal.map((reservation) => [reservation.id, reservation]));
+
+  const linkedIds = new Set<string>();
+  for (const item of document.items) {
+    if (item.reservationId && activeById.has(item.reservationId)) linkedIds.add(item.reservationId);
+  }
+
+  const removeItemIds: string[] = [];
+  const quantityUpdates: Array<{ itemId: string; quantity: Prisma.Decimal }> = [];
+  const eanByOrderItemId = new Map<string, string>();
+  const eanByProductId = new Map<string, string>();
+
+  for (const item of document.items) {
+    if (!item.reservationId) continue; // reczna/nadmiarowa pozycja — zdejmie stan sama
+
+    const current = activeById.get(item.reservationId);
+    if (current) {
+      if (!new Prisma.Decimal(item.quantity).equals(current.quantity)) {
+        quantityUpdates.push({ itemId: item.id, quantity: new Prisma.Decimal(current.quantity) });
+      }
+      continue;
+    }
+
+    const reservation = item.reservation;
+    if (reservation?.status === 'ACTIVE' && reservation.source === 'WHOLESALE_BACKORDER') {
+      // Towaru nie ma na polce — pozycja wroci po dostawie jako rezerwacja lokalna.
+      removeItemIds.push(item.id);
+      continue;
+    }
+    if (reservation?.status === 'CONSUMED') continue; // wydana innym dokumentem — nie ruszamy
+
+    const orderItemId = reservation?.orderItemId ?? null;
+    const replaced = activeLocal.some((candidate) => !linkedIds.has(candidate.id)
+      && (orderItemId ? candidate.orderItemId === orderItemId : candidate.warehouseProductId === item.productId));
+    if (!replaced) continue; // brak nastepcy — DETACH przy zatwierdzeniu
+
+    const scannedEan = item.scannedEan?.trim();
+    if (scannedEan) {
+      if (orderItemId && !eanByOrderItemId.has(orderItemId)) eanByOrderItemId.set(orderItemId, scannedEan);
+      if (!eanByProductId.has(item.productId)) eanByProductId.set(item.productId, scannedEan);
+    }
+    removeItemIds.push(item.id);
+  }
+
+  const missingReservations = activeLocal.filter((reservation) => !linkedIds.has(reservation.id));
+  if (removeItemIds.length === 0 && missingReservations.length === 0 && quantityUpdates.length === 0) return;
+
+  await prisma.$transaction(async (tx) => {
+    if (removeItemIds.length > 0) {
+      await tx.warehouseDocumentItem.deleteMany({ where: { id: { in: removeItemIds } } });
+    }
+    for (const update of quantityUpdates) {
+      await tx.warehouseDocumentItem.update({
+        where: { id: update.itemId },
+        data: { quantity: update.quantity },
+      });
+    }
+    for (const reservation of missingReservations) {
+      await tx.warehouseDocumentItem.create({
+        data: {
+          documentId,
+          productId: reservation.warehouseProductId,
+          quantity: reservation.quantity,
+          reservationId: reservation.id,
+          scannedEan: (reservation.orderItemId ? eanByOrderItemId.get(reservation.orderItemId) : undefined)
+            ?? eanByProductId.get(reservation.warehouseProductId),
+          notes: 'Synchronizacja pozycji z rezerwacjami',
+        },
+      });
+    }
+  });
+}
+
 /** Skany z pakowania trafiaja na pozycje WZ — to one decyduja, czy WZ mozna zamknac bez pytania o stan. */
 async function applyPackingScansToDocument(documentId: string, scans: OrderPackingScanInput[]) {
   const normalized = scans
@@ -898,17 +1001,25 @@ export async function createWzForOrder(orderId: string, input: CreateWzForOrderI
 
   if (existingDocument) {
     // Roboczy WZ powstaje juz przy rezerwacji, wiec pakowanie musi umiec go domknac:
-    // dopisujemy skany EAN i zatwierdzamy zamiast odsylac "WZ juz istnieje".
+    // synchronizujemy pozycje z rezerwacjami, dopisujemy skany EAN i zatwierdzamy
+    // zamiast odsylac "WZ juz istnieje".
     if (existingDocument.status === 'DRAFT') {
+      await syncWzDraftItemsWithReservations(existingDocument.id);
       await applyPackingScansToDocument(existingDocument.id, input.scans ?? []);
 
       if (input.saveAsDraft !== true && (input.forceConfirm === true || (await getWarehouseSettings(order.shop.tenantId)).autoConfirmWzOnOrder)) {
-        await confirmDocument(existingDocument.id);
-        return {
-          document: await getDocumentById(existingDocument.id),
-          created: false,
-          confirmed: true,
-        };
+        // Auto-confirm z ustawien (bez jawnej akcji uzytkownika) nie moze domykac
+        // dokumentu oznaczonego ostrzezeniem stanu przy tworzeniu.
+        const blockedByStockWarning = input.forceConfirm !== true
+          && metadataRecord(existingDocument.metadataJson).autoConfirmBlockedByStockWarning === true;
+        if (!blockedByStockWarning) {
+          await confirmDocument(existingDocument.id);
+          return {
+            document: await getDocumentById(existingDocument.id),
+            created: false,
+            confirmed: true,
+          };
+        }
       }
 
       return {
@@ -929,12 +1040,17 @@ export async function createWzForOrder(orderId: string, input: CreateWzForOrderI
     return { document: null, created: false, skippedReason: 'Zamówienie nie ma pozycji' };
   }
 
+  // WZ wydaje tylko towar z polki: rezerwacje hurtowe (backorder) nie maja fizycznie
+  // sztuk, wiec nie wchodza na dokument — wejda po PZ, gdy realokacja zamieni je na lokalne.
+  const activeLocalReservationsWhere = {
+    tenantId: order.shop.tenantId,
+    orderId: order.id,
+    status: 'ACTIVE' as const,
+    source: 'LOCAL_STOCK' as const,
+  };
+
   let activeReservations = await prisma.warehouseReservation.findMany({
-    where: {
-      tenantId: order.shop.tenantId,
-      orderId: order.id,
-      status: 'ACTIVE',
-    },
+    where: activeLocalReservationsWhere,
     include: {
       warehouseProduct: true,
       orderItem: true,
@@ -946,11 +1062,7 @@ export async function createWzForOrder(orderId: string, input: CreateWzForOrderI
   if (activeReservations.length === 0) {
     reservationResult = await reserveOrder(order.id);
     activeReservations = await prisma.warehouseReservation.findMany({
-      where: {
-        tenantId: order.shop.tenantId,
-        orderId: order.id,
-        status: 'ACTIVE',
-      },
+      where: activeLocalReservationsWhere,
       include: {
         warehouseProduct: true,
         orderItem: true,
@@ -960,7 +1072,16 @@ export async function createWzForOrder(orderId: string, input: CreateWzForOrderI
   }
 
   if (activeReservations.length === 0) {
-    return { document: null, created: false, skippedReason: 'Brak aktywnych rezerwacji do wydania WZ' };
+    const hasBackorder = await prisma.warehouseReservation.count({
+      where: { tenantId: order.shop.tenantId, orderId: order.id, status: 'ACTIVE', source: 'WHOLESALE_BACKORDER' },
+    });
+    return {
+      document: null,
+      created: false,
+      skippedReason: hasBackorder > 0
+        ? 'Brak pozycji lokalnych do wydania — wszystko czeka na domówienie z hurtowni'
+        : 'Brak aktywnych rezerwacji do wydania WZ',
+    };
   }
 
   const stockWarning = Boolean(
@@ -995,44 +1116,54 @@ export async function createWzForOrder(orderId: string, input: CreateWzForOrderI
       ?? scansByProductId.get(reservation.warehouseProductId)
   );
 
-  const document = await prisma.$transaction(async (tx) => {
-    const documentDate = new Date();
-    const number = await generateDocumentNumber(tx, order.shop.tenantId, 'WZ', documentDate);
+  let document;
+  try {
+    document = await prisma.$transaction(async (tx) => {
+      const documentDate = new Date();
+      const number = await generateDocumentNumber(tx, order.shop.tenantId, 'WZ', documentDate);
 
-    const createdDocument = await tx.warehouseDocument.create({
-      data: {
-        tenantId: order.shop.tenantId,
-        number,
-        type: 'WZ',
-        status: shouldAutoConfirm ? 'CONFIRMED' : 'DRAFT',
-        date: documentDate,
-        description: [
-          `WZ automatyczne dla zamówienia ${order.orderReference}`,
-          shippingDescription,
-        ].filter(Boolean).join('. '),
-        orderId: order.id,
-        isAutoGenerated: true,
-        metadataJson: Object.keys(metadata).length > 0 ? JSON.parse(JSON.stringify(metadata)) : undefined,
-        confirmedAt: shouldAutoConfirm ? new Date() : undefined,
-        items: {
-          create: activeReservations.map((reservation) => ({
-            productId: reservation.warehouseProductId,
-            quantity: reservation.quantity,
-            reservationId: reservation.id,
-            scannedEan: scannedEanForReservation(reservation),
-            notes: `Zamówienie ${order.orderReference}`,
-          })),
+      const createdDocument = await tx.warehouseDocument.create({
+        data: {
+          tenantId: order.shop.tenantId,
+          number,
+          type: 'WZ',
+          status: shouldAutoConfirm ? 'CONFIRMED' : 'DRAFT',
+          date: documentDate,
+          description: [
+            `WZ automatyczne dla zamówienia ${order.orderReference}`,
+            shippingDescription,
+          ].filter(Boolean).join('. '),
+          orderId: order.id,
+          isAutoGenerated: true,
+          metadataJson: Object.keys(metadata).length > 0 ? JSON.parse(JSON.stringify(metadata)) : undefined,
+          confirmedAt: shouldAutoConfirm ? new Date() : undefined,
+          items: {
+            create: activeReservations.map((reservation) => ({
+              productId: reservation.warehouseProductId,
+              quantity: reservation.quantity,
+              reservationId: reservation.id,
+              scannedEan: scannedEanForReservation(reservation),
+              notes: `Zamówienie ${order.orderReference}`,
+            })),
+          },
         },
-      },
-      include: documentDetailInclude,
+        include: documentDetailInclude,
+      });
+
+      if (shouldAutoConfirm) {
+        await consumeDocumentReservations(tx, createdDocument.items);
+      }
+
+      return createdDocument;
     });
-
-    if (shouldAutoConfirm) {
-      await consumeDocumentReservations(tx, createdDocument.items);
-    }
-
-    return createdDocument;
-  });
+  } catch (error) {
+    // Rownolegle wywolanie (webhook + sync) mogl utworzyc WZ chwile temu — czesciowy
+    // indeks unikalny warehouse_documents_wz_per_order zwraca P2002; wracamy do
+    // istniejacego dokumentu zamiast wywalac cala operacje.
+    const isUniqueViolation = error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+    if (!isUniqueViolation || input.retryAfterConflict === true) throw error;
+    return createWzForOrder(orderId, { ...input, retryAfterConflict: true });
+  }
 
   if (shouldAutoConfirm) {
     await syncStockForProducts(
@@ -1082,15 +1213,16 @@ export async function finalizeOrderShipment(orderId: string): Promise<FinalizeOr
 
   try {
     if (document) {
+      await syncWzDraftItemsWithReservations(document.id);
       await confirmDocument(document.id);
       return { status: 'CONFIRMED', documentNumber: document.number };
     }
 
     const activeReservations = await prisma.warehouseReservation.count({
-      where: { tenantId: order.shop.tenantId, orderId, status: 'ACTIVE' },
+      where: { tenantId: order.shop.tenantId, orderId, status: 'ACTIVE', source: 'LOCAL_STOCK' },
     });
     if (activeReservations === 0) {
-      return { status: 'NONE', reason: 'Brak aktywnych rezerwacji do wydania' };
+      return { status: 'NONE', reason: 'Brak aktywnych rezerwacji lokalnych do wydania' };
     }
 
     const result = await createWzForOrder(orderId, { forceConfirm: true });
@@ -1331,6 +1463,16 @@ export async function updateDocument(id: string, input: UpdateDocumentInput) {
 
   let preparedItems: PreparedDocumentItem[] | null = null;
   if (input.items !== undefined) {
+    // Podmiana pozycji z UI zgubi reservationId (deleteMany+createMany), a stan
+    // zdjety przez rezerwacje zostalby zdjety drugi raz przy zatwierdzeniu.
+    if (doc.type === 'WZ') {
+      const linkedItems = await prisma.warehouseDocumentItem.count({
+        where: { documentId: id, reservationId: { not: null } },
+      });
+      if (linkedItems > 0) {
+        throw new Error('Pozycje WZ powiązane z rezerwacjami synchronizuje system — użyj pakowania zamówienia');
+      }
+    }
     preparedItems = await prepareDocumentItems(tenantId ?? doc.tenantId, input.items, true, doc.type as DocumentType);
   }
 
@@ -1384,6 +1526,10 @@ export async function mergeDocumentItem(documentId: string, input: DocumentItemI
         documentId,
         productId: preparedItem.productId,
         ...(isInventory ? {} : { barcodeId: preparedItem.barcodeId ?? null }),
+        // Pozycji z rezerwacja nie wolno powiekszac: stan za nia zdjela rezerwacja,
+        // a nadwyzka na tej samej pozycji nigdy nie zeszlaby ze stanu. Nadwyzka
+        // dostaje osobna pozycje bez rezerwacji (zdejmie stan sama).
+        ...(doc.type === 'WZ' ? { reservationId: null } : {}),
       },
     });
 
@@ -1525,6 +1671,11 @@ export async function updateDocumentItem(documentId: string, itemId: string, inp
     } else if (input.quantity <= 0) {
       throw new Error('Ilość pozycji musi być większa od 0');
     }
+    // Ilosc pozycji z rezerwacja dyktuje rezerwacja (stan zdjeto wg niej) — reczna
+    // zmiana rozjechalaby dokument z magazynem.
+    if (doc.type === 'WZ' && item.reservationId) {
+      throw new Error('Ilość pozycji WZ powiązanej z rezerwacją zmienia się przez rezerwacje zamówienia');
+    }
     data.quantity = input.quantity;
   }
   if (input.systemQuantity !== undefined) {
@@ -1584,11 +1735,13 @@ export async function deleteDocumentItem(documentId: string, itemId: string) {
  * przy zatwierdzeniu zdjac stan samodzielnie (DETACH). Rezerwacje hurtowe nigdy
  * nie ruszaly stanu, wiec zostaja bez zmiany stanu (SKIP).
  */
+type WzReservationDisposition = 'CONSUME' | 'DETACH' | 'DETACH_CANCEL' | 'SKIP';
+
 async function resolveWzReservationDispositions(
   type: DocumentType,
   items: Array<{ id: string; reservationId?: string | null }>,
-): Promise<Map<string, 'CONSUME' | 'DETACH' | 'SKIP'>> {
-  const dispositions = new Map<string, 'CONSUME' | 'DETACH' | 'SKIP'>();
+): Promise<Map<string, WzReservationDisposition>> {
+  const dispositions = new Map<string, WzReservationDisposition>();
   if (type !== 'WZ') return dispositions;
 
   const reservationIds = items
@@ -1607,6 +1760,12 @@ async function resolveWzReservationDispositions(
     const reservation = reservationById.get(item.reservationId);
     if (!reservation) {
       dispositions.set(item.id, 'DETACH');
+      continue;
+    }
+    if (reservation.status === 'ACTIVE' && reservation.source === 'WHOLESALE_BACKORDER') {
+      // Backorder nie zajal stanu, wiec wydanie musi zdjac stan samo, a rezerwacje
+      // hurtowa zamykamy — towar wyjezdza, nie ma juz czego domawiac.
+      dispositions.set(item.id, 'DETACH_CANCEL');
       continue;
     }
     if (reservation.status === 'ACTIVE' || reservation.status === 'CONSUMED') {
@@ -1635,15 +1794,21 @@ export async function confirmDocument(id: string) {
   if (doc.items.length === 0) throw new Error('Dokument nie ma żadnych pozycji');
 
   const dispositions = await resolveWzReservationDispositions(doc.type, doc.items);
-  // Pozycje z martwa rezerwacja (LOCAL_STOCK juz zwolniona) musza same zdjac stan,
-  // bo zwolnienie rezerwacji oddalo towar na magazyn.
+  // Pozycje z martwa rezerwacja (LOCAL_STOCK juz zwolniona) oraz z aktywnym backorderem
+  // musza same zdjac stan — rezerwacja albo oddala towar na magazyn, albo nigdy go nie zajela.
+  const isDetached = (item: { id: string }) => {
+    const disposition = dispositions.get(item.id);
+    return disposition === 'DETACH' || disposition === 'DETACH_CANCEL';
+  };
   const stockItems = doc.items.map((item) => (
-    dispositions.get(item.id) === 'DETACH' ? { ...item, reservationId: null } : item
+    isDetached(item) ? { ...item, reservationId: null } : item
   ));
   const consumableItems = doc.items.filter((item) => dispositions.get(item.id) === 'CONSUME');
-  const detachedItemIds = doc.items
-    .filter((item) => dispositions.get(item.id) === 'DETACH')
-    .map((item) => item.id);
+  const detachedItemIds = doc.items.filter(isDetached).map((item) => item.id);
+  const backorderReservationIdsToCancel = doc.items
+    .filter((item) => dispositions.get(item.id) === 'DETACH_CANCEL')
+    .map((item) => item.reservationId)
+    .filter((reservationId): reservationId is string => Boolean(reservationId));
 
   await assertFullInventoryComplete(doc.tenantId, doc.type, doc.metadataJson, doc.items);
   await assertCanConfirmWithoutNegativeStock(doc.tenantId, doc.type, stockItems);
@@ -1658,6 +1823,17 @@ export async function confirmDocument(id: string) {
         data: { reservationId: null },
       });
     }
+    if (backorderReservationIdsToCancel.length > 0) {
+      // Bez ruchu stanu: backorder nigdy nie zajal currentStock.
+      await tx.warehouseReservation.updateMany({
+        where: { id: { in: backorderReservationIdsToCancel }, status: 'ACTIVE' },
+        data: {
+          status: 'CANCELLED',
+          cancelledAt: new Date(),
+          reason: 'Pozycja wydana dokumentem WZ bez pokrycia lokalnego',
+        },
+      });
+    }
 
     return tx.warehouseDocument.update({
       where: { id },
@@ -1668,7 +1844,7 @@ export async function confirmDocument(id: string) {
       },
         include: documentDetailInclude,
     });
-  });
+  }, { timeout: 20000 });
 
   const affectedProductIds = Array.from(new Set(doc.items.map((item) => item.productId)));
   if (doc.type === 'PZ') {
@@ -1704,6 +1880,18 @@ async function reallocateWholesaleBackordersForProducts(tenantId: string, produc
   const orderIds = Array.from(new Set(reservations.map((reservation) => reservation.orderId)));
   for (const orderId of orderIds) {
     await reserveOrder(orderId);
+  }
+
+  // Realokacja wymienila rezerwacje (nowe id) — robocze WZ tych zamowien musza
+  // dostac pozycje wskazujace nowe rezerwacje, inaczej zatwierdzenie nie zdejmie stanu.
+  if (orderIds.length > 0) {
+    const draftDocuments = await prisma.warehouseDocument.findMany({
+      where: { tenantId, orderId: { in: orderIds }, type: 'WZ', status: 'DRAFT' },
+      select: { id: true },
+    });
+    for (const draft of draftDocuments) {
+      await syncWzDraftItemsWithReservations(draft.id);
+    }
   }
 }
 

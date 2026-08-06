@@ -6,6 +6,7 @@ import {
   STOCK_RESERVATION_ORDER_OPERATIONAL_STATUSES,
   isStockReservationOrderOperationalStatus,
 } from '../src/lib/order-statuses';
+import { resolveWarehouseActionForStatus } from '../src/services/orders/order-status-warehouse-effects.service';
 
 const ROOT = process.cwd();
 const REPLENISHMENT_SERVICE = readFileSync(
@@ -36,12 +37,32 @@ test('warehouse replenishment only reads backorders from reservable order status
   assert.match(REPLENISHMENT_SERVICE, /order:\s*\{\s*is:\s*\{\s*operationalStatus:\s*\{\s*in:\s*STOCK_RESERVATION_ORDER_OPERATIONAL_STATUSES\s*\}/);
 });
 
-test('order sync releases reservations when refreshed status is no longer reservable', () => {
-  assert.match(SYNC_SERVICE, /releaseOrderReservations\(existingOrder\.id\)/);
-  assert.match(SYNC_SERVICE, /!isStockReservationOrderOperationalStatus\(currentStatus\.operationalStatus\)/);
+test('order sync applies shared warehouse effects on refreshed status', () => {
+  assert.match(SYNC_SERVICE, /applyOrderStatusWarehouseEffects\(existingOrder\.id,\s*currentStatus\.operationalStatus\)/);
 });
 
-test('PrestaShop webhook releases reservations for any non-reservable status update', () => {
-  assert.match(WEBHOOK_SERVICE, /shouldReleaseByConfig\s*\|\|\s*!isStockReservationOrderOperationalStatus\(statusUpdate\.operationalStatus\)/);
-  assert.match(WEBHOOK_SERVICE, /releaseOrderReservations\(order\.id\)/);
+test('PrestaShop webhook applies shared warehouse effects on status update', () => {
+  assert.match(WEBHOOK_SERVICE, /applyOrderStatusWarehouseEffects\(order\.id,\s*statusUpdate\.operationalStatus/);
+});
+
+test('status warehouse action decision table', () => {
+  // Wysylka domyka WZ zamiast zwalniac rezerwacje.
+  assert.equal(resolveWarehouseActionForStatus('SHIPPED'), 'FINALIZE_SHIPMENT');
+  assert.equal(resolveWarehouseActionForStatus('DELIVERED'), 'FINALIZE_SHIPMENT');
+  // Statusy rezerwacyjne.
+  assert.equal(resolveWarehouseActionForStatus('PAID'), 'RESERVE');
+  assert.equal(resolveWarehouseActionForStatus('PROCESSING'), 'RESERVE');
+  assert.equal(resolveWarehouseActionForStatus('PACKED'), 'RESERVE');
+  // Zwolnienie tylko dla jawnych statusow zamykajacych.
+  assert.equal(resolveWarehouseActionForStatus('CANCELLED'), 'RELEASE');
+  assert.equal(resolveWarehouseActionForStatus('RETURNED'), 'RELEASE');
+  assert.equal(resolveWarehouseActionForStatus('PARTIALLY_RETURNED'), 'RELEASE');
+  // NEW i status niezmapowany (fallback) NIE moga zwalniac rezerwacji.
+  assert.equal(resolveWarehouseActionForStatus('NEW'), 'NONE');
+  assert.equal(resolveWarehouseActionForStatus('COMPLETELY_UNKNOWN'), 'NONE');
+  assert.equal(resolveWarehouseActionForStatus(null), 'NONE');
+  // Jawna konfiguracja releaseStatusIds wymusza zwolnienie.
+  assert.equal(resolveWarehouseActionForStatus('NEW', { forceRelease: true }), 'RELEASE');
+  // ...ale nie przebija wysylki.
+  assert.equal(resolveWarehouseActionForStatus('SHIPPED', { forceRelease: true }), 'FINALIZE_SHIPMENT');
 });

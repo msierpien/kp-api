@@ -336,6 +336,14 @@ async function refreshOrderStatusAfterReturnDeletion(orderId: string) {
 
   if (['RETURNED', 'PARTIALLY_RETURNED'].includes(order.operationalStatus)) {
     await prisma.order.update({ where: { id: orderId }, data: { operationalStatus: 'PROCESSING' } });
+    // Zwrot wczesniej zwolnil rezerwacje — aktywne zamowienie musi je odzyskac.
+    // Pozycje juz wydane zatwierdzonym WZ pokrywa consumed/DETACH w reserveOrder.
+    try {
+      const { reserveOrder } = await import('./warehouse-reservations.service');
+      await reserveOrder(orderId);
+    } catch (error) {
+      console.warn(`[OrderReturns] Nie udalo sie odtworzyc rezerwacji zamowienia ${orderId}:`, error);
+    }
   }
 }
 
@@ -388,6 +396,22 @@ async function executeOrderReturn(id: string) {
 
 async function performWarehouseStep(orderReturn: LoadedOrderReturn) {
   if (orderReturn.type === 'CANCELLATION') {
+    // Anulowanie po czesciowym zwrocie z restockiem cofneloby caly WZ, mimo ze czesc
+    // towaru juz wrocila dokumentem ZW — stan urosnie podwojnie.
+    const priorRestockingReturns = await prisma.orderReturn.count({
+      where: {
+        orderId: orderReturn.orderId,
+        id: { not: orderReturn.id },
+        type: 'RETURN',
+        restockItems: true,
+        status: { not: 'CANCELLED' },
+        warehouseDocumentId: { not: null },
+      },
+    });
+    if (priorRestockingReturns > 0) {
+      throw new Error('Zamówienie ma już zwrot z przyjęciem towaru — dokończ zwrotem częściowym zamiast anulowania');
+    }
+
     await releaseOrderReservations(orderReturn.orderId);
     const activeWz = orderReturn.order.warehouseDocuments.filter((document) => document.type === 'WZ' && document.status !== 'CANCELLED');
     for (const document of activeWz) {
@@ -399,6 +423,14 @@ async function performWarehouseStep(orderReturn: LoadedOrderReturn) {
   }
 
   if (!orderReturn.restockItems) return;
+
+  // Restock ma sens tylko dla towaru, ktory faktycznie wyjechal zatwierdzonym WZ —
+  // inaczej ZW dopisze stan, ktorego nigdy nie zdjeto.
+  const hasConfirmedWz = orderReturn.order.warehouseDocuments
+    .some((document) => document.type === 'WZ' && document.status === 'CONFIRMED');
+  if (!hasConfirmedWz) {
+    throw new Error('Zamówienie nie ma zatwierdzonego WZ — towar nie został wydany, wyłącz przyjęcie na stan przy tym zwrocie');
+  }
 
   const existingDocument = orderReturn.warehouseDocumentId
     ? await prisma.warehouseDocument.findUnique({ where: { id: orderReturn.warehouseDocumentId } })

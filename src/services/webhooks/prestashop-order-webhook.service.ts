@@ -4,10 +4,9 @@ import { config } from '../../config';
 import prisma from '../../lib/prisma';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
 import { importPrestaShopOrder } from '../sync/sync-orders.service';
-import { releaseOrderReservations } from '../admin/warehouse-reservations.service';
-import { finalizeOrderShipment, shouldAutoCreateWzForTenant } from '../admin/warehouse-documents.service';
+import { shouldAutoCreateWzForTenant } from '../admin/warehouse-documents.service';
+import { applyOrderStatusWarehouseEffects } from '../orders/order-status-warehouse-effects.service';
 import { updateOrderExternalStatusFromWebhook } from '../admin/shop-order-statuses.service';
-import { isShippedOrderOperationalStatus, isStockReservationOrderOperationalStatus } from '../../lib/order-statuses';
 
 export const PRESTASHOP_ORDER_WEBHOOK_EVENT_TYPES = ['order_created', 'order_status_updated'] as const;
 export type PrestaShopOrderWebhookEventType = typeof PRESTASHOP_ORDER_WEBHOOK_EVENT_TYPES[number];
@@ -273,11 +272,6 @@ export async function processShopWebhookEvent(eventId: string) {
       externalStatusId: event.orderStatusId,
       externalStatusName: event.orderStatusName,
     });
-    const isShipped = isShippedOrderOperationalStatus(statusUpdate.operationalStatus);
-    // Wysylka nie jest zwolnieniem rezerwacji — towar wyszedl, wiec zamykamy WZ.
-    const shouldRelease = !isShipped
-      && (shouldReleaseByConfig || !isStockReservationOrderOperationalStatus(statusUpdate.operationalStatus));
-
     if (shouldReserve) {
       const imported = await importPrestaShopOrder(event.shopId, event.externalOrderId, {
         reserveStock: true,
@@ -285,9 +279,10 @@ export async function processShopWebhookEvent(eventId: string) {
         sendPersonalizationEmail: true,
       });
       errors.push(...imported.errors);
-    }
-
-    if (shouldRelease || isShipped) {
+    } else {
+      // Wspolna logika skutkow statusu: SHIPPED/DELIVERED domyka WZ, statusy
+      // anulujace/zwrotowe (albo jawnie skonfigurowane releaseStatusIds) zwalniaja
+      // ACTIVE. Statusy niezmapowane (fallback NEW) nie ruszaja rezerwacji.
       const order = await prisma.order.findUnique({
         where: {
           shopId_externalOrderId: {
@@ -298,13 +293,14 @@ export async function processShopWebhookEvent(eventId: string) {
         select: { id: true },
       });
 
-      if (order && isShipped) {
-        const shipment = await finalizeOrderShipment(order.id);
-        if (shipment.status === 'FAILED') {
-          errors.push(`Order ${event.externalOrderId}: WZ not closed on shipment: ${shipment.reason}`);
+      if (order) {
+        const effects = await applyOrderStatusWarehouseEffects(order.id, statusUpdate.operationalStatus, {
+          forceRelease: shouldReleaseByConfig,
+        });
+        errors.push(...effects.errors.map((message) => `Order ${event.externalOrderId}: ${message}`));
+        for (const warning of effects.warnings) {
+          console.warn(`[Webhook] Order ${event.externalOrderId}: ${warning}`);
         }
-      } else if (order) {
-        await releaseOrderReservations(order.id);
       }
     }
 

@@ -40,6 +40,22 @@ export async function registerWarehouseStockRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.get('/stock/reservation-orphans', {
+    schema: {
+      tags: ['warehouse-diagnostics'],
+      summary: 'Sieroty rezerwacji i dokumentow WZ (stany wymagajace recznej decyzji)',
+    },
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const result = await diagnosticsService.getReservationOrphans();
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Blad pobierania sierot rezerwacji';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   fastify.get('/prestashop-reconciliation', {
     schema: {
       tags: ['warehouse-diagnostics'],

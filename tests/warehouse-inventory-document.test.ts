@@ -115,7 +115,9 @@ describe('warehouse inventory document (INW): logika serwisu', () => {
 
   it('WZ z reservationId nie odejmuje stanu drugi raz, a anulowanie zwalnia rezerwacje', () => {
     assert.match(DOCS_SERVICE, /if \(type === 'WZ' && item\.reservationId\) continue/);
-    assert.match(DOCS_SERVICE, /consumeDocumentReservations\(tx,\s*doc\.items\)/);
+    // Konsumowane sa tylko pozycje z zywa rezerwacja; martwe (DETACH) zdejmuja stan same.
+    assert.match(DOCS_SERVICE, /consumeDocumentReservations\(tx,\s*consumableItems\)/);
+    assert.match(DOCS_SERVICE, /resolveWzReservationDispositions/);
     assert.match(DOCS_SERVICE, /releaseDocumentReservations\(tx,\s*doc\.items\)/);
   });
 

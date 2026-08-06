@@ -14,6 +14,7 @@ const RESERVATION_FLOW_MIGRATION = readFileSync(
   'utf8',
 );
 const DOCS_SERVICE = readFileSync(join(ROOT, 'src/services/admin/warehouse-documents.service.ts'), 'utf8');
+const CSV_TEMPLATE = readFileSync(join(ROOT, 'src/services/admin/wholesale/order-csv-template.ts'), 'utf8');
 const DOCS_ROUTES = readFileSync(join(ROOT, 'src/routes/admin/warehouse/documents.routes.ts'), 'utf8');
 const ORDERS_ROUTES = readFileSync(join(ROOT, 'src/routes/admin/orders.routes.ts'), 'utf8');
 const REPLENISHMENT_SERVICE = readFileSync(join(ROOT, 'src/services/admin/warehouse-replenishment.service.ts'), 'utf8');
@@ -99,9 +100,10 @@ describe('warehouse wholesale order document (ZH)', () => {
   });
 
   it('CSV ZH ma formaty koszyka GoDan i PartyDeco', () => {
-    assert.match(DOCS_SERVICE, /Kod produktu\/Ean', 'Ilość', 'Jednostka miary/);
-    assert.match(DOCS_SERVICE, /'code', 'count'/);
-    assert.match(DOCS_SERVICE, /template === 'GODAN' \? ',' : ';'/);
+    // Formaty CSV mieszkaja w wydzielonym module szablonow.
+    assert.match(CSV_TEMPLATE, /Kod produktu\/Ean', 'Ilość', 'Jednostka miary/);
+    assert.match(CSV_TEMPLATE, /'code', 'count'/);
+    assert.match(CSV_TEMPLATE, /template === 'GODAN' \? ',' : ';'/);
   });
 
   it('zatwierdzenie PZ przelicza aktywne rezerwacje hurtowe', () => {

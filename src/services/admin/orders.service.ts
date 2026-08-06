@@ -285,7 +285,7 @@ export async function getOrdersList(query: OrdersListQueryInput): Promise<Pagina
             shippingSource: true,
             warehouseReservations: {
               where: { status: { in: ['ACTIVE', 'CONSUMED'] } },
-              select: { quantity: true, source: true },
+              select: { quantity: true, source: true, warehouseProductId: true },
             },
             personalizationCase: {
               select: { status: true },
@@ -325,13 +325,19 @@ export async function getOrdersList(query: OrdersListQueryInput): Promise<Pagina
       }
       return null;
     };
-    const readyItems = order.items.filter((item) => {
-      if (!item.warehouseProductId) return false;
-      const reserved = item.warehouseReservations
-        .filter((reservation) => reservation.source === 'LOCAL_STOCK')
-        .reduce((sum, reservation) => sum + Number(reservation.quantity), 0);
-      return reserved >= item.quantity;
-    }).length;
+    // Po wysylce pozycje moga byc wydane sciezka DETACH (bez rezerwacji CONSUMED),
+    // wiec kompletnosci nie da sie odczytac z rezerwacji — zamowienie wyszlo w calosci.
+    const isShippedOrDelivered = ['SHIPPED', 'DELIVERED'].includes(normalizeStatusForStorage(order.operationalStatus));
+    const readyItems = isShippedOrDelivered
+      ? order._count.items
+      : order.items.filter((item) => {
+        if (!item.warehouseProductId) return false;
+        const reserved = item.warehouseReservations
+          .filter((reservation) => reservation.source === 'LOCAL_STOCK'
+            && reservation.warehouseProductId === item.warehouseProductId)
+          .reduce((sum, reservation) => sum + Number(reservation.quantity), 0);
+        return reserved >= item.quantity;
+      }).length;
 
     return {
       id: order.id,
@@ -623,6 +629,16 @@ export async function deleteOrder(orderId: string): Promise<void> {
 
   if (!order) {
     throw new Error('Zamówienie nie istnieje');
+  }
+
+  // Usuniecie zamowienia z zatwierdzonym WZ osierociloby ruchy magazynowe
+  // (kaskada kasuje rezerwacje CONSUMED, dokument traci orderId) — audyt stanu
+  // przestalby sie sumowac. Najpierw zwrot/anulowanie dokumentow.
+  const confirmedWz = await prisma.warehouseDocument.count({
+    where: { orderId, type: 'WZ', status: 'CONFIRMED' },
+  });
+  if (confirmedWz > 0) {
+    throw new Error('Zamówienie ma zatwierdzony dokument WZ — najpierw obsłuż zwrot albo anuluj dokument');
   }
 
   // Usuń w transakcji

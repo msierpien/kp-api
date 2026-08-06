@@ -14,6 +14,7 @@ import * as orderReturnsService from '../../services/admin/order-returns.service
 import * as shopOrderStatusesService from '../../services/admin/shop-order-statuses.service';
 import * as substitutionService from '../../services/admin/order-item-substitution.service';
 import { extractOrderShippingInfo } from '../../services/orders/order-shipping-info.service';
+import { isShippedOrderOperationalStatus } from '../../lib/order-statuses';
 import {
   createManualOrderSchema,
   orderCancellationActionSchema,
@@ -852,6 +853,18 @@ export async function ordersRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest<{ Params: OrderParams }>, reply: FastifyReply) => {
       try {
+        // Po wysylce rezerwacje sa skonsumowane dokumentem WZ — reczne "zwolnienie"
+        // oddaloby na stan towar, ktory fizycznie wyjechal.
+        const order = await prisma.order.findUnique({
+          where: { id: request.params.id },
+          select: { operationalStatus: true },
+        });
+        if (order && isShippedOrderOperationalStatus(order.operationalStatus)) {
+          return reply.status(400).send({
+            error: 'Error',
+            message: 'Zamówienie jest wysłane — zwrot towaru obsłuż przez moduł zwrotów',
+          });
+        }
         const result = await reservationService.releaseOrderReservations(request.params.id);
         return reply.send(result);
       } catch (error) {

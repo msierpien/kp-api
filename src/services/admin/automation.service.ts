@@ -5,7 +5,7 @@ import { decrypt } from '../../lib/encryption';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
 import { generateAccessToken, getTokenExpiryDate, maskToken } from '../../lib/token';
 import { emailService } from '../email/email.service';
-import { confirmDocument } from './warehouse-documents.service';
+import { confirmDocument, syncWzDraftItemsWithReservations } from './warehouse-documents.service';
 import {
   buildDryRunResult,
   executeWebhook,
@@ -192,20 +192,29 @@ async function executeConfirmOrderWzAfterInvoice(
 ): Promise<InvoiceWarehouseDocumentAction> {
   const orderId = context.orderId || context.caseData?.order?.id || context.caseId;
   const tenantId = context.caseData?.order?.shop?.tenantId || getTenantId();
-  const document = await prisma.warehouseDocument.findFirst({
+  const draft = await prisma.warehouseDocument.findFirst({
     where: {
       orderId,
       type: 'WZ',
       status: 'DRAFT',
       ...(tenantId ? { tenantId } : {}),
     },
-    include: { items: true },
+    select: { id: true },
     orderBy: { createdAt: 'asc' },
   });
 
-  if (!document) {
+  if (!draft) {
     return { status: 'NONE', reason: 'Brak roboczego WZ dla zamówienia' };
   }
+
+  // Draft moze byc nieaktualny wzgledem rezerwacji (np. realokacja po PZ) —
+  // ocena skanow i zatwierdzenie musza dotyczyc zsynchronizowanych pozycji,
+  // tak samo jak przy pakowaniu i wysylce.
+  await syncWzDraftItemsWithReservations(draft.id);
+  const document = await prisma.warehouseDocument.findUniqueOrThrow({
+    where: { id: draft.id },
+    include: { items: true },
+  });
 
   const requireScanned = config.requireScanned !== false;
   const allItemsScanned = document.items.length > 0 && document.items.every((item) => Boolean(item.scannedEan?.trim()));

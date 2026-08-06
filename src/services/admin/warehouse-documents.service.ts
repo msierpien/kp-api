@@ -845,7 +845,7 @@ export async function createPzFromWholesaleOrder(id: string, input: CreatePzFrom
  * (rezerwacja zwolniona, brak nowej) zostaja — confirmDocument zdejmie ich stan
  * sciezka DETACH.
  */
-async function syncWzDraftItemsWithReservations(documentId: string) {
+export async function syncWzDraftItemsWithReservations(documentId: string) {
   const document = await prisma.warehouseDocument.findUnique({
     where: { id: documentId },
     include: {

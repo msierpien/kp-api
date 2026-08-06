@@ -75,12 +75,22 @@ export interface BulkUpsertInventoryItemsInput {
 export interface CreateWzForOrderResult {
   document: Awaited<ReturnType<typeof getDocumentById>>;
   created: boolean;
+  /** True gdy dokument zostal zatwierdzony w tym wywolaniu (nowy albo istniejacy roboczy). */
+  confirmed?: boolean;
   skippedReason?: string;
+}
+
+/** Skan z pakowania: EAN zeskanowany dla konkretnej pozycji zamowienia. */
+export interface OrderPackingScanInput {
+  orderItemId?: string | null;
+  productId?: string | null;
+  scannedEan: string;
 }
 
 export interface CreateWzForOrderInput {
   saveAsDraft?: boolean;
   forceConfirm?: boolean;
+  scans?: OrderPackingScanInput[];
 }
 
 export interface CreateZhForOrderResult {
@@ -825,6 +835,42 @@ export async function createPzFromWholesaleOrder(id: string, input: CreatePzFrom
   };
 }
 
+/** Skany z pakowania trafiaja na pozycje WZ — to one decyduja, czy WZ mozna zamknac bez pytania o stan. */
+async function applyPackingScansToDocument(documentId: string, scans: OrderPackingScanInput[]) {
+  const normalized = scans
+    .map((scan) => ({
+      orderItemId: scan.orderItemId?.trim() || null,
+      productId: scan.productId?.trim() || null,
+      scannedEan: scan.scannedEan?.trim() || '',
+    }))
+    .filter((scan) => scan.scannedEan.length > 0);
+  if (normalized.length === 0) return;
+
+  const items = await prisma.warehouseDocumentItem.findMany({
+    where: { documentId },
+    select: { id: true, productId: true, scannedEan: true, reservation: { select: { orderItemId: true } } },
+  });
+
+  const byOrderItemId = new Map<string, string>();
+  const byProductId = new Map<string, string>();
+  for (const scan of normalized) {
+    if (scan.orderItemId && !byOrderItemId.has(scan.orderItemId)) byOrderItemId.set(scan.orderItemId, scan.scannedEan);
+    if (scan.productId && !byProductId.has(scan.productId)) byProductId.set(scan.productId, scan.scannedEan);
+  }
+
+  for (const item of items) {
+    if (item.scannedEan?.trim()) continue;
+    const orderItemId = item.reservation?.orderItemId ?? null;
+    const scannedEan = (orderItemId ? byOrderItemId.get(orderItemId) : undefined) ?? byProductId.get(item.productId);
+    if (!scannedEan) continue;
+
+    await prisma.warehouseDocumentItem.update({
+      where: { id: item.id },
+      data: { scannedEan },
+    });
+  }
+}
+
 export async function createWzForOrder(orderId: string, input: CreateWzForOrderInput = {}): Promise<CreateWzForOrderResult> {
   const contextTenantId = getTenantId();
   const order = await prisma.order.findFirst({
@@ -851,6 +897,27 @@ export async function createWzForOrder(orderId: string, input: CreateWzForOrderI
   });
 
   if (existingDocument) {
+    // Roboczy WZ powstaje juz przy rezerwacji, wiec pakowanie musi umiec go domknac:
+    // dopisujemy skany EAN i zatwierdzamy zamiast odsylac "WZ juz istnieje".
+    if (existingDocument.status === 'DRAFT') {
+      await applyPackingScansToDocument(existingDocument.id, input.scans ?? []);
+
+      if (input.saveAsDraft !== true && (input.forceConfirm === true || (await getWarehouseSettings(order.shop.tenantId)).autoConfirmWzOnOrder)) {
+        await confirmDocument(existingDocument.id);
+        return {
+          document: await getDocumentById(existingDocument.id),
+          created: false,
+          confirmed: true,
+        };
+      }
+
+      return {
+        document: await getDocumentById(existingDocument.id),
+        created: false,
+        skippedReason: 'WZ dla tego zamówienia już istnieje — zapisano skany',
+      };
+    }
+
     return {
       document: await withAuditUsers(existingDocument),
       created: false,
@@ -913,6 +980,21 @@ export async function createWzForOrder(orderId: string, input: CreateWzForOrderI
   }
   const shouldAutoConfirm = input.saveAsDraft !== true && (input.forceConfirm === true || settings.autoConfirmWzOnOrder) && !stockWarning;
 
+  const scansByOrderItemId = new Map<string, string>();
+  const scansByProductId = new Map<string, string>();
+  for (const scan of input.scans ?? []) {
+    const scannedEan = scan.scannedEan?.trim();
+    if (!scannedEan) continue;
+    const orderItemId = scan.orderItemId?.trim();
+    const productId = scan.productId?.trim();
+    if (orderItemId && !scansByOrderItemId.has(orderItemId)) scansByOrderItemId.set(orderItemId, scannedEan);
+    if (productId && !scansByProductId.has(productId)) scansByProductId.set(productId, scannedEan);
+  }
+  const scannedEanForReservation = (reservation: { orderItemId: string | null; warehouseProductId: string }) => (
+    (reservation.orderItemId ? scansByOrderItemId.get(reservation.orderItemId) : undefined)
+      ?? scansByProductId.get(reservation.warehouseProductId)
+  );
+
   const document = await prisma.$transaction(async (tx) => {
     const documentDate = new Date();
     const number = await generateDocumentNumber(tx, order.shop.tenantId, 'WZ', documentDate);
@@ -937,6 +1019,7 @@ export async function createWzForOrder(orderId: string, input: CreateWzForOrderI
             productId: reservation.warehouseProductId,
             quantity: reservation.quantity,
             reservationId: reservation.id,
+            scannedEan: scannedEanForReservation(reservation),
             notes: `Zamówienie ${order.orderReference}`,
           })),
         },
@@ -959,7 +1042,73 @@ export async function createWzForOrder(orderId: string, input: CreateWzForOrderI
     );
   }
 
-  return { document: await withAuditUsers(document), created: true };
+  return { document: await withAuditUsers(document), created: true, confirmed: shouldAutoConfirm };
+}
+
+export interface FinalizeOrderShipmentResult {
+  status: 'CONFIRMED' | 'ALREADY_CONFIRMED' | 'NONE' | 'FAILED';
+  documentNumber?: string;
+  reason?: string;
+}
+
+/**
+ * Wysylka zamowienia to fizyczne wydanie towaru, wiec rezerwacji nie wolno wtedy
+ * zwolnic (to oddaloby towar na stan) — trzeba je skonsumowac dokumentem WZ.
+ */
+export async function finalizeOrderShipment(orderId: string): Promise<FinalizeOrderShipmentResult> {
+  const contextTenantId = getTenantId();
+  const order = await prisma.order.findFirst({
+    where: {
+      id: orderId,
+      ...(contextTenantId ? { shop: { tenantId: contextTenantId } } : {}),
+    },
+    include: { shop: true },
+  });
+  if (!order) return { status: 'NONE', reason: 'Zamówienie nie znalezione' };
+
+  const document = await prisma.warehouseDocument.findFirst({
+    where: {
+      tenantId: order.shop.tenantId,
+      orderId,
+      type: 'WZ',
+      status: { not: 'CANCELLED' },
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  if (document?.status === 'CONFIRMED') {
+    return { status: 'ALREADY_CONFIRMED', documentNumber: document.number };
+  }
+
+  try {
+    if (document) {
+      await confirmDocument(document.id);
+      return { status: 'CONFIRMED', documentNumber: document.number };
+    }
+
+    const activeReservations = await prisma.warehouseReservation.count({
+      where: { tenantId: order.shop.tenantId, orderId, status: 'ACTIVE' },
+    });
+    if (activeReservations === 0) {
+      return { status: 'NONE', reason: 'Brak aktywnych rezerwacji do wydania' };
+    }
+
+    const result = await createWzForOrder(orderId, { forceConfirm: true });
+    if (!result.document) {
+      return { status: 'NONE', reason: result.skippedReason ?? 'Nie utworzono WZ' };
+    }
+    return {
+      status: result.confirmed ? 'CONFIRMED' : 'NONE',
+      documentNumber: result.document.number,
+      reason: result.confirmed ? undefined : 'WZ pozostał roboczy',
+    };
+  } catch (error) {
+    return {
+      status: 'FAILED',
+      documentNumber: document?.number,
+      reason: error instanceof Error ? error.message : 'Nie udało się zamknąć WZ przy wysyłce',
+    };
+  }
 }
 
 export async function createZhForOrder(orderId: string): Promise<CreateZhForOrderResult> {
@@ -1428,6 +1577,48 @@ export async function deleteDocumentItem(documentId: string, itemId: string) {
   });
 }
 
+/**
+ * Rezerwacja przypieta do pozycji WZ moze byc juz nieaktywna, jesli zamowienie
+ * zmienilo status (np. na SHIPPED) zanim ktos zatwierdzil roboczy dokument.
+ * Zwolnienie rezerwacji LOCAL_STOCK oddaje towar na stan, wiec taka pozycja musi
+ * przy zatwierdzeniu zdjac stan samodzielnie (DETACH). Rezerwacje hurtowe nigdy
+ * nie ruszaly stanu, wiec zostaja bez zmiany stanu (SKIP).
+ */
+async function resolveWzReservationDispositions(
+  type: DocumentType,
+  items: Array<{ id: string; reservationId?: string | null }>,
+): Promise<Map<string, 'CONSUME' | 'DETACH' | 'SKIP'>> {
+  const dispositions = new Map<string, 'CONSUME' | 'DETACH' | 'SKIP'>();
+  if (type !== 'WZ') return dispositions;
+
+  const reservationIds = items
+    .map((item) => item.reservationId)
+    .filter((reservationId): reservationId is string => Boolean(reservationId));
+  if (reservationIds.length === 0) return dispositions;
+
+  const reservations = await prisma.warehouseReservation.findMany({
+    where: { id: { in: reservationIds } },
+    select: { id: true, status: true, source: true },
+  });
+  const reservationById = new Map(reservations.map((reservation) => [reservation.id, reservation]));
+
+  for (const item of items) {
+    if (!item.reservationId) continue;
+    const reservation = reservationById.get(item.reservationId);
+    if (!reservation) {
+      dispositions.set(item.id, 'DETACH');
+      continue;
+    }
+    if (reservation.status === 'ACTIVE' || reservation.status === 'CONSUMED') {
+      dispositions.set(item.id, 'CONSUME');
+      continue;
+    }
+    dispositions.set(item.id, reservation.source === 'LOCAL_STOCK' ? 'DETACH' : 'SKIP');
+  }
+
+  return dispositions;
+}
+
 export async function confirmDocument(id: string) {
   const tenantId = getTenantId();
   const context = getTenantContext();
@@ -1443,13 +1634,30 @@ export async function confirmDocument(id: string) {
 
   if (doc.items.length === 0) throw new Error('Dokument nie ma żadnych pozycji');
 
+  const dispositions = await resolveWzReservationDispositions(doc.type, doc.items);
+  // Pozycje z martwa rezerwacja (LOCAL_STOCK juz zwolniona) musza same zdjac stan,
+  // bo zwolnienie rezerwacji oddalo towar na magazyn.
+  const stockItems = doc.items.map((item) => (
+    dispositions.get(item.id) === 'DETACH' ? { ...item, reservationId: null } : item
+  ));
+  const consumableItems = doc.items.filter((item) => dispositions.get(item.id) === 'CONSUME');
+  const detachedItemIds = doc.items
+    .filter((item) => dispositions.get(item.id) === 'DETACH')
+    .map((item) => item.id);
+
   await assertFullInventoryComplete(doc.tenantId, doc.type, doc.metadataJson, doc.items);
-  await assertCanConfirmWithoutNegativeStock(doc.tenantId, doc.type, doc.items);
+  await assertCanConfirmWithoutNegativeStock(doc.tenantId, doc.type, stockItems);
 
   const confirmedDocument = await prisma.$transaction(async (tx) => {
     await applyIncomingPurchaseCosts(tx, doc.type, doc.items);
-    await applyStockDeltas(tx, doc.type, doc.items);
-    await consumeDocumentReservations(tx, doc.items);
+    await applyStockDeltas(tx, doc.type, stockItems);
+    await consumeDocumentReservations(tx, consumableItems);
+    if (detachedItemIds.length > 0) {
+      await tx.warehouseDocumentItem.updateMany({
+        where: { id: { in: detachedItemIds } },
+        data: { reservationId: null },
+      });
+    }
 
     return tx.warehouseDocument.update({
       where: { id },

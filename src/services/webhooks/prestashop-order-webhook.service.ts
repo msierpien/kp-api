@@ -5,8 +5,9 @@ import prisma from '../../lib/prisma';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
 import { importPrestaShopOrder } from '../sync/sync-orders.service';
 import { releaseOrderReservations } from '../admin/warehouse-reservations.service';
+import { finalizeOrderShipment, shouldAutoCreateWzForTenant } from '../admin/warehouse-documents.service';
 import { updateOrderExternalStatusFromWebhook } from '../admin/shop-order-statuses.service';
-import { isStockReservationOrderOperationalStatus } from '../../lib/order-statuses';
+import { isShippedOrderOperationalStatus, isStockReservationOrderOperationalStatus } from '../../lib/order-statuses';
 
 export const PRESTASHOP_ORDER_WEBHOOK_EVENT_TYPES = ['order_created', 'order_status_updated'] as const;
 export type PrestaShopOrderWebhookEventType = typeof PRESTASHOP_ORDER_WEBHOOK_EVENT_TYPES[number];
@@ -272,18 +273,21 @@ export async function processShopWebhookEvent(eventId: string) {
       externalStatusId: event.orderStatusId,
       externalStatusName: event.orderStatusName,
     });
-    const shouldRelease = shouldReleaseByConfig || !isStockReservationOrderOperationalStatus(statusUpdate.operationalStatus);
+    const isShipped = isShippedOrderOperationalStatus(statusUpdate.operationalStatus);
+    // Wysylka nie jest zwolnieniem rezerwacji — towar wyszedl, wiec zamykamy WZ.
+    const shouldRelease = !isShipped
+      && (shouldReleaseByConfig || !isStockReservationOrderOperationalStatus(statusUpdate.operationalStatus));
 
     if (shouldReserve) {
       const imported = await importPrestaShopOrder(event.shopId, event.externalOrderId, {
         reserveStock: true,
-        autoCreateWz: true,
+        autoCreateWz: await shouldAutoCreateWzForTenant(event.shop.tenantId),
         sendPersonalizationEmail: true,
       });
       errors.push(...imported.errors);
     }
 
-    if (shouldRelease) {
+    if (shouldRelease || isShipped) {
       const order = await prisma.order.findUnique({
         where: {
           shopId_externalOrderId: {
@@ -294,7 +298,12 @@ export async function processShopWebhookEvent(eventId: string) {
         select: { id: true },
       });
 
-      if (order) {
+      if (order && isShipped) {
+        const shipment = await finalizeOrderShipment(order.id);
+        if (shipment.status === 'FAILED') {
+          errors.push(`Order ${event.externalOrderId}: WZ not closed on shipment: ${shipment.reason}`);
+        }
+      } else if (order) {
         await releaseOrderReservations(order.id);
       }
     }

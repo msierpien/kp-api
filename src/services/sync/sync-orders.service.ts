@@ -8,7 +8,7 @@ import {
 import { decrypt } from '../../lib/encryption';
 import { emailService } from '../email/email.service';
 import { generateAccessToken, getTokenExpiryDate } from '../../lib/token';
-import { createWzForOrder, shouldAutoCreateWzForTenant } from '../admin/warehouse-documents.service';
+import { createWzForOrder, finalizeOrderShipment, shouldAutoCreateWzForTenant } from '../admin/warehouse-documents.service';
 import { releaseOrderReservations, reserveOrder } from '../admin/warehouse-reservations.service';
 import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/features';
 import {
@@ -25,6 +25,7 @@ import {
 import { resolveOrderSyncFromDate } from './order-sync-date';
 import {
   inferOperationalStatusFromShopStatus,
+  isShippedOrderOperationalStatus,
   isStockReservationOrderOperationalStatus,
 } from '../../lib/order-statuses';
 import type { OrderOperationalStatus } from '../../lib/order-statuses';
@@ -442,6 +443,12 @@ async function importPrestaShopOrderWithContext(
       } catch (reservationError) {
         const message = reservationError instanceof Error ? reservationError.message : 'Unknown reservation error';
         result.errors.push(`Order ${externalOrderId}: reservation not updated: ${message}`);
+      }
+    } else if (currentStatus && isShippedOrderOperationalStatus(currentStatus.operationalStatus)) {
+      // Wysylka: rezerwacje musza zejsc ze stanu dokumentem WZ, a nie wrocic na magazyn.
+      const shipment = await finalizeOrderShipment(existingOrder.id);
+      if (shipment.status === 'FAILED') {
+        result.errors.push(`Order ${externalOrderId}: WZ not closed on shipment: ${shipment.reason}`);
       }
     } else if (currentStatus && !isStockReservationOrderOperationalStatus(currentStatus.operationalStatus)) {
       try {

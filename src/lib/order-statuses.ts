@@ -27,6 +27,12 @@ export const STOCK_RESERVATION_ORDER_OPERATIONAL_STATUSES: OrderOperationalStatu
   'PACKED',
 ];
 
+/** Towar fizycznie opuscil magazyn — rezerwacje trzeba skonsumowac WZ, nie zwalniac. */
+export const SHIPPED_ORDER_OPERATIONAL_STATUSES: OrderOperationalStatus[] = [
+  'SHIPPED',
+  'DELIVERED',
+];
+
 export const RETURN_ORDER_OPERATIONAL_STATUSES: OrderOperationalStatus[] = [
   'PARTIALLY_RETURNED',
   'RETURNED',
@@ -136,6 +142,11 @@ export function isActiveOrderOperationalStatus(value: unknown): boolean {
 export function isStockReservationOrderOperationalStatus(value: unknown): boolean {
   const status = normalizeOrderOperationalStatus(value);
   return Boolean(status && STOCK_RESERVATION_ORDER_OPERATIONAL_STATUSES.includes(status));
+}
+
+export function isShippedOrderOperationalStatus(value: unknown): boolean {
+  const status = normalizeOrderOperationalStatus(value);
+  return Boolean(status && SHIPPED_ORDER_OPERATIONAL_STATUSES.includes(status));
 }
 
 export function isReturnedOrderOperationalStatus(value: unknown): boolean {

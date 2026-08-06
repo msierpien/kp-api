@@ -41,6 +41,11 @@ const orderItemParamsSchema = {
   properties: { id: { type: 'string' }, itemId: { type: 'string' } },
 } as const;
 
+interface CreateOrderWzBody {
+  saveAsDraft?: boolean;
+  scans?: Array<{ orderItemId?: string; productId?: string; scannedEan: string }>;
+}
+
 const looseObjectResponse = {
   type: 'object',
   additionalProperties: true,
@@ -879,7 +884,7 @@ export async function ordersRoutes(fastify: FastifyInstance) {
     }
   );
 
-  fastify.post<{ Params: OrderParams; Body: { saveAsDraft?: boolean } }>(
+  fastify.post<{ Params: OrderParams; Body: CreateOrderWzBody }>(
     '/:id/wz',
     {
       schema: {
@@ -890,6 +895,18 @@ export async function ordersRoutes(fastify: FastifyInstance) {
           type: 'object',
           properties: {
             saveAsDraft: { type: 'boolean' },
+            scans: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['scannedEan'],
+                properties: {
+                  orderItemId: { type: 'string' },
+                  productId: { type: 'string' },
+                  scannedEan: { type: 'string' },
+                },
+              },
+            },
           },
         },
         response: { 200: looseObjectResponse },
@@ -897,12 +914,13 @@ export async function ordersRoutes(fastify: FastifyInstance) {
     },
     async (request: FastifyRequest<{
       Params: OrderParams;
-      Body: { saveAsDraft?: boolean };
+      Body: CreateOrderWzBody;
     }>, reply: FastifyReply) => {
       try {
         const result = await createWzForOrder(request.params.id, {
           saveAsDraft: request.body?.saveAsDraft === true,
           forceConfirm: request.body?.saveAsDraft !== true,
+          scans: request.body?.scans,
         });
         return reply.send(result);
       } catch (error) {

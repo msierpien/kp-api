@@ -259,6 +259,9 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
     ...(options.tenantId ? { tenantId: options.tenantId } : {}),
     ...(options.shopId ? { shopId: options.shopId } : {}),
     isActive: true,
+    // Publikacja stanow dziala na poziomie produktu PS (id_product_attribute=0),
+    // wiec mapowania wariantow (kombinacji) sa wylaczone z syncu stanow.
+    externalCombinationId: '0',
     warehouseProductId: productIds.length > 0 ? { in: productIds } : { not: null },
     shop: { status: 'ACTIVE', platform: 'PRESTASHOP' },
   };

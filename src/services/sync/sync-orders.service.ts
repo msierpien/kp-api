@@ -319,7 +319,10 @@ async function createShopSyncContext(shopId: string): Promise<ShopSyncContext> {
   const mappingsByExternalProductId = new Map<string, any>();
   const mappingsBySku = new Map<string, any>();
   for (const mapping of shop.productMappings as any[]) {
-    mappingsByExternalProductId.set(String(mapping.externalProductId), mapping);
+    // Po product_id dopasowujemy tylko rodzica ('0') — warianty maja wlasne SKU.
+    if ((mapping.externalCombinationId ?? '0') === '0') {
+      mappingsByExternalProductId.set(String(mapping.externalProductId), mapping);
+    }
     if (mapping.externalSku) {
       mappingsBySku.set(mapping.externalSku.trim().toLowerCase(), mapping);
     }
@@ -516,11 +519,13 @@ async function createOrderFromDetails(
   };
 
   const getShopMapping = (item: { product_id: number; product_reference: string }) => {
-    const byExternalId = context.mappingsByExternalProductId.get(String(item.product_id));
-    if (byExternalId) return byExternalId;
-
+    // Najpierw reference: zamowienie na kombinacje niesie SKU wariantu,
+    // wiec mapowanie wariantu ma pierwszenstwo przed rodzicem po product_id.
     const ref = (item.product_reference || '').trim().toLowerCase();
-    return ref ? context.mappingsBySku.get(ref) || null : null;
+    const bySku = ref ? context.mappingsBySku.get(ref) : null;
+    if (bySku) return bySku;
+
+    return context.mappingsByExternalProductId.get(String(item.product_id)) || null;
   };
 
   importItems.forEach((item) => {

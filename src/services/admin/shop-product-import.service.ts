@@ -13,6 +13,10 @@ export interface ImportProductsResult {
   updated: number;
   skipped: number;
   skippedNoSku: number;
+  /** Mapowania wariantów (kombinacji PrestaShop) utworzone/odświeżone. */
+  variants: number;
+  /** Kombinacje pominięte z braku reference (SKU). */
+  variantsSkippedNoSku: number;
 }
 
 export interface ImportProductsOptions {
@@ -114,6 +118,8 @@ export async function importProductsFromShop(
       updated: 0,
       skipped: 0,
       skippedNoSku: 0,
+      variants: 0,
+      variantsSkippedNoSku: 0,
     };
 
     const productIdsWithSku = products
@@ -140,9 +146,10 @@ export async function importProductsFromShop(
 
       await prisma.shopProductMapping.upsert({
         where: {
-          shopId_externalProductId: {
+          shopId_externalProductId_externalCombinationId: {
             shopId,
             externalProductId: product.id,
+            externalCombinationId: '0',
           },
         },
         create: {
@@ -168,6 +175,54 @@ export async function importProductsFromShop(
 
       if (existingProductIds.has(product.id)) result.updated++;
       else result.created++;
+    }
+
+    // Warianty: kombinacje PrestaShop jako osobne mapowania (externalCombinationId != '0').
+    // Zamowienie na kombinacje niesie jej reference, wiec sync trafi w wariant.
+    const productsById = new Map(products.map((product) => [product.id, product]));
+    const combinations = await fetchShopCombinations(shop);
+    for (const combination of combinations) {
+      const parent = productsById.get(combination.productId);
+      if (!parent) continue;
+      if (!combination.sku) {
+        result.variantsSkippedNoSku++;
+        continue;
+      }
+
+      const price = parent.price === undefined
+        ? undefined
+        : Number((parent.price + (combination.priceImpact ?? 0)).toFixed(2));
+
+      await prisma.shopProductMapping.upsert({
+        where: {
+          shopId_externalProductId_externalCombinationId: {
+            shopId,
+            externalProductId: combination.productId,
+            externalCombinationId: combination.id,
+          },
+        },
+        create: {
+          tenantId,
+          shopId,
+          externalProductId: combination.productId,
+          externalCombinationId: combination.id,
+          externalSku: combination.sku,
+          externalEan: combination.ean,
+          externalName: parent.name,
+          externalPrice: price,
+          isActive: parent.active,
+          lastSyncAt: new Date(),
+        },
+        update: {
+          externalSku: combination.sku,
+          externalEan: combination.ean,
+          externalName: parent.name,
+          externalPrice: price,
+          isActive: parent.active,
+          lastSyncAt: new Date(),
+        },
+      });
+      result.variants++;
     }
 
     await prisma.shop.update({
@@ -529,18 +584,34 @@ export async function autoMapShopProducts(input: AutoMapShopProductsInput = {}):
   return result;
 }
 
-async function fetchShopProducts(shop: Shop, options: ImportProductsOptions) {
+function buildShopClient(shop: Shop) {
   if (shop.platform !== 'PRESTASHOP') {
     throw new Error(`Import produktów nie obsługuje jeszcze platformy ${shop.platform}`);
   }
 
   const config = (shop.configJson as any) || {};
-  const client = new PrestaShopClient({
+  return new PrestaShopClient({
     baseUrl: shop.baseUrl,
     apiKey: decrypt(shop.apiKey),
     authType: config.authType || 'WEB_SERVICE',
     adminApiConfig: config.authType === 'ADMIN_API' ? config.adminApi : undefined,
   });
+}
+
+async function fetchShopCombinations(shop: Shop) {
+  const client = buildShopClient(shop);
+  const pageSize = 500;
+  const combinations = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const batch = await client.fetchCombinations({ limit: pageSize, offset });
+    combinations.push(...batch);
+    if (batch.length < pageSize) break;
+  }
+  return combinations;
+}
+
+async function fetchShopProducts(shop: Shop, options: ImportProductsOptions) {
+  const client = buildShopClient(shop);
 
   const limit = normalizeImportLimit(options.limit);
   const pageSize = Math.min(100, limit ?? 100);

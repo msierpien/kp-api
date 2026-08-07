@@ -1858,6 +1858,8 @@ model ShopProductMapping {
   tenantId                  String    @map("tenant_id")
   shopId                    String    @map("shop_id")
   externalProductId         String    @map("external_product_id")
+  /// Id kombinacji PrestaShop; '0' = mapowanie produktu-rodzica (bez wariantu)
+  externalCombinationId     String    @default("0") @map("external_combination_id")
   externalSku               String    @map("external_sku")
   externalEan               String?   @map("external_ean")
   externalName              String?   @map("external_name")
@@ -1877,7 +1879,7 @@ model ShopProductMapping {
   priceSyncLogs           PriceSyncLog[]
   priceChangeHistory      PriceChangeHistory[]
 
-  @@unique([shopId, externalProductId])
+  @@unique([shopId, externalProductId, externalCombinationId])
   @@index([tenantId])
   @@index([shopId])
   @@index([warehouseProductId])

@@ -2040,9 +2040,20 @@ Etap katalogów jest gotowy, gdy:
 
 Warianty prowadzimy jako **osobne produkty magazynowe** w rodzinie SKU (wspólny
 prefiks rozdzielony myślnikami, np. `ZAP-GOL-01`, `ZAP-GOL-02` → baza `ZAP-GOL`;
-logika w `src/lib/sku-family.ts`). PrestaShop-owe kombinacje NIE są obsługiwane
-przez import/publikację/sync zamówień — każdy wariant to osobny produkt prosty
-w sklepie.
+logika w `src/lib/sku-family.ts`). Preferowana forma w sklepie to osobne
+produkty proste, ale **kombinacje PrestaShop są rozróżniane** (2026-08-07):
+
+- import tworzy mapowanie per kombinacja (`ShopProductMapping.externalCombinationId`,
+  `'0'` = rodzic; SKU = reference kombinacji) — kombinacje bez reference są pomijane;
+- sync zamówień dopasowuje najpierw po reference (czyli w wariant), potem po
+  id produktu-rodzica (`sync-orders.service.ts getShopMapping`);
+- każde mapowanie wariantu można powiązać z osobnym produktem magazynowym
+  (własny czas dostawy przez `leadTimeDaysOverride`/grupę czasu dostawy);
+- **sync stanów i cen działa tylko na mapowaniach rodzica** (`externalCombinationId='0'`)
+  — publikacja per kombinacja (id_product_attribute) jest świadomie poza zakresem;
+- PrestaShop nie pokazuje czasu dostawy per kombinacja na karcie produktu —
+  per-wariantowy czas działa w obietnicach wysyłki panelu; ekspozycja w sklepie
+  wymaga rozszerzenia modułu kp_productcontent.
 
 Przepływ krok po kroku (panel kp-admin):
 

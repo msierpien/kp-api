@@ -136,6 +136,8 @@ export async function syncProductPrice(
     tenantId,
     warehouseProductId,
     isActive: true,
+    // Sync cen dziala na cenie produktu PS (rodzica) — warianty pomijamy.
+    externalCombinationId: '0',
     shop: { status: 'ACTIVE' },
   };
   if (options.shopId) where.shopId = options.shopId;
@@ -228,6 +230,7 @@ export async function syncProductPricesBulkForTenant(tenantId: string, items: Bu
         warehouseProductId: { in: productIds },
         shopId: { in: shopIds },
         isActive: true,
+        externalCombinationId: '0',
         shop: { status: 'ACTIVE' },
       },
       include: { shop: true },

@@ -123,6 +123,15 @@ export interface PrestaShopProductDetails {
   active: boolean;
 }
 
+export interface PrestaShopCombinationDetails {
+  id: string;
+  productId: string;
+  sku: string;
+  ean?: string;
+  /** Korekta ceny wzgledem produktu-rodzica (moze byc ujemna). */
+  priceImpact?: number;
+}
+
 export interface PrestaShopCarrierDetails {
   id: string;
   referenceId: string | null;
@@ -501,6 +510,32 @@ export class PrestaShopClient {
         name,
         price: Number.isFinite(price) ? price : undefined,
         active: product.active === undefined ? true : String(product.active) !== '0',
+      };
+    });
+  }
+
+  async fetchCombinations(params: { limit?: number; offset?: number } = {}): Promise<PrestaShopCombinationDetails[]> {
+    const limit = params.limit ?? 500;
+    const offset = params.offset ?? 0;
+    const queryParams = [
+      'display=[id,id_product,reference,ean13,price]',
+      `limit=${offset},${limit}`,
+      'sort=[id_ASC]',
+    ];
+
+    const data = await this.fetchWebService<any>(`combinations?${queryParams.join('&')}`);
+    if (!data.combinations) return [];
+
+    const combinations = Array.isArray(data.combinations) ? data.combinations : [data.combinations];
+
+    return combinations.map((combination: any) => {
+      const priceImpact = combination.price === undefined || combination.price === '' ? undefined : Number(combination.price);
+      return {
+        id: String(combination.id),
+        productId: String(combination.id_product),
+        sku: String(combination.reference ?? '').trim(),
+        ean: String(combination.ean13 ?? '').trim() || undefined,
+        priceImpact: Number.isFinite(priceImpact) ? priceImpact : undefined,
       };
     });
   }

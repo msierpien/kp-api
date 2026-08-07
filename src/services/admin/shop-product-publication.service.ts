@@ -291,9 +291,10 @@ export async function createBulkShopProductsFromWarehouseProducts(
       if (preview.status === 'DUPLICATE_REMOTE' && preview.duplicateRemoteProduct) {
         const mapping = await prisma.shopProductMapping.upsert({
           where: {
-            shopId_externalProductId: {
+            shopId_externalProductId_externalCombinationId: {
               shopId: shop.id,
               externalProductId: String(preview.duplicateRemoteProduct.id),
+              externalCombinationId: '0',
             },
           },
           create: {

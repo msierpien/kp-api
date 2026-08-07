@@ -145,6 +145,12 @@ function productListInclude(shopId?: string) {
             status: true,
           },
         },
+        personalizationTemplate: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
       },
       orderBy: { updatedAt: 'desc' },
       take: shopId ? 10 : 5,

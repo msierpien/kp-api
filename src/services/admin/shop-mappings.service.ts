@@ -11,6 +11,7 @@ export interface ShopMappingsQuery {
   isMapped?: boolean;
   isActive?: boolean;
   personalizationEnabled?: boolean;
+  personalizationTemplateId?: string;
   diagnosis?: 'mapped' | 'ready' | 'missingSku' | 'missingEan' | 'nameOnly' | 'missingData';
 }
 
@@ -50,7 +51,7 @@ function requireTenantId() {
 
 export async function getShopMappings(query: ShopMappingsQuery = {}) {
   const tenantId = requireTenantId();
-  const { page = 1, limit = 50, shopId, warehouseProductId, search, isMapped, isActive, personalizationEnabled, diagnosis } = query;
+  const { page = 1, limit = 50, shopId, warehouseProductId, search, isMapped, isActive, personalizationEnabled, personalizationTemplateId, diagnosis } = query;
   const skip = (page - 1) * limit;
 
   const where: Prisma.ShopProductMappingWhereInput = { tenantId };
@@ -59,6 +60,7 @@ export async function getShopMappings(query: ShopMappingsQuery = {}) {
   if (warehouseProductId) where.warehouseProductId = warehouseProductId;
   if (isActive !== undefined) where.isActive = isActive;
   if (personalizationEnabled !== undefined) where.personalizationEnabled = personalizationEnabled;
+  if (personalizationTemplateId) where.personalizationTemplateId = personalizationTemplateId;
   if (isMapped !== undefined && !warehouseProductId) {
     where.warehouseProductId = isMapped ? { not: null } : null;
   }

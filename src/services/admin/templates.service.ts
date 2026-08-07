@@ -33,6 +33,7 @@ export async function listTemplates() {
       _count: {
         select: {
           personalizedProducts: true,
+          shopProductMappings: { where: { isActive: true } },
         },
       },
     },
@@ -56,6 +57,7 @@ export async function listTemplates() {
       fieldCount: fields.length,
       individualFieldCount: fields.filter((field) => field.scope === 'INDIVIDUAL').length,
       productCount: template._count.personalizedProducts,
+      mappingCount: template._count.shopProductMappings,
       createdAt: template.createdAt,
     };
   });

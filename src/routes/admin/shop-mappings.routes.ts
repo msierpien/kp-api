@@ -18,6 +18,7 @@ export async function shopMappingsRoutes(fastify: FastifyInstance) {
           isMapped: { type: 'boolean' },
           isActive: { type: 'boolean' },
           personalizationEnabled: { type: 'boolean' },
+          personalizationTemplateId: { type: 'string' },
           diagnosis: { type: 'string', enum: ['mapped', 'ready', 'missingSku', 'missingEan', 'nameOnly', 'missingData'] },
         },
       },

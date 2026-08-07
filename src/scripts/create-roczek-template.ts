@@ -9,8 +9,9 @@
  * GRAFIKI NIE MA - miejsce na nia zostaje puste, dokladamy ja recznie
  * w edytorze.
  *
- * Skrypt jest idempotentny - ponowne uruchomienie nadpisuje pola formularza
- * i layout zamiast tworzyc drugi szablon o tym samym kodzie.
+ * UWAGA: szablon byl po utworzeniu poprawiany recznie w edytorze. Ponowne
+ * uruchomienie tego skryptu NADPISZE te poprawki calym layoutem stad - do
+ * dokladania zmian sluza skrypty doszywajace (patrz `roczek-add-rsvp.ts`).
  *
  * Uruchamiany W KONTENERZE `personalization-api` (baza nie jest wystawiona
  * poza siec dockera); lokalnie: pnpm tsx src/scripts/create-roczek-template.ts

@@ -428,6 +428,14 @@ export const orderCancellationActionSchema = orderReturnActionSchema.omit({ item
   items: z.array(orderReturnItemSchema).optional(),
 });
 
+// Zamiana produktu w pozycji zamówienia. Cena i ilość zostają bez zmian —
+// zamieniamy tylko to, co realnie wychodzi z magazynu.
+export const substituteOrderItemSchema = z.object({
+  warehouseProductId: z.string().min(1),
+  reason: z.string().max(1000).optional().nullable(),
+  notifyShop: z.boolean().default(true),
+});
+
 export type IfirmaSettingsInput = z.infer<typeof ifirmaSettingsSchema>;
 export type ShopOrderStatusMappingInput = z.infer<typeof shopOrderStatusMappingSchema>;
 export type UpdateOrderStatusInput = z.infer<typeof updateOrderStatusSchema>;
@@ -435,6 +443,7 @@ export type OrdersListQueryInput = z.infer<typeof ordersListQuerySchema>;
 export type OrdersCountsQueryInput = z.infer<typeof ordersCountsQuerySchema>;
 export type OrderReturnActionInput = z.infer<typeof orderReturnActionSchema>;
 export type OrderCancellationActionInput = z.infer<typeof orderCancellationActionSchema>;
+export type SubstituteOrderItemInput = z.infer<typeof substituteOrderItemSchema>;
 
 // ============================================
 // Template Layout (wizualny edytor szablonów)

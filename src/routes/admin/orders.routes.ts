@@ -12,6 +12,7 @@ import * as invoicesService from '../../services/admin/invoices.service';
 import * as orderShipmentsService from '../../services/admin/order-shipments.service';
 import * as orderReturnsService from '../../services/admin/order-returns.service';
 import * as shopOrderStatusesService from '../../services/admin/shop-order-statuses.service';
+import * as substitutionService from '../../services/admin/order-item-substitution.service';
 import { extractOrderShippingInfo } from '../../services/orders/order-shipping-info.service';
 import {
   createManualOrderSchema,
@@ -19,6 +20,7 @@ import {
   ordersCountsQuerySchema,
   ordersListQuerySchema,
   orderReturnActionSchema,
+  substituteOrderItemSchema,
   updateOrderStatusSchema,
   type CreateManualOrderInput,
   type OrdersCountsQueryInput,
@@ -28,6 +30,16 @@ import {
 interface OrderParams {
   id: string;
 }
+
+interface OrderItemParams extends OrderParams {
+  itemId: string;
+}
+
+const orderItemParamsSchema = {
+  type: 'object',
+  required: ['id', 'itemId'],
+  properties: { id: { type: 'string' }, itemId: { type: 'string' } },
+} as const;
 
 const looseObjectResponse = {
   type: 'object',
@@ -698,6 +710,76 @@ export async function ordersRoutes(fastify: FastifyInstance) {
       }
       const result = await orderReturnsService.createOrderReturn(request.params.id, parsed.data);
       return reply.send(result);
+    },
+  );
+
+  fastify.post<{ Params: OrderItemParams; Body: unknown }>(
+    '/:id/items/:itemId/substitute/preview',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Podgląd zamiany produktu w pozycji zamówienia',
+        params: orderItemParamsSchema,
+        body: { type: 'object', additionalProperties: true },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      const parsed = substituteOrderItemSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: parsed.error.errors[0].message,
+          details: parsed.error.errors,
+        });
+      }
+      try {
+        const result = await substitutionService.previewOrderItemSubstitution(
+          request.params.id,
+          request.params.itemId,
+          parsed.data,
+        );
+        return reply.send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Nie udało się przygotować zamiany';
+        const status = message.includes('nie znalezion') ? 404 : 400;
+        return reply.status(status).send({ error: 'Error', message });
+      }
+    },
+  );
+
+  fastify.post<{ Params: OrderItemParams; Body: unknown }>(
+    '/:id/items/:itemId/substitute',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Zamień produkt w pozycji zamówienia',
+        params: orderItemParamsSchema,
+        body: { type: 'object', additionalProperties: true },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      const parsed = substituteOrderItemSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: parsed.error.errors[0].message,
+          details: parsed.error.errors,
+        });
+      }
+      try {
+        const result = await substitutionService.substituteOrderItem(
+          request.params.id,
+          request.params.itemId,
+          parsed.data,
+        );
+        return reply.send(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Nie udało się zamienić produktu';
+        const status = message.includes('nie znalezion') ? 404 : 400;
+        return reply.status(status).send({ error: 'Error', message });
+      }
     },
   );
 

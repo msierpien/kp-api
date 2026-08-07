@@ -1218,10 +1218,27 @@ export class PrestaShopClient {
       .filter((row: PrestaShopBundleOrderSelection | null): row is PrestaShopBundleOrderSelection => Boolean(row));
   }
 
-  async addOrderNote(orderId: number, message: string): Promise<void> {
-    // This would require order_histories endpoint
-    // Implementation depends on PrestaShop version
-    console.log(`Would add note to order ${orderId}: ${message}`);
+  /**
+   * Notatka wewnętrzna przy zamówieniu (widoczna w panelu sklepu, nie dla klienta).
+   */
+  async addOrderNote(input: {
+    orderId: number | string;
+    cartId?: unknown;
+    customerId?: unknown;
+    message: string;
+  }): Promise<{ orderMessageId: string | null }> {
+    const orderId = normalizeId(input.orderId);
+    if (!orderId) throw new Error('PrestaShop order id is required');
+
+    const orderMessageId = await this.createOrderMessage({
+      orderId,
+      cartId: normalizeId(input.cartId),
+      customerId: normalizeId(input.customerId),
+      message: input.message,
+      private: true,
+    });
+
+    return { orderMessageId };
   }
 
   private async createOrderMessage(input: {

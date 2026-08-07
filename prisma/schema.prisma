@@ -265,6 +265,14 @@ model OrderItem {
   shippingDate          DateTime? @map("shipping_date")
   shippingLeadTimeDays  Int?     @map("shipping_lead_time_days")
   shippingSource        String?  @map("shipping_source")
+  // Ręczna zamiana produktu w pozycji (zamiennik zamiast tego, co przyszło ze sklepu).
+  // Snapshot oryginału zostaje, bo sklep nadal zna pierwotny produkt.
+  isSubstituted         Boolean  @default(false) @map("is_substituted")
+  substitutedFromSku    String?  @map("substituted_from_sku")
+  substitutedFromName   String?  @map("substituted_from_name")
+  substitutedFromProductId String? @map("substituted_from_product_id")
+  substitutedAt         DateTime? @map("substituted_at")
+  substitutionReason    String?  @map("substitution_reason") @db.Text
   payloadJson           Json?    @map("payload_json")
   createdAt             DateTime @default(now()) @map("created_at")
   updatedAt             DateTime @updatedAt @map("updated_at")

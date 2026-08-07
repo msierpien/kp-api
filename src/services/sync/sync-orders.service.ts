@@ -521,11 +521,15 @@ async function createOrderFromDetails(
   const getShopMapping = (item: { product_id: number; product_reference: string }) => {
     // Najpierw reference: zamowienie na kombinacje niesie SKU wariantu,
     // wiec mapowanie wariantu ma pierwszenstwo przed rodzicem po product_id.
+    // Niezmapowany wariant nie moze jednak przeslonic zmapowanego rodzica —
+    // wtedy zamowienie straciloby powiazanie z magazynem i personalizacja.
     const ref = (item.product_reference || '').trim().toLowerCase();
     const bySku = ref ? context.mappingsBySku.get(ref) : null;
-    if (bySku) return bySku;
+    const byExternalId = context.mappingsByExternalProductId.get(String(item.product_id)) || null;
 
-    return context.mappingsByExternalProductId.get(String(item.product_id)) || null;
+    if (bySku?.warehouseProductId) return bySku;
+    if (byExternalId?.warehouseProductId) return byExternalId;
+    return bySku || byExternalId;
   };
 
   importItems.forEach((item) => {

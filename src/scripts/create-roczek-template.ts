@@ -3,8 +3,8 @@
  * 140 x 140 mm, trzy zaprojektowane strony:
  *   1. Okladka - "mam juz Roczek" + ZAPROSZENIE
  *   2. Wnetrze lewe - "Ale szok, mam juz ROK!"
- *   3. Wnetrze prawe - naglowek "zaproszenie" i formularz z kropkowanymi
- *      liniami do wypelnienia recznie
+ *   3. Wnetrze prawe - spersonalizowane zaproszenie: dziecko wraz z rodzicami
+ *      zaprasza imiennie wskazanego goscia
  *
  * GRAFIKI NIE MA - miejsce na nia zostaje puste, dokladamy ja recznie
  * w edytorze.
@@ -25,7 +25,7 @@ const TENANT_SLUG = 'kreatywne-papierki'
 const TEMPLATE_CODE = 'ROCZEK'
 const TEMPLATE_NAME = 'Roczek'
 const TEMPLATE_DESCRIPTION =
-  'Zaproszenie na roczek - kwadratowa karta składana 140 x 140 mm, trzy strony: okładka, wnętrze lewe i formularz z liniami do wypełnienia.'
+  'Zaproszenie na roczek - kwadratowa karta składana 140 x 140 mm, trzy strony: okładka, wnętrze lewe i spersonalizowane zaproszenie od dziecka wraz z rodzicami.'
 
 const DPI = 300
 const PAGE_MM = 140
@@ -60,14 +60,16 @@ type FieldInput = {
   helpText?: string
   defaultValue?: string
   maxLength?: number
+  /** Lista wyboru - trafia do `optionsJson`. */
+  options?: string[]
 }
 
 /**
- * Formularz jest krotki celowo.
+ * Cala tresc zaproszenia idzie z odpowiedzi - karta nie ma juz nic do
+ * dopisania dlugopisem.
  *
- * Karta jest wypelniana RECZNIE (kropkowane linie), wiec per zamowienie nie ma
- * czego podstawiac. Edytowalne zostaja tylko trzy napisy pisane recznie - dzieki
- * nim ten sam uklad obsluzy "2 latka" czy "3 latka" bez ruszania warstw.
+ * `guest_names` jest jedynym polem PER SZTUKA: kazdy egzemplarz w zamowieniu
+ * dostaje innego goscia, reszta jest wspolna.
  */
 const FIELDS: FieldInput[] = [
   {
@@ -92,14 +94,76 @@ const FIELDS: FieldInput[] = [
     maxLength: 60,
   },
   {
-    key: 'occasion_line',
-    label: 'Okazja (wiersz z urodzinami)',
+    key: 'child_name',
+    label: 'Imię dziecka',
     type: 'text',
     scope: 'SHARED',
     required: true,
     sortOrder: 3,
-    defaultValue: 'NA PRZYJĘCIE Z OKAZJI PIERWSZYCH URODZIN',
-    helpText: 'Wersaliki - krój nie zamienia liter automatycznie.',
+    defaultValue: 'Oluś',
+    // Od imienia zalezy orzeczenie w kolejnym wierszu ("zaprasza" kontra
+    // "zapraszaja"), dlatego mianownik i jedno dziecko.
+    helpText: 'Mianownik, jedno dziecko - np. „Oluś”, „Zosia”.',
+    maxLength: 20,
+  },
+  {
+    key: 'host_phrase',
+    label: 'Kto zaprasza',
+    type: 'select',
+    scope: 'SHARED',
+    required: true,
+    sortOrder: 4,
+    defaultValue: 'Wraz z Rodzicami zaprasza',
+    options: [
+      'Wraz z Rodzicami zaprasza',
+      'Wraz z Mamą zaprasza',
+      'Wraz z Tatą zaprasza',
+      'Wraz z Rodzicami i Rodzeństwem zaprasza',
+      'Wraz z Rodzicami i Chrzestnymi zaprasza',
+    ],
+    maxLength: 60,
+  },
+  {
+    key: 'guest_names',
+    label: 'Zapraszani goście',
+    type: 'text',
+    // Jedyne pole per sztuka - na kazdym zaproszeniu stoi inny gosc.
+    scope: 'INDIVIDUAL',
+    required: true,
+    sortOrder: 5,
+    defaultValue: 'Państwa Kowalskich',
+    // Zdanie brzmi "zaprasza KOGO", wiec wpisujemy biernik - system nie odmieni.
+    helpText: 'Biernik („Państwa Kowalskich”, „Ciocię Anię z Rodziną”). Osobna treść dla każdego zaproszenia.',
+    maxLength: 60,
+  },
+  {
+    key: 'occasion_line',
+    label: 'Na co zaproszenie',
+    type: 'text',
+    scope: 'SHARED',
+    required: true,
+    sortOrder: 6,
+    defaultValue: 'na urodzinowe świętowanie.',
+    maxLength: 60,
+  },
+  {
+    key: 'party_datetime',
+    label: 'Data i godzina przyjęcia',
+    type: 'text',
+    scope: 'SHARED',
+    required: true,
+    sortOrder: 7,
+    defaultValue: '12.06.2026, godz. 14:00',
+    maxLength: 40,
+  },
+  {
+    key: 'party_place',
+    label: 'Miejsce przyjęcia',
+    type: 'text',
+    scope: 'SHARED',
+    required: true,
+    sortOrder: 8,
+    defaultValue: 'Sala Zabaw „Bajkowo” w Krakowie',
     maxLength: 60,
   },
 ]
@@ -252,79 +316,119 @@ function insideLeftLayers() {
 }
 
 // ============================================
-// Strona 3 - wnetrze prawe (formularz)
+// Strona 3 - wnetrze prawe (spersonalizowane zaproszenie)
 // ============================================
+// Kropkowanych linii do wypelnienia dlugopisem juz nie ma - cala tresc idzie
+// z odpowiedzi, wiec karta wychodzi z druku gotowa.
 
-/**
- * Kropkowana linia jako TEKST, nie grafika.
- *
- * Dzieki temu linia trzyma sie wiersza przy kazdej zmianie tresci i skladu,
- * a grafik moze ja skrocic zwyklym kasowaniem kropek - bez podmiany assetu.
- * Liczba kropek dobrana tak, zeby wiersz siegal prawej krawedzi bloku.
- */
-const dots = (count: number) => '.'.repeat(count)
-
-const FORM_LEFT_MM = 14
-const FORM_WIDTH_MM = 112
-const FORM_FIRST_LINE_MM = 36
-const FORM_LINE_STEP_MM = 11
-
-type FormLine = { id: string; name: string; text: string; align: 'left' | 'right'; fieldKey?: string }
-
-const FORM_LINES: FormLine[] = [
-  { id: 'form_intro', name: 'Niniejszym...', text: 'NINIEJSZYM MAMY ZASZCZYT ZAPROSIĆ', align: 'right' },
-  { id: 'form_guest', name: 'Sz.P. + linia', text: `SZ.P. ${dots(97)}`, align: 'left' },
-  {
-    id: 'form_occasion',
-    name: 'Okazja',
-    text: defaults.occasion_line,
-    align: 'right',
-    fieldKey: 'occasion_line',
-  },
-  { id: 'form_occasion_line', name: 'Linia pod okazją', text: dots(107), align: 'left' },
-  { id: 'form_when', name: 'Które odbędzie się', text: 'KTÓRE ODBĘDZIE SIĘ', align: 'right' },
-  { id: 'form_date', name: 'W dniu / o godzinie', text: `W DNIU ${dots(36)} O GODZINIE ${dots(36)}`, align: 'left' },
-  { id: 'form_place', name: 'W... + linia', text: `W ${dots(102)}`, align: 'left' },
-  { id: 'form_rsvp', name: 'Prosimy o potwierdzenie', text: 'PROSIMY O POTWIERDZENIE PRZYBYCIA', align: 'right' },
-  { id: 'form_rsvp_line', name: 'Linia pod potwierdzeniem', text: dots(107), align: 'left' },
-]
+/** Wspolna kolumna tekstu - wszystko na tej stronie jest wysrodkowane. */
+const COLUMN_LEFT_MM = 12
+const COLUMN_WIDTH_MM = 116
 
 function insideRightLayers() {
-  const header = textbox({
-    id: 'form_header',
-    name: 'Nagłówek „zaproszenie”',
-    text: 'zaproszenie',
-    leftMm: 20,
-    topMm: 12,
-    widthMm: 100,
-    heightMm: 16,
-    zIndex: 0,
-    fontFamily: SCRIPT_FONT,
-    fontSize: 34,
-    fill: INK_SCRIPT,
-    lineHeight: 1,
-    textAlign: 'center',
-  })
-
-  const lines = FORM_LINES.map((line, index) =>
+  return [
+    // Imie wchodzi przez `{{ child_name }}`, a nie przez `fieldKey` - dzieki
+    // temu w jednym wierszu stoi obok stalej reszty naglowka. Podstawianie
+    // liczy tak samo edytor, portal i renderer druku.
     textbox({
-      id: line.id,
-      name: line.name,
-      ...(line.fieldKey ? { fieldKey: line.fieldKey } : {}),
-      text: line.text,
-      leftMm: FORM_LEFT_MM,
-      topMm: FORM_FIRST_LINE_MM + index * FORM_LINE_STEP_MM,
-      widthMm: FORM_WIDTH_MM,
-      heightMm: 7,
-      zIndex: index + 1,
-      fontFamily: SERIF_FONT,
-      fontSize: 8,
-      letterSpacing: 120,
-      textAlign: line.align,
-    })
-  )
+      id: 'headline',
+      name: 'Nagłówek',
+      text: '{{ child_name }} kończy Roczek!',
+      leftMm: COLUMN_LEFT_MM,
+      topMm: 32,
+      widthMm: COLUMN_WIDTH_MM,
+      heightMm: 18,
+      zIndex: 0,
+      fontFamily: SCRIPT_FONT,
+      fontSize: 30,
+      fill: INK_SCRIPT,
+      lineHeight: 1,
+      textAlign: 'center',
+    }),
 
-  return [header, ...lines]
+    textbox({
+      id: 'host_phrase',
+      name: 'Kto zaprasza',
+      fieldKey: 'host_phrase',
+      text: defaults.host_phrase,
+      leftMm: COLUMN_LEFT_MM,
+      topMm: 60,
+      widthMm: COLUMN_WIDTH_MM,
+      heightMm: 7,
+      zIndex: 1,
+      fontFamily: SERIF_FONT,
+      fontSize: 9,
+      letterSpacing: 120,
+      textAlign: 'center',
+    }),
+
+    textbox({
+      id: 'guest_names',
+      name: 'Zapraszani goście',
+      fieldKey: 'guest_names',
+      text: defaults.guest_names,
+      leftMm: COLUMN_LEFT_MM,
+      topMm: 69,
+      widthMm: COLUMN_WIDTH_MM,
+      // Dwa wiersze zapasu - "Ciocię Anię z Rodziną i Babcię Halinkę" nie
+      // zmiesci sie w jednej linii.
+      heightMm: 12,
+      zIndex: 2,
+      fontFamily: SERIF_FONT,
+      fontSize: 13,
+      letterSpacing: 60,
+      lineHeight: 1.35,
+      textAlign: 'center',
+    }),
+
+    textbox({
+      id: 'occasion_line',
+      name: 'Na co zaproszenie',
+      fieldKey: 'occasion_line',
+      text: defaults.occasion_line,
+      leftMm: COLUMN_LEFT_MM,
+      topMm: 83,
+      widthMm: COLUMN_WIDTH_MM,
+      heightMm: 7,
+      zIndex: 3,
+      fontFamily: SERIF_FONT,
+      fontSize: 9,
+      letterSpacing: 120,
+      textAlign: 'center',
+    }),
+
+    textbox({
+      id: 'party_datetime',
+      name: 'Data i godzina',
+      fieldKey: 'party_datetime',
+      text: defaults.party_datetime,
+      leftMm: COLUMN_LEFT_MM,
+      topMm: 98,
+      widthMm: COLUMN_WIDTH_MM,
+      heightMm: 8,
+      zIndex: 4,
+      fontFamily: SERIF_FONT,
+      fontSize: 10.5,
+      letterSpacing: 80,
+      textAlign: 'center',
+    }),
+
+    textbox({
+      id: 'party_place',
+      name: 'Miejsce',
+      fieldKey: 'party_place',
+      text: defaults.party_place,
+      leftMm: COLUMN_LEFT_MM,
+      topMm: 108,
+      widthMm: COLUMN_WIDTH_MM,
+      heightMm: 8,
+      zIndex: 5,
+      fontFamily: SERIF_FONT,
+      fontSize: 10.5,
+      letterSpacing: 80,
+      textAlign: 'center',
+    }),
+  ]
 }
 
 export function buildLayout() {
@@ -415,7 +519,7 @@ async function main() {
       maxLength: field.maxLength ?? null,
       minLength: null,
       pattern: null,
-      optionsJson: Prisma.JsonNull,
+      optionsJson: field.options ?? Prisma.JsonNull,
       repeaterGroupKey: null,
       validationRulesJson: Prisma.JsonNull,
     }

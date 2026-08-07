@@ -838,6 +838,29 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.get('/products/:id/variants', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Rodzina wariantów produktu (wspólny prefiks SKU)',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string' } },
+      },
+    },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await warehouseProductService.getProductVariants(request.params.id);
+      if (!result) return reply.status(404).send({ error: 'Not Found', message: 'Produkt nie znaleziony' });
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Błąd pobierania wariantów produktu';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      fastify.log.error(error);
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   fastify.get('/products/:id/reservations', {
     schema: {
       tags: ['warehouse-reservations'],

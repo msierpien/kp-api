@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
+import { skuFamilyBase } from '../../lib/sku-family';
 import {
   getInventoryPublicationDecision,
   resolveInventoryPublishedLeadTime,
@@ -396,6 +397,53 @@ export async function getProductViewCounts(query: ProductViewCountsQuery = {}): 
   );
 
   return Object.fromEntries(viewIds.map((viewId, index) => [viewId, counts[index]])) as ProductViewCounts;
+}
+
+export async function getProductVariants(id: string) {
+  const tenantId = requireTenantId();
+  const product = await prisma.warehouseProduct.findFirst({
+    where: { id, ...(tenantId ? { tenantId } : {}) },
+    select: { id: true, sku: true },
+  });
+  if (!product) return null;
+
+  const base = skuFamilyBase(product.sku);
+  if (!base) return { base: null, variants: [] };
+
+  const variants = await prisma.warehouseProduct.findMany({
+    where: {
+      ...(tenantId ? { tenantId } : {}),
+      OR: [
+        { sku: { equals: base, mode: 'insensitive' } },
+        { sku: { startsWith: `${base}-`, mode: 'insensitive' } },
+      ],
+    },
+    select: {
+      id: true,
+      sku: true,
+      name: true,
+      isActive: true,
+      isStockTracked: true,
+      currentStock: true,
+      retailPrice: true,
+      catalogId: true,
+      catalog: { select: { id: true, name: true } },
+      shopProductMappings: {
+        where: { isActive: true },
+        select: {
+          id: true,
+          shopId: true,
+          personalizationEnabled: true,
+          personalizationTemplateId: true,
+          shop: { select: { id: true, name: true } },
+          personalizationTemplate: { select: { id: true, name: true } },
+        },
+      },
+    },
+    orderBy: { sku: 'asc' },
+  });
+
+  return { base, variants };
 }
 
 export async function getProductById(id: string) {

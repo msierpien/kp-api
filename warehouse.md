@@ -2033,3 +2033,38 @@ Etap katalogów jest gotowy, gdy:
 - Swagger pokazuje wszystkie nowe endpointy;
 - `pnpm build` przechodzi;
 - `warehouse.md` zawiera aktualne informacje o modelu, migracji, API i testach.
+
+---
+
+## 17. Jak dodać produkt z wariantami do katalogu, sklepu i personalizacji (2026-08)
+
+Warianty prowadzimy jako **osobne produkty magazynowe** w rodzinie SKU (wspólny
+prefiks rozdzielony myślnikami, np. `ZAP-GOL-01`, `ZAP-GOL-02` → baza `ZAP-GOL`;
+logika w `src/lib/sku-family.ts`). PrestaShop-owe kombinacje NIE są obsługiwane
+przez import/publikację/sync zamówień — każdy wariant to osobny produkt prosty
+w sklepie.
+
+Przepływ krok po kroku (panel kp-admin):
+
+1. **Utwórz produkty**: Magazyn → Produkty → „Nowy produkt" — SKU wg konwencji
+   rodziny (`BAZA-01`, `BAZA-02`…), wybierz katalog (np. „Kreatywne Papierki").
+   Produkty personalizowane robione na zamówienie zostawiaj z wyłączonym
+   śledzeniem stanów (`isStockTracked=false`). Kolejne warianty najszybciej
+   dodaje się z karty produktu: zakładka **Warianty → „Dodaj wariant"**
+   (prefill SKU, katalogu i jednostki).
+2. **Opublikuj do sklepu**: zaznacz produkty rodziny na liście (badge rodziny
+   przy SKU linkuje do `?search=BAZA-`) → akcja „Utwórz produkty w sklepie"
+   (`BulkShopProductPublicationDialog`). Publikacja tworzy produkty w PrestaShop
+   i automatycznie zakłada `ShopProductMapping`.
+3. **Włącz personalizację**: Magazyn → Mapowania → zaznacz mapowania rodziny →
+   „Personalizacja zaznaczonych" → wybierz szablon. Alternatywnie pojedynczo
+   z karty produktu (zakładka **Połączenia**). Personalizacja wymaga mapowania
+   powiązanego z produktem magazynowym.
+4. **Weryfikacja**: karta produktu → Połączenia (katalog, mapowania+szablon,
+   oferty hurtowni); strona szablonów pokazuje licznik „N produktów w sklepach"
+   z linkiem do przefiltrowanych mapowań; `GET /admin/warehouse/products/:id/variants`
+   zwraca całą rodzinę.
+
+Zamówienie na wariant trafia przez sync do właściwego produktu (match po
+`product_id`/`reference`), a case personalizacji powstaje z szablonu mapowania.
+Produkty nieśledzone nie tworzą rezerwacji ani pozycji WZ.

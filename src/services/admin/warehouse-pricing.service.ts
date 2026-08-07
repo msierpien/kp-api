@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { decrypt } from '../../lib/encryption';
 import { getTenantId } from '../../lib/tenant-context';
+import { skuFamilyBase } from '../../lib/sku-family';
 import { syncProductPricesBulkForTenant } from '../price/price-sync.service';
 import type { PriceSyncTriggeredBy } from '../queue/price-sync.queue';
 import { PrestaShopClient, type PrestaShopCategoryDetails } from '../prestashop/prestashop-client';
@@ -926,16 +927,6 @@ async function resolveCategoryWarehouseProductIds(
   }
 
   return productIds;
-}
-
-function skuFamilyBase(sku: string) {
-  const normalized = sku.trim().replace(/\s+/g, '').toUpperCase();
-  if (!normalized || !normalized.includes('-')) return null;
-  const parts = normalized.split('-').filter(Boolean);
-  if (parts.length < 2) return null;
-  if (parts.length >= 3) return parts.slice(0, -1).join('-');
-  if (!/[A-Z]/.test(parts[0])) return null;
-  return parts[0];
 }
 
 function variantFamily(product: ProductForPricing) {

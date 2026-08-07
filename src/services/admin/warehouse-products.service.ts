@@ -223,14 +223,15 @@ function buildProductsWhere(query: ProductsWhereQuery, tenantId: string | null |
       ? { some: { isActive: true } }
       : { none: { isActive: true } };
   }
-  if (hasShopMapping !== undefined) {
+  if (hasShopMapping !== undefined || shopId) {
     const shopMappingFilter = {
       isActive: true,
       ...(shopId ? { shopId } : {}),
     };
-    where.shopProductMappings = hasShopMapping
-      ? { some: shopMappingFilter }
-      : { none: shopMappingFilter };
+    // Sam shopId oznacza "produkty powiązane z tym sklepem"
+    where.shopProductMappings = hasShopMapping === false
+      ? { none: shopMappingFilter }
+      : { some: shopMappingFilter };
   }
   const activeWholesaleMappingFilter = {
     isActive: true,

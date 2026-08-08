@@ -341,6 +341,10 @@ async function layerToFabricObject(
       fontStyle: props.fontStyle || 'normal',
       fill: props.fill,
       textAlign: props.textAlign as any,
+      // Odstep miedzy wierszami z szablonu. Bez tego renderer liczyl domyslna
+      // wartoscia fabrica (1,16), wiec ustawienie z edytora nie docieralo na
+      // wydruk - podglad projektanta i wydruk mialy inny sklad.
+      lineHeight: Number((props as any).lineHeight) || 1.2,
       originX: 'center',
       originY: 'center',
     });
@@ -368,6 +372,10 @@ async function layerToFabricObject(
       fontStyle: props.fontStyle || 'normal',
       fill: props.fill,
       textAlign: props.textAlign as any,
+      // Odstep miedzy wierszami z szablonu. Bez tego renderer liczyl domyslna
+      // wartoscia fabrica (1,16), wiec ustawienie z edytora nie docieralo na
+      // wydruk - podglad projektanta i wydruk mialy inny sklad.
+      lineHeight: Number((props as any).lineHeight) || 1.2,
       originX: 'center',
       originY: 'center',
     });
@@ -467,6 +475,10 @@ async function layerToFabricObject(
       fontStyle: props.fontStyle || 'normal',
       fill: props.fill,
       textAlign: props.textAlign as any,
+      // Odstep miedzy wierszami z szablonu. Bez tego renderer liczyl domyslna
+      // wartoscia fabrica (1,16), wiec ustawienie z edytora nie docieralo na
+      // wydruk - podglad projektanta i wydruk mialy inny sklad.
+      lineHeight: Number((props as any).lineHeight) || 1.2,
       backgroundColor: resolveBackgroundColor(props as unknown as Record<string, unknown>),
       padding: (props.padding || 10) * scale,
       originX: 'center',

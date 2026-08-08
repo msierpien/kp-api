@@ -130,6 +130,9 @@ function api(shop: Shop) {
       )
       return text
     },
+    async deleteImage(productId: string, imageId: string) {
+      await request(`images/products/${productId}/${imageId}`, { method: 'DELETE' }, 'XML')
+    },
     async uploadImage(productId: string, filePath: string) {
       const buffer = fs.readFileSync(filePath)
       const form = new FormData()
@@ -179,10 +182,10 @@ function stripReadOnly(xml: string) {
  * dokladnie to, co dostanie klient. Proporcje 2:3 w pionie bierzemy z samego
  * zdjecia (1024 x 1536).
  */
-async function ensureProductPhoto(layout: any) {
+async function ensureProductPhoto(layout: any, force = false) {
   const relative = path.join('templates', TEMPLATE_CODE, 'produkt', 'winietka-mis-foto-1.jpg')
   const absolute = path.join(process.cwd(), 'storage', relative)
-  if (fs.existsSync(absolute)) return absolute
+  if (fs.existsSync(absolute) && !force) return absolute
 
   const mockup = layout.mockups?.[0]
   if (!mockup) throw new Error('Szablon MIS nie ma mockupu - nie ma z czego zrobic zdjecia produktu')
@@ -425,7 +428,10 @@ async function main() {
   if (!shopRecord) throw new Error(`Brak sklepu ${SHOP_ID}`)
   const shop = api({ baseUrl: shopRecord.baseUrl, apiKey: decrypt(shopRecord.apiKey) })
 
-  const photoPath = await ensureProductPhoto(template.layoutJson as any)
+  // REPLACE_PHOTO=1 - przerysowanie zdjecia i podmiana go na karcie, np. po
+  // poprawce renderera albo zmianie ukladu winietki.
+  const replacePhoto = process.env.REPLACE_PHOTO === '1'
+  const photoPath = await ensureProductPhoto(template.layoutJson as any, replacePhoto)
 
   let productId = await findProductIdByReference(shop)
   const created = !productId
@@ -441,7 +447,12 @@ async function main() {
 
   const product = await shop.getJson<any>(`products/${productId}`)
   const images: any[] = product.product?.associations?.images || []
-  if (images.length === 0) {
+  if (replacePhoto) {
+    for (const image of images) {
+      await shop.deleteImage(productId, String(image.id))
+    }
+  }
+  if (images.length === 0 || replacePhoto) {
     await shop.uploadImage(productId, photoPath)
   }
 
@@ -463,7 +474,7 @@ async function main() {
           attributeGroupId: groupId,
           attributeValueIds: valueIds,
           combinationIds,
-          photo: images.length === 0 ? path.basename(photoPath) : 'juz bylo',
+          photo: images.length === 0 || replacePhoto ? path.basename(photoPath) : 'juz bylo',
           url: `${shop.baseUrl}/index.php?id_product=${productId}&controller=product`,
         },
         panel: {

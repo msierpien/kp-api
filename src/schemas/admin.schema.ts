@@ -522,6 +522,9 @@ const textFieldPropertiesSchema = z.object({
   clientColor: z.boolean().optional(),
   clientTextAlign: z.boolean().optional(),
   clientFontWeight: z.boolean().optional(),
+  // Bez tego pola zgoda ustawiona w panelu znikalaby przy zapisie layoutu -
+  // z.object wycina nieznane klucze po cichu.
+  clientLineHeight: z.boolean().optional(),
 });
 
 const staticTextPropertiesSchema = z.object({
@@ -570,6 +573,9 @@ const textboxPropertiesSchema = z.object({
   clientColor: z.boolean().optional(),
   clientTextAlign: z.boolean().optional(),
   clientFontWeight: z.boolean().optional(),
+  // Bez tego pola zgoda ustawiona w panelu znikalaby przy zapisie layoutu -
+  // z.object wycina nieznane klucze po cichu.
+  clientLineHeight: z.boolean().optional(),
 });
 
 /**

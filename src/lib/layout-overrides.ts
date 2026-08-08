@@ -48,7 +48,7 @@ export function mergeLayoutWithOverrides(
       // `text` to tresc nadpisana edycja wprost na projekcie (np. imie
       // i nazwisko w jednej linii zamiast entera z szablonu).
       const style: Record<string, unknown> = {};
-      for (const key of ['fontSize', 'fontFamily', 'fill', 'textAlign', 'fontWeight', 'text', 'tint'] as const) {
+      for (const key of ['fontSize', 'fontFamily', 'fill', 'textAlign', 'fontWeight', 'lineHeight', 'text', 'tint'] as const) {
         const value = (override as Record<string, unknown>)[key];
         if (value !== undefined && value !== null) {
           style[key] = value;

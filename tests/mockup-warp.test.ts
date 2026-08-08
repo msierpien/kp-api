@@ -108,3 +108,46 @@ test('drawImageInQuad rysuje projekt w obrysie i respektuje multiply', async () 
   const stripe = pixel(200, 150);
   assert.ok(stripe[0] < 20, `pasek powinien byc ciemny, jest rgb(${stripe})`);
 });
+
+test('multiply nie zostawia siatki na jednolitym projekcie', async () => {
+  const { createCanvas } = await import('canvas');
+
+  // Bialy podklad i jednolicie szary projekt: po `multiply` caly obrys ma byc
+  // dokladnie taki sam. Trojkaty siatki celowo zachodza na siebie o ulamek
+  // piksela - mieszane pojedynczo, kazde zachodzenie liczylo sie dwa razy
+  // i na projekcie pojawiala sie siatka ciemniejszych kresek (widoczna na
+  // ilustracji, nigdy na bieli).
+  const photo = createCanvas(400, 300);
+  const photoCtx = photo.getContext('2d');
+  photoCtx.fillStyle = '#ffffff';
+  photoCtx.fillRect(0, 0, 400, 300);
+
+  const design = createCanvas(200, 100);
+  const designCtx = design.getContext('2d');
+  designCtx.fillStyle = '#c0c0c0';
+  designCtx.fillRect(0, 0, 200, 100);
+
+  const target: Quad = [
+    { x: 100, y: 100 },
+    { x: 300, y: 80 },
+    { x: 300, y: 220 },
+    { x: 100, y: 200 },
+  ];
+
+  drawImageInQuad(photoCtx, design as any, target, { subdivisions: 16, blendMode: 'multiply' });
+
+  // Probka z wnetrza obrysu, z zapasem od krawedzi (tam antyaliasing miesza
+  // projekt z tlem i roznice sa oczekiwane).
+  const sample = photoCtx.getImageData(140, 120, 120, 60).data;
+  let min = 255;
+  let max = 0;
+  for (let index = 0; index < sample.length; index += 4) {
+    min = Math.min(min, sample[index]);
+    max = Math.max(max, sample[index]);
+  }
+
+  // Prog z zapasem na wygladzone krawedzie komorek siatki - te zostawiaja
+  // pojedyncze poziomy roznicy. Artefakt, ktory ten test pilnuje, byl o rzad
+  // wielkosci wiekszy (szwy schodzily z 192 do 97).
+  assert.ok(max - min <= 6, `jednolity projekt powinien wyjsc jednolicie, jest ${min}..${max}`);
+});

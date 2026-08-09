@@ -103,9 +103,15 @@ export function setLangTag(xml: string, tag: string, value: string) {
 
 /** Pola tylko do odczytu - PUT z nimi konczy sie bledem walidacji. */
 export function stripReadOnly(xml: string) {
-  return xml
-    .replace(/<manufacturer_name[\s\S]*?<\/manufacturer_name>/g, '')
-    .replace(/<quantity[\s\S]*?<\/quantity>/g, '')
+  return (
+    xml
+      .replace(/<manufacturer_name[\s\S]*?<\/manufacturer_name>/g, '')
+      .replace(/<quantity[\s\S]*?<\/quantity>/g, '')
+      // Pozycje w kategorii liczy sklep. Odeslana z powrotem wywraca zapis
+      // bledem 135 ("wartosc wieksza niz liczba produktow w kategorii"), gdy
+      // produkt dostaje kategorie, w ktorej takiej pozycji jeszcze nie ma.
+      .replace(/<position_in_category[\s\S]*?<\/position_in_category>/g, '')
+  )
 }
 
 /**

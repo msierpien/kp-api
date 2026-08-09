@@ -9,8 +9,8 @@
  * tyle wystarczy, dopoki nie dojdzie wariant do samodzielnego uzupelnienia -
  * wtedy referencje musza przejac kombinacje, jak przy roczku.
  *
- * ZDJEC NIE WGRYWAMY. Szablon nie ma jeszcze grafiki ani mockupow, wiec nie
- * ma czego wyrenderowac; karta powstaje bez fotek i czeka na nie.
+ * Zdjecia karty to mockupy szablonu wyrenderowane z domyslna trescia. Brak
+ * mockupow w layoucie = karta zostaje bez zdjec (nie jest to blad).
  *
  * Skrypt jest idempotentny - produkt rozpoznaje po referencji, cechy po
  * nazwach, a wpisy w panelu i magazynie robi przez upsert.
@@ -18,9 +18,13 @@
  * Uruchamiany W KONTENERZE `personalization-api`:
  *   node dist/scripts/publish-zaproszenie-12x17-product.js
  *   PRODUCT_ACTIVE=0 - karta powstaje niewidoczna w sklepie
+ *   REPLACE_PHOTOS=1 - przerysowanie i podmiana zdjec
  */
+import fs from 'fs'
+import path from 'path'
 import { PrismaClient } from '@prisma/client'
 import { decrypt } from '../lib/encryption'
+import { renderMockupPng } from '../services/renderer/fabric-renderer.service'
 import {
   LANGUAGE_ID,
   cdata,
@@ -41,15 +45,15 @@ const SHOP_ID = process.env.SHOP_ID || 'cmscv7k7l0001h4khpd8arr5i' // Kreatywne-
 const TEMPLATE_CODE = 'ZAPROSZENIE_12X17'
 const CATALOG_NAME = 'Kreatywne Papierki'
 
-/** Kategoria glowna karty. */
-const CATEGORY_DEFAULT = '834' // Zaproszenia urodzinowe
-const CATEGORY_IDS = ['834']
+/** Kategoria glowna + dodatkowa, w ktorej produkt tez ma byc widoczny. */
+const CATEGORY_DEFAULT = '828' // Roczek
+const CATEGORY_IDS = ['828', '834'] // + Zaproszenia urodzinowe
 
 const TAX_RULES_GROUP_ID = '1' // PL Standard Rate (23%)
 const TAX_RATE = 0.23
 
 const REFERENCE = 'ZAP-12X17'
-const PRODUCT_NAME = 'Zaproszenie personalizowane 12 × 17 cm'
+const PRODUCT_NAME = 'Zaproszenie na pierwsze urodziny – Królik 12 × 17 cm'
 
 /** Cena katalogowa brutto; PrestaShop trzyma netto. */
 const PRICE_GROSS = 6.5
@@ -62,11 +66,11 @@ const PARENT_COMBINATION_ID = '0'
 
 // --- Cechy -------------------------------------------------------------
 // Identyfikatory cech sa stale w tym sklepie; wartosci dobieramy po nazwie
-// i dokladamy tylko te, ktorych jeszcze nie ma. Motywu i kolekcji nie
-// ustawiamy - zaleza od grafiki, ktorej szablon jeszcze nie ma.
+// i dokladamy tylko te, ktorych jeszcze nie ma.
 
 const FEATURES: Array<{ featureId: string; value: string }> = [
   { featureId: '16', value: 'zaproszenie' }, // Typ produktu
+  { featureId: '15', value: 'królik' }, // Motyw
   { featureId: '17', value: 'papier' }, // Materiał
   { featureId: '18', value: '12 x 17 cm' }, // Rozmiar
   { featureId: '28', value: 'Cała treść zaproszenia' }, // Personalizacja
@@ -74,22 +78,24 @@ const FEATURES: Array<{ featureId: string; value: string }> = [
 
 // --- Tresci ------------------------------------------------------------
 
-const META_TITLE = 'Zaproszenie personalizowane 12 × 17 cm – treść z edytora'
+const META_TITLE = 'Zaproszenie na pierwsze urodziny Królik – 12 × 17 cm, personalizowane'
 const META_DESCRIPTION =
-  'Jednostronne zaproszenie 12 × 17 cm z pełną personalizacją treści w edytorze: imiona gości, data z kalendarza, ' +
-  'miejsce przyjęcia i prośba o potwierdzenie. Każde zaproszenie może mieć innego adresata.'
+  'Zaproszenie na roczek z akwarelowym królikiem, format 12 × 17 cm. Całą treść wpisujesz w edytorze: ' +
+  'listę gości, datę z kalendarza, miejsce przyjęcia i prośbę o potwierdzenie.'
 
-const DESCRIPTION_SHORT = `<p>Jednostronne <strong>zaproszenie 12 × 17 cm</strong> z pełną personalizacją treści. Po złożeniu zamówienia otwierasz edytor i wpisujesz wszystko: od zwrotu do gości po podpis.</p>
-<p>✔ osobny adresat na każdym zaproszeniu – wpisujesz listę gości<br />✔ data i godzina wybierane z kalendarza<br />✔ druk dopiero po Twojej akceptacji podglądu</p>`
+const DESCRIPTION_SHORT = `<p>Pionowe <strong>zaproszenie na pierwsze urodziny 12 × 17 cm</strong> z akwarelowym królikiem. Po złożeniu zamówienia otwierasz edytor i wpisujesz całą treść – od zwrotu do gości po odręczny podpis.</p>
+<p>✔ osobny adresat na każdym zaproszeniu – wpisujesz listę gości<br />✔ data wybierana z kalendarza, godzina z listy<br />✔ druk dopiero po Twojej akceptacji podglądu</p>`
 
-const DESCRIPTION = `<h2>Zaproszenie personalizowane 12 × 17 cm</h2>
-<p>Klasyczne, pionowe zaproszenie w formacie 12 × 17 cm. Górną część karty zajmuje ilustracja, a pod nią biegnie wyśrodkowana kolumna treści – od zwrotu do gości, przez okazję i datę, po odręczny podpis.</p>
+const DESCRIPTION = `<h2>Zaproszenie na pierwsze urodziny „Królik”</h2>
+<p>Pionowe zaproszenie 12 × 17 cm z akwarelową ilustracją królika. Pastelowa, spokojna kompozycja pasuje do dekoracji w stylu boho i do klasycznych, stonowanych przyjęć – równie dobrze na roczek, jak na chrzciny czy drugie urodziny.</p>
+<p>Pod ilustracją biegnie kolumna treści, a dół karty zajmuje pas trzech kolumn rozdzielonych delikatnymi liniami: <strong>data | miejsce przyjęcia | godzina</strong>.</p>
 
 <h2>Co ustalasz w edytorze</h2>
 <p>Po złożeniu zamówienia dostajesz dostęp do edytora, w którym wpisujesz:</p>
 <ul>
 <li><strong>listę gości</strong> – osobny adresat na każdym zaproszeniu w zamówieniu,</li>
-<li><strong>datę i godzinę przyjęcia</strong> – wybierane z kalendarza, na zaproszeniu pojawia się gotowy polski zapis,</li>
+<li><strong>datę przyjęcia</strong> – wybierasz ją z kalendarza, na karcie staje jako dzień z miesiącem i rok pod spodem,</li>
+<li><strong>godzinę</strong> – z listy albo własną,</li>
 <li><strong>miejsce przyjęcia</strong> – nazwa lokalu i adres,</li>
 <li><strong>prośbę o potwierdzenie przybycia</strong> wraz z numerem telefonu,</li>
 <li><strong>pozostałe napisy</strong> – zwrot wprowadzający, okazję i podpis; mają gotowe brzmienie, ale możesz je zmienić.</li>
@@ -104,7 +110,60 @@ const DESCRIPTION = `<h2>Zaproszenie personalizowane 12 × 17 cm</h2>
 <li>Podaj liczbę zaproszeń.</li>
 <li>Po złożeniu zamówienia otwierasz edytor i wpisujesz treść oraz listę gości.</li>
 <li>Akceptujesz podgląd – drukujemy i wysyłamy gotowe zaproszenia.</li>
-</ol>`
+</ol>
+
+<h2>Na jaką okazję</h2>
+<ul>
+<li>pierwsze urodziny i roczek</li>
+<li>drugie urodziny dziecka</li>
+<li>chrzciny i baby shower w tej samej kolorystyce</li>
+</ul>`
+
+// --- Zdjecia produktu --------------------------------------------------
+
+/**
+ * Zdjecia karty: mockupy szablonu wyrenderowane z domyslna trescia, wiec
+ * klient oglada dokladnie to, co dostanie. Brak mockupow = brak zdjec,
+ * a nie blad - karta moze poczekac na grafike.
+ */
+async function ensureProductPhotos(layout: any, force: boolean) {
+  const mockups: any[] = layout?.mockups || []
+  if (mockups.length === 0) return []
+
+  const answers = await defaultAnswers()
+  const dir = path.join(process.cwd(), 'storage', 'templates', TEMPLATE_CODE, 'produkt')
+  const files: string[] = []
+
+  for (const [index, mockup] of mockups.entries()) {
+    const absolute = path.join(dir, `zaproszenie-12x17-foto-${index + 1}.jpg`)
+    if (fs.existsSync(absolute) && !force) {
+      files.push(absolute)
+      continue
+    }
+
+    const png = await renderMockupPng(layout, answers, mockup)
+
+    // PrestaShop odrzuca pliki powyzej 2000 KB, a render PNG wazy okolo 2 MB.
+    const { createCanvas, loadImage } = await import('canvas')
+    const image = await loadImage(png)
+    const canvas = createCanvas(image.width, image.height)
+    canvas.getContext('2d').drawImage(image as any, 0, 0)
+
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(absolute, canvas.toBuffer('image/jpeg', { quality: 0.9 }))
+    files.push(absolute)
+  }
+
+  return files
+}
+
+/** Domyslne odpowiedzi z formularza - to one wypelniaja zdjecia pogladowe. */
+async function defaultAnswers() {
+  const fields = await prisma.formField.findMany({
+    where: { form: { template: { code: TEMPLATE_CODE } } },
+  })
+  return Object.fromEntries(fields.map((field) => [field.key, field.defaultValue ?? '']))
+}
 
 // --- Cechy w sklepie ---------------------------------------------------
 
@@ -341,6 +400,9 @@ async function main() {
   if (!shopRecord) throw new Error(`Brak sklepu ${SHOP_ID}`)
   const shop = prestaShopApi({ baseUrl: shopRecord.baseUrl, apiKey: decrypt(shopRecord.apiKey) })
 
+  const replacePhotos = process.env.REPLACE_PHOTOS === '1'
+  const photos = await ensureProductPhotos(template.layoutJson as any, replacePhotos)
+
   let productId = await findProductIdByReference(shop)
   const created = !productId
   if (!productId) productId = await createProduct(shop)
@@ -355,6 +417,17 @@ async function main() {
   const product = await shop.getJson<any>(`products/${productId}`)
   const images: any[] = product.product?.associations?.images || []
 
+  if (replacePhotos) {
+    for (const image of images) {
+      await shop.deleteResource(`images/products/${productId}/${image.id}`)
+    }
+  }
+  if (photos.length > 0 && (images.length === 0 || replacePhotos)) {
+    for (const photo of photos) {
+      await shop.uploadImage(productId, photo)
+    }
+  }
+
   console.log(
     JSON.stringify(
       {
@@ -368,7 +441,10 @@ async function main() {
           priceGross: PRICE_GROSS,
           categories: CATEGORY_IDS,
           features: features.map((item) => `${item.featureId}=${item.valueId}`),
-          zdjecia: images.length,
+          zdjecia:
+            photos.length > 0 && (images.length === 0 || replacePhotos)
+              ? photos.map((file) => path.basename(file))
+              : `bez zmian (${images.length})`,
           url: `${shopRecord.baseUrl}/index.php?id_product=${productId}&controller=product`,
         },
         panel: {

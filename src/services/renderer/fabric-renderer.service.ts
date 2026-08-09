@@ -1,6 +1,6 @@
 import { loadImage, registerFont } from 'canvas';
-import { StaticCanvas, FabricImage, IText, Textbox, Path } from 'fabric/node';
-import type { TemplateLayoutJson, TemplatePage, PrintLayout, Layer, TextFieldProperties, TextBoxProperties, TextStyleRange, ImageProperties, MockupConfig } from '../../types/template-layout';
+import { StaticCanvas, FabricImage, IText, Textbox, Path, Rect, Ellipse, Line } from 'fabric/node';
+import type { TemplateLayoutJson, TemplatePage, PrintLayout, Layer, TextFieldProperties, TextBoxProperties, TextStyleRange, ImageProperties, MockupConfig, ShapeProperties } from '../../types/template-layout';
 import {
   buildFabricTextStyles,
   getTemplatePages,
@@ -9,6 +9,7 @@ import {
 } from '../../types/template-layout';
 import { isSvgPath, rasterizeSvgFile } from './svg-raster.service';
 import {
+  buildShapeGeometry,
   buildTextPathD,
   getTextPathAnchorOffset,
   getTextPathArcLength,
@@ -494,6 +495,50 @@ async function layerToFabricObject(
     enforceTextboxBox(textbox, layer.height * scale, (props as any).verticalAlign);
 
     return textbox;
+  }
+
+  // Figury: kreska, ramka, kolo, elipsa.
+  //
+  // Cala geometria idzie z pakietu, tak samo jak w edytorze i w portalu -
+  // trzy osobne implementacje liczenia daly by trzy rozne wydruki, a rozjazd
+  // widac dopiero na papierze.
+  if (layer.type === 'shape') {
+    const geometry = buildShapeGeometry(layer as { properties: ShapeProperties } & typeof layer, dpi, scale);
+
+    const shapeCommon = {
+      left: geometry.left,
+      top: geometry.top,
+      // Jak wszedzie w formacie: x/y warstwy to srodek figury.
+      originX: 'center' as const,
+      originY: 'center' as const,
+      angle: geometry.angle,
+      opacity: geometry.opacity,
+      fill: geometry.fill,
+      stroke: geometry.stroke,
+      strokeWidth: geometry.strokeWidth,
+      strokeDashArray: geometry.strokeDashArray,
+      // Grubosc obrysu ma zostac gruboscia obrysu takze po przeskalowaniu
+      // obiektu - inaczej ramka rozciagnieta w poziomie ma grubsze boki.
+      strokeUniform: true,
+      selectable: false,
+      evented: false,
+    };
+
+    if (geometry.kind === 'line') {
+      return new Line(geometry.points, shapeCommon);
+    }
+
+    if (geometry.kind === 'ellipse') {
+      return new Ellipse({ ...shapeCommon, rx: geometry.rx, ry: geometry.ry });
+    }
+
+    return new Rect({
+      ...shapeCommon,
+      width: geometry.width,
+      height: geometry.height,
+      rx: geometry.rx,
+      ry: geometry.ry,
+    });
   }
 
   return null;

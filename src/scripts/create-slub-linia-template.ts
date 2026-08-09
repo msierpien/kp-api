@@ -234,10 +234,12 @@ const LINE_HEIGHT_MM = 64
 const LINE_WIDTH_PX = 5
 
 /**
- * Pionowa kreska jako grafika, nie warstwa `shape`.
+ * Pionowa kreska jako grafika - tak powstal ten szablon, gdy renderer druku
+ * nie znal jeszcze figur.
  *
- * Renderer druku (fabric-renderer.service) obsluguje tylko tlo, obrazy i
- * teksty - `shape` widac w edytorze, a na wydruku znika bez slowa.
+ * Nowe szablony nie musza tak robic: `shape` typu `line` rysuje sie i w
+ * edytorze, i na wydruku, a grubosc podaje sie w milimetrach. Ten skrypt
+ * zostaje jak jest, bo odtwarza istniejacy projekt.
  */
 function lineLayer(imageUrl: string) {
   return {

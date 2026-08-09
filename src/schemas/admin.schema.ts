@@ -619,7 +619,12 @@ const shapePropertiesSchema = z.object({
   fill: z.string().default('transparent'),
   stroke: z.string().default('#000000'),
   strokeWidth: z.number().min(0).default(1),
+  // Milimetry maja pierwszenstwo przed pikselami - w mm mysli projektant.
+  // Piksele zostaja dla szablonow zapisanych przed ich wprowadzeniem.
+  strokeWidthMm: z.number().min(0).optional(),
   borderRadius: z.number().min(0).default(0),
+  borderRadiusMm: z.number().min(0).optional(),
+  strokeDashArray: z.array(z.number()).optional(),
 });
 
 const cutLinePropertiesSchema = z.object({

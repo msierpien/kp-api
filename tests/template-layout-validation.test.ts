@@ -285,3 +285,47 @@ test('paleta kolorow szablonu przechodzi zapis i odrzuca smieci', () => {
   assert.throws(() => templateLayoutSchema.parse({ ...base, palette: ['czerwony'] }));
   assert.throws(() => templateLayoutSchema.parse({ ...base, palette: ['#fff'] }));
 });
+
+test('wlasciwosci figury przechodza zapis w calosci', () => {
+  // Zod wycina nieznane klucze po cichu, wiec pole dodane do formatu i
+  // pominiete w schemacie znika przy zapisie bez sladu w logach. Ten test
+  // pilnuje tego dla figur.
+  const parsed = templateLayoutSchema.parse({
+    version: 2,
+    canvas: { unit: 'mm', widthMm: 90, heightMm: 50, dpi: 300, bleed: 0, safeArea: 0, backgroundColor: '#ffffff' },
+    fonts: [],
+    layers: [
+      {
+        id: 'shape_1',
+        name: 'Kreska',
+        type: 'shape',
+        visible: true,
+        locked: false,
+        opacity: 1,
+        zIndex: 1,
+        x: 100,
+        y: 200,
+        width: 300,
+        height: 6,
+        rotation: 0,
+        properties: {
+          type: 'shape',
+          shapeType: 'line',
+          fill: 'transparent',
+          stroke: '#C0392B',
+          strokeWidth: 1,
+          strokeWidthMm: 0.5,
+          borderRadius: 0,
+          borderRadiusMm: 2,
+          strokeDashArray: [18, 12],
+        },
+      },
+    ],
+  });
+
+  const shape = parsed.layers[0].properties as Record<string, unknown>;
+  assert.equal(shape.shapeType, 'line');
+  assert.equal(shape.strokeWidthMm, 0.5);
+  assert.equal(shape.borderRadiusMm, 2);
+  assert.deepEqual(shape.strokeDashArray, [18, 12]);
+});

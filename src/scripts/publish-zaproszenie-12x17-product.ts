@@ -125,17 +125,39 @@ const DESCRIPTION = `<h2>Zaproszenie na pierwsze urodziny „Królik”</h2>
  * Zdjecia karty: mockupy szablonu wyrenderowane z domyslna trescia, wiec
  * klient oglada dokladnie to, co dostanie. Brak mockupow = brak zdjec,
  * a nie blad - karta moze poczekac na grafike.
+ *
+ * Szablon z wariantami (pierwsze / drugie / trzecie urodziny) dostaje zdjecie
+ * KAZDEGO wariantu: `renderMockupPng` wybiera strony przez
+ * `getTemplatePagesForAnswers`, wiec wystarczy podstawic odpowiedz, ktora
+ * dopasowuje dany wariant.
  */
 async function ensureProductPhotos(layout: any, force: boolean) {
   const mockups: any[] = layout?.mockups || []
   if (mockups.length === 0) return []
 
-  const answers = await defaultAnswers()
+  const base = await defaultAnswers()
+  const variantFieldKey: string | undefined = layout?.variantFieldKey
+  const variants: any[] = Array.isArray(layout?.variants) ? layout.variants : []
+
+  // Bez wariantow zostaje jedno ujecie na mockup - jak przy karcie bez wyboru.
+  const shots =
+    variantFieldKey && variants.length > 0
+      ? variants.map((variant) => ({
+          suffix: variant.id,
+          answers: { ...base, [variantFieldKey]: variant.matchValue ?? base[variantFieldKey] },
+        }))
+      : [{ suffix: 'default', answers: base }]
+
   const dir = path.join(process.cwd(), 'storage', 'templates', TEMPLATE_CODE, 'produkt')
   const files: string[] = []
 
-  for (const [index, mockup] of mockups.entries()) {
-    const absolute = path.join(dir, `zaproszenie-12x17-foto-${index + 1}.jpg`)
+  const jobs = mockups.flatMap((mockup, index) =>
+    shots.map((shot) => ({ mockup, name: `zaproszenie-12x17-${shot.suffix}-${index + 1}.jpg`, answers: shot.answers }))
+  )
+
+  for (const job of jobs) {
+    const { mockup, answers } = job
+    const absolute = path.join(dir, job.name)
     if (fs.existsSync(absolute) && !force) {
       files.push(absolute)
       continue

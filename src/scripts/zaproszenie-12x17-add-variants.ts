@@ -14,9 +14,10 @@
  * (`create-zaproszenie-roczek-template.ts` skasowałby poprawki naniesione
  * ręcznie w edytorze: grafikę, linie, przesunięte ramki).
  *
- * Grafiki bierze z assetów szablonu - dopasowuje je po fragmencie nazwy
- * pliku (domyślnie „1-up", „2-up", „3-up"; nadpisywalne przez env). Brakujący
- * asset przerywa pracę z informacją, co wgrać w zakładce Assety.
+ * Grafiki bierze z assetów szablonu - dopasowuje je po nazwie pliku
+ * (cyfra między separatorami, np. „...-1-up..." albo „..._2_up...";
+ * nadpisywalne przez ASSET_1/2/3). Brakujący asset przerywa pracę
+ * z informacją, co wgrać w zakładce Assety.
  *
  * Idempotentny: ponowne uruchomienie przelicza warianty od nowa z układu
  * PIERWSZEGO wariantu (albo z `pages`, gdy wariantów jeszcze nie ma).
@@ -25,6 +26,8 @@
  *   node dist/scripts/zaproszenie-12x17-add-variants.js
  *   DRY_RUN=1 - tylko raport, bez zapisu
  */
+import path from 'path'
+import { loadImage } from 'canvas'
 import { PrismaClient } from '@prisma/client'
 import { getTemplateVariants, withTemplateVariants, type TemplateLayoutJson, type TemplatePage } from '@msierpien/kp-template-core'
 
@@ -38,16 +41,27 @@ type VariantSpec = {
   name: string
   /** Odpowiedź klienta, przy której wybieramy ten wariant - i zarazem napis na karcie. */
   matchValue: string
-  /** Fragment nazwy pliku assetu z odpowiednią cyfrą. */
-  assetMatch: string
+  /**
+   * Wzorzec nazwy pliku assetu z odpowiednią cyfrą.
+   *
+   * Separator jest dowolny, bo grafiki bywają wgrywane raz z myślnikiem
+   * („kro_liczek-1-up"), raz z podkreśleniem („kro_liczek_2_up").
+   */
+  assetPattern: RegExp
+}
+
+/** Env podaje zwykły fragment nazwy, nie wyrażenie - stąd escapowanie. */
+function patternFromEnv(value: string | undefined, fallback: RegExp) {
+  if (!value) return fallback
+  return new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
 }
 
 const VARIANTS: VariantSpec[] = [
   // Pierwszy na liście jest wariantem podstawowym: to jego układ widzą
   // konsumenci nieznający wariantów i to on pada, gdy odpowiedź nie pasuje.
-  { id: 'variant-1', name: 'Pierwsze urodziny', matchValue: 'Pierwszych Urodzin', assetMatch: process.env.ASSET_1 || '1-up' },
-  { id: 'variant-2', name: 'Drugie urodziny', matchValue: 'Drugich Urodzin', assetMatch: process.env.ASSET_2 || '2-up' },
-  { id: 'variant-3', name: 'Trzecie urodziny', matchValue: 'Trzecich Urodzin', assetMatch: process.env.ASSET_3 || '3-up' },
+  { id: 'variant-1', name: 'Pierwsze urodziny', matchValue: 'Pierwszych Urodzin', assetPattern: patternFromEnv(process.env.ASSET_1, /[-_]1[-_]up/i) },
+  { id: 'variant-2', name: 'Drugie urodziny', matchValue: 'Drugich Urodzin', assetPattern: patternFromEnv(process.env.ASSET_2, /[-_]2[-_]up/i) },
+  { id: 'variant-3', name: 'Trzecie urodziny', matchValue: 'Trzecich Urodzin', assetPattern: patternFromEnv(process.env.ASSET_3, /[-_]3[-_]up/i) },
 ]
 
 /**
@@ -57,23 +71,43 @@ const VARIANTS: VariantSpec[] = [
  * obrazki (kreski, ozdobniki) są od niej wyraźnie mniejsze, a ilustracja
  * zajmuje cały górny pas karty.
  */
-function findArtworkLayerId(pages: TemplatePage[]) {
+function findArtworkLayer(pages: TemplatePage[]) {
   const images = pages
     .flatMap((page) => page.layers)
     .filter((layer: any) => layer.type === 'image')
-    .map((layer: any) => ({ id: layer.id, area: (layer.width || 0) * (layer.height || 0) }))
-    .sort((a, b) => b.area - a.area)
+    .map((layer: any) => ({ id: layer.id, width: layer.width || 0, height: layer.height || 0 }))
+    .sort((a, b) => b.width * b.height - a.width * a.height)
 
   if (images.length === 0) throw new Error('Layout nie ma warstwy z grafiką - wgraj ilustrację w edytorze')
-  return images[0].id
+  return images[0]
+}
+
+/**
+ * Ramka grafiki dopasowana do proporcji PLIKU, wpisana w ramkę bazową.
+ *
+ * Renderer skaluje obraz dokładnie do `width`/`height` warstwy - `fit` nie
+ * ratuje proporcji. Kwadratowa ilustracja w ramce 4:3 wychodziła więc
+ * rozciągnięta o jedną trzecią. Ramka bazowa jest górnym ograniczeniem
+ * (mieścimy się w całości), a środek warstwy zostaje nietknięty.
+ */
+function fitToBox(box: { width: number; height: number }, image: { width: number; height: number }) {
+  const scale = Math.min(box.width / image.width, box.height / image.height)
+  return { width: Math.round(image.width * scale), height: Math.round(image.height * scale) }
 }
 
 /** Kopia stron z podmienioną grafiką w warstwie ilustracji. */
-function pagesWithArtwork(pages: TemplatePage[], layerId: string, imageUrl: string): TemplatePage[] {
+function pagesWithArtwork(
+  pages: TemplatePage[],
+  layerId: string,
+  imageUrl: string,
+  size: { width: number; height: number }
+): TemplatePage[] {
   return pages.map((page) => ({
     ...page,
     layers: page.layers.map((layer: any) =>
-      layer.id === layerId ? { ...layer, properties: { ...layer.properties, imageUrl } } : layer
+      layer.id === layerId
+        ? { ...layer, width: size.width, height: size.height, properties: { ...layer.properties, imageUrl } }
+        : layer
     ),
   })) as TemplatePage[]
 }
@@ -95,13 +129,13 @@ async function main() {
   const basePages = existing.length > 0 ? existing[0].pages : (layout.pages ?? [])
   if (basePages.length === 0) throw new Error('Layout nie ma stron')
 
-  const artworkLayerId = findArtworkLayerId(basePages)
+  const artwork = findArtworkLayer(basePages)
 
   const assets = await prisma.templateAsset.findMany({ where: { templateId: template.id } })
   const missing: string[] = []
   const resolved = VARIANTS.map((variant) => {
-    const asset = assets.find((item) => item.fileName.includes(variant.assetMatch))
-    if (!asset) missing.push(`${variant.name}: brak assetu z „${variant.assetMatch}” w nazwie pliku`)
+    const asset = assets.find((item) => variant.assetPattern.test(item.fileName))
+    if (!asset) missing.push(`${variant.name}: żaden asset nie pasuje do ${variant.assetPattern}`)
     return { ...variant, filePath: asset?.filePath ?? '', fileName: asset?.fileName ?? '' }
   })
 
@@ -121,12 +155,20 @@ async function main() {
     throw new Error('Brak grafik dla wariantów')
   }
 
-  const variants = resolved.map((variant) => ({
-    id: variant.id,
-    name: variant.name,
-    matchValue: variant.matchValue,
-    pages: pagesWithArtwork(basePages, artworkLayerId, variant.filePath),
-  }))
+  const storageRoot = process.env.STORAGE_PATH || path.join(process.cwd(), 'storage')
+  const variants = []
+  const sizes: string[] = []
+  for (const variant of resolved) {
+    const image = await loadImage(path.join(storageRoot, variant.filePath))
+    const size = fitToBox(artwork, image)
+    sizes.push(`${variant.name}: plik ${image.width}x${image.height} -> ramka ${size.width}x${size.height}`)
+    variants.push({
+      id: variant.id,
+      name: variant.name,
+      matchValue: variant.matchValue,
+      pages: pagesWithArtwork(basePages, artwork.id, variant.filePath, size),
+    })
+  }
 
   const nextLayout = {
     ...withTemplateVariants(layout, variants),
@@ -154,9 +196,10 @@ async function main() {
       JSON.stringify(
         {
           dryRun: true,
-          warstwaGrafiki: artworkLayerId,
+          warstwaGrafiki: artwork.id,
           warianty: variants.map((variant) => ({ name: variant.name, matchValue: variant.matchValue })),
           grafiki: resolved.map((variant) => `${variant.name} -> ${variant.fileName}`),
+          ramki: sizes,
         },
         null,
         2
@@ -176,7 +219,8 @@ async function main() {
       {
         templateId: template.id,
         variantFieldKey: FIELD_KEY,
-        warstwaGrafiki: artworkLayerId,
+        warstwaGrafiki: artwork.id,
+        ramki: sizes,
         warianty: resolved.map((variant) => ({
           name: variant.name,
           matchValue: variant.matchValue,

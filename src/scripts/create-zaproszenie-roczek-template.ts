@@ -15,10 +15,13 @@
  * Pole `guest_names` jest jedynym w zakresie INDIVIDUAL: portal wystawi tyle
  * wpisow, ile zaproszen jest w zamowieniu - to jest lista gosci.
  *
- * `party_datetime` to pole typu `date` z regula `pl-long` i godzina: klient
- * wybiera date z kalendarza, a w odpowiedzi zapisuje sie gotowy tekst
- * ("07 wrzesnia 2028 roku o godzinie 12:00"), bo renderer drukuje wartosci
- * pol doslownie i nie zna regul jezykowych.
+ * Dol karty to PAS TRZECH KOLUMN rozdzielonych kropkowanymi kreskami:
+ * data | miejsce | godzina. Data i godzina sa OSOBNYMI polami, bo renderer
+ * podstawia cala odpowiedz w jedno miejsce - jedno pole nie zasililoby dwoch
+ * kolumn. Data to pole `date` z regula `pl-slash`: klient wybiera ja
+ * z kalendarza, a w odpowiedzi laduje gotowy zapis "07/09" + rok w drugim
+ * wierszu (renderer drukuje wartosci pol doslownie i nie zna regul
+ * jezykowych). Rok dostaje mniejszy stopien pisma przez `styleRanges`.
  *
  * Skrypt jest idempotentny - ponowne uruchomienie nadpisuje pola formularza
  * i layout zamiast tworzyc drugi szablon o tym samym kodzie. UWAGA: nadpisze
@@ -28,7 +31,10 @@
  * Uruchamiany W KONTENERZE `personalization-api` (baza nie jest wystawiona
  * poza siec dockera); lokalnie: pnpm tsx src/scripts/create-zaproszenie-roczek-template.ts
  */
+import fs from 'fs'
+import path from 'path'
 import { Prisma, PrismaClient } from '@prisma/client'
+import { createCanvas } from 'canvas'
 
 const prisma = new PrismaClient()
 
@@ -38,7 +44,7 @@ const TENANT_SLUG = 'kreatywne-papierki'
 const TEMPLATE_CODE = 'ZAPROSZENIE_12X17'
 const TEMPLATE_NAME = 'Zaproszenie 12 x 17'
 const TEMPLATE_DESCRIPTION =
-  'Zaproszenie 120 x 170 mm - miejsce na grafikę w górnej części (72 mm), pod nią wyśrodkowana kolumna treści: goście, okazja, data z kalendarza, miejsce, potwierdzenie przybycia i odręczny podpis.'
+  'Zaproszenie 120 x 170 mm - miejsce na grafikę w górnej części (72 mm), pod nią kolumna treści i pas trzech kolumn: data z kalendarza, miejsce przyjęcia i godzina, rozdzielone kropkowanymi kreskami.'
 
 const DPI = 300
 const WIDTH_MM = 120
@@ -72,6 +78,33 @@ const FONTS = [
 const GRAPHIC_AREA_BOTTOM_MM = 72
 const COLUMN_LEFT_MM = 12
 const COLUMN_WIDTH_MM = WIDTH_MM - 2 * COLUMN_LEFT_MM
+
+// --- Pas data | miejsce | godzina --------------------------------------
+// Trzy kolumny symetryczne wzgledem srodka karty (60 mm), rozdzielone
+// kropkowanymi kreskami. Kolumny boczne sa rowne, srodkowa dostaje adres.
+const BAND_TOP_MM = 119
+const BAND_HEIGHT_MM = 19
+const BAND_LEFT_COL_MM = 6
+const BAND_SIDE_WIDTH_MM = 32
+const BAND_RULE_1_MM = 42
+const BAND_MIDDLE_COL_MM = 46
+const BAND_MIDDLE_WIDTH_MM = 28
+const BAND_RULE_2_MM = 78
+const BAND_RIGHT_COL_MM = 82
+
+/** Kreska: szerokosc w pikselach projektu i wysokosc w milimetrach. */
+const RULE_WIDTH_PX = 6
+const RULE_HEIGHT_MM = 17
+
+/**
+ * Rok w odpowiedzi daty - zakres znakow w zapisie "07/09\n2028".
+ *
+ * Format ma STALA dlugosc (5 znakow, znak nowej linii, 4 cyfry), wiec zakres
+ * nie rozjedzie sie z trescia. `resolveCharStyles` i tak przycina zakresy do
+ * dlugosci tekstu, wiec krotsza odpowiedz niczego nie wywroci.
+ */
+const DATE_YEAR_FROM = 6
+const DATE_YEAR_TO = 10
 
 type FieldInput = {
   key: string
@@ -141,17 +174,48 @@ const FIELDS: FieldInput[] = [
     maxLength: 28,
   },
   {
-    key: 'party_datetime',
-    label: 'Data i godzina przyjęcia',
+    key: 'party_date',
+    label: 'Data przyjęcia',
     type: 'date',
     scope: 'SHARED',
     required: true,
     sortOrder: 5,
-    // Zapis polski, a nie ISO - taki tekst idzie na wydruk i taki portal
-    // potrafi rozebrac z powrotem na kalendarz przy edycji.
-    defaultValue: '07 września 2028 roku o godzinie 12:00',
-    helpText: 'Kalendarz z godziną - na zaproszeniu pojawi się polski zapis daty.',
-    validationRules: { dateFormat: 'pl-long', withTime: true },
+    // Zapis dwuwierszowy, a nie ISO ani zdanie: w waskiej kolumnie stoi
+    // "07/09" nad "2028". Dlugosc pierwszego wiersza jest stala, wiec rok
+    // dostaje mniejszy stopien pisma zakresem znakow (patrz DATE_YEAR_RANGE).
+    defaultValue: '07/09\n2028',
+    helpText: 'Kalendarz - na zaproszeniu pojawi się dzień z miesiącem, a pod spodem rok.',
+    validationRules: { dateFormat: 'pl-slash', withTime: false },
+  },
+  {
+    key: 'party_time',
+    label: 'Godzina przyjęcia',
+    type: 'select',
+    scope: 'SHARED',
+    required: true,
+    sortOrder: 6,
+    defaultValue: '12:00',
+    // Lista pelnych i polowkowych godzin z furtka na wlasny wpis - godzina
+    // stoi w OSOBNEJ kolumnie karty, wiec nie moze przyjsc z kalendarza daty.
+    options: [
+      '10:00', '10:30', '11:00', '11:30', '12:00', '12:30', '13:00', '13:30',
+      '14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30',
+      '18:00', '18:30', '19:00', '19:30', '20:00',
+    ],
+    validationRules: { allowCustom: true },
+    helpText: 'Wybierz z listy albo wpisz własną godzinę.',
+    maxLength: 10,
+  },
+  {
+    key: 'time_label',
+    label: 'Podpis pod godziną',
+    type: 'text',
+    scope: 'SHARED',
+    required: false,
+    sortOrder: 7,
+    defaultValue: 'godzina',
+    helpText: 'Drobny wiersz pod godziną. Puste pole zostawia samą godzinę.',
+    maxLength: 20,
   },
   {
     key: 'party_place',
@@ -159,9 +223,9 @@ const FIELDS: FieldInput[] = [
     type: 'textarea',
     scope: 'SHARED',
     required: true,
-    sortOrder: 6,
-    defaultValue: 'Restauracja „Żółty Parasol”\nul. Książęca 15, Szczytno',
-    helpText: 'Do trzech wierszy - nazwa lokalu, ulica, miejscowość.',
+    sortOrder: 8,
+    defaultValue: 'Restauracja\n„Żółty Parasol”\nul. Książęca 15,\nSzczytno',
+    helpText: 'Środkowa kolumna jest wąska - rozbij adres na 3-4 krótkie wiersze.',
     maxLength: 90,
   },
   {
@@ -172,7 +236,7 @@ const FIELDS: FieldInput[] = [
     // Nieobowiazkowe: nie kazde przyjecie prosi o potwierdzenie, a puste pole
     // ma po prostu zostawic ten pas karty pusty.
     required: false,
-    sortOrder: 7,
+    sortOrder: 9,
     defaultValue: 'Prosimy o potwierdzenie przybycia do 05.08.2028\nMama: +48 500 500 500',
     helpText: 'Dwa wiersze. Puste pole zostawia ten pas karty pusty.',
     maxLength: 120,
@@ -183,7 +247,7 @@ const FIELDS: FieldInput[] = [
     type: 'text',
     scope: 'SHARED',
     required: true,
-    sortOrder: 8,
+    sortOrder: 10,
     defaultValue: 'Hania',
     helpText: 'Jedno imię - pismem odręcznym, największy napis w stopce.',
     maxLength: 20,
@@ -194,7 +258,7 @@ const FIELDS: FieldInput[] = [
     type: 'text',
     scope: 'SHARED',
     required: false,
-    sortOrder: 9,
+    sortOrder: 11,
     defaultValue: 'wraz z Rodzicami',
     helpText: 'Drobniejszy wiersz pod imieniem. Puste pole zostawia sam podpis.',
     maxLength: 30,
@@ -220,6 +284,8 @@ type TextboxInput = {
   letterSpacing?: number
   textAlign: 'left' | 'center' | 'right'
   verticalAlign?: 'top' | 'middle' | 'bottom'
+  /** Style fragmentow - zakresy liczone na SUROWYM tekscie warstwy. */
+  styleRanges?: Array<{ start: number; end: number; fontSize?: number; fill?: string }>
 }
 
 /**
@@ -260,7 +326,40 @@ function textbox(input: TextboxInput) {
       backgroundColor: 'transparent',
       borderColor: 'transparent',
       borderWidth: 0,
+      ...(input.styleRanges ? { styleRanges: input.styleRanges } : {}),
       editable: Boolean(input.fieldKey),
+      clientDraggable: false,
+      clientResizable: false,
+      clientRotatable: false,
+    },
+  }
+}
+
+/**
+ * Pionowa kreska rozdzielajaca kolumny pasa.
+ *
+ * Warstwa `shape` odpada - renderer druku jej nie rysuje. Kropki sa wypalone
+ * w PNG, ktory obie kreski wspoldziela.
+ */
+function separatorLayer(input: { id: string; name: string; imageUrl: string; leftMm: number; zIndex: number }) {
+  return {
+    id: input.id,
+    name: input.name,
+    type: 'image' as const,
+    visible: true,
+    locked: true,
+    opacity: 1,
+    zIndex: input.zIndex,
+    x: mm(input.leftMm),
+    y: mm(BAND_TOP_MM + BAND_HEIGHT_MM / 2),
+    width: RULE_WIDTH_PX,
+    height: mm(RULE_HEIGHT_MM),
+    rotation: 0,
+    properties: {
+      type: 'image' as const,
+      imageUrl: input.imageUrl,
+      fit: 'fill' as const,
+      lockAspectRatio: false,
       clientDraggable: false,
       clientResizable: false,
       clientRotatable: false,
@@ -278,7 +377,7 @@ const defaults = Object.fromEntries(FIELDS.map((field) => [field.key, field.defa
  * Wysokosci ramek maja zapas na drugi (a przy miejscu - trzeci) wiersz;
  * tekst jest w ramce wysrodkowany pionowo, wiec zapas rozklada sie rowno.
  */
-function buildLayers() {
+function buildLayers(separatorImageUrl: string) {
   return [
     textbox({
       id: 'intro_text',
@@ -339,7 +438,7 @@ function buildLayers() {
       fieldKey: 'celebration_script',
       text: defaults.celebration_script,
       leftMm: COLUMN_LEFT_MM,
-      topMm: 103,
+      topMm: 100.5,
       widthMm: COLUMN_WIDTH_MM,
       heightMm: 15,
       zIndex: 3,
@@ -350,24 +449,32 @@ function buildLayers() {
       textAlign: 'center',
     }),
 
-    // Data przychodzi z kalendarza juz jako gotowy tekst - warstwa tylko go
-    // stawia. Ramka ma zapas na drugi wiersz, bo dluga data z godzina lamie
-    // sie przy wiekszym kroju.
+    // --- Pas: data | miejsce | godzina -------------------------------
+    // Trzy kolumny rozdzielone kropkowanymi kreskami, jak na wzorcu. Data
+    // i godzina to osobne pola formularza, bo renderer podstawia CALA
+    // odpowiedz w jedno miejsce - jedno pole nie zasili dwoch kolumn.
+
+    separatorLayer({ id: 'band_rule_left', name: 'Kreska lewa', imageUrl: separatorImageUrl, leftMm: BAND_RULE_1_MM, zIndex: 4 }),
+    separatorLayer({ id: 'band_rule_right', name: 'Kreska prawa', imageUrl: separatorImageUrl, leftMm: BAND_RULE_2_MM, zIndex: 5 }),
+
+    // "07/09" duze, rok pod spodem drobniej - jeden zapis, dwa stopnie pisma.
+    // Zakres znakow jest staly, bo format daty ma stala dlugosc.
     textbox({
-      id: 'party_datetime',
-      name: 'Data i godzina',
-      fieldKey: 'party_datetime',
-      text: defaults.party_datetime,
-      leftMm: COLUMN_LEFT_MM,
-      topMm: 118.5,
-      widthMm: COLUMN_WIDTH_MM,
-      heightMm: 10,
-      zIndex: 4,
+      id: 'party_date',
+      name: 'Data przyjęcia',
+      fieldKey: 'party_date',
+      text: defaults.party_date,
+      leftMm: BAND_LEFT_COL_MM,
+      topMm: BAND_TOP_MM,
+      widthMm: BAND_SIDE_WIDTH_MM,
+      heightMm: BAND_HEIGHT_MM,
+      zIndex: 6,
       fontFamily: SERIF_FONT,
-      fontSize: 12,
-      letterSpacing: 60,
-      lineHeight: 1.35,
+      fontSize: 19,
+      lineHeight: 1.25,
+      letterSpacing: 20,
       textAlign: 'center',
+      styleRanges: [{ start: DATE_YEAR_FROM, end: DATE_YEAR_TO, fontSize: 10, fill: INK_SOFT }],
     }),
 
     textbox({
@@ -375,16 +482,54 @@ function buildLayers() {
       name: 'Miejsce przyjęcia',
       fieldKey: 'party_place',
       text: defaults.party_place,
-      leftMm: COLUMN_LEFT_MM,
-      topMm: 129,
-      widthMm: COLUMN_WIDTH_MM,
-      heightMm: 14,
-      zIndex: 5,
+      leftMm: BAND_MIDDLE_COL_MM,
+      topMm: BAND_TOP_MM,
+      widthMm: BAND_MIDDLE_WIDTH_MM,
+      heightMm: BAND_HEIGHT_MM,
+      zIndex: 7,
       fontFamily: SERIF_FONT,
-      fontSize: 8.5,
+      fontSize: 7.5,
       fill: INK_SOFT,
-      letterSpacing: 120,
-      lineHeight: 1.7,
+      letterSpacing: 80,
+      lineHeight: 1.6,
+      textAlign: 'center',
+    }),
+
+    // Godzina i jej podpis to dwie warstwy, a nie jeden dwuwierszowy napis:
+    // stopnie pisma sa rozne, a podpis ma zostac, gdy klient zmieni godzine.
+    textbox({
+      id: 'party_time',
+      name: 'Godzina przyjęcia',
+      fieldKey: 'party_time',
+      text: defaults.party_time,
+      leftMm: BAND_RIGHT_COL_MM,
+      topMm: BAND_TOP_MM,
+      widthMm: BAND_SIDE_WIDTH_MM,
+      heightMm: 9,
+      zIndex: 8,
+      fontFamily: SERIF_FONT,
+      fontSize: 19,
+      lineHeight: 1,
+      letterSpacing: 20,
+      textAlign: 'center',
+    }),
+
+    textbox({
+      id: 'time_label',
+      name: 'Podpis pod godziną',
+      fieldKey: 'time_label',
+      text: defaults.time_label,
+      leftMm: BAND_RIGHT_COL_MM,
+      // Rok w kolumnie daty siada nizej niz sam podpis w ramce stykajacej sie
+      // z godzina - stad 10,5 mm zamiast wysokosci ramki godziny.
+      topMm: BAND_TOP_MM + 10.5,
+      widthMm: BAND_SIDE_WIDTH_MM,
+      heightMm: 6,
+      zIndex: 9,
+      fontFamily: SERIF_FONT,
+      fontSize: 10,
+      fill: INK_SOFT,
+      lineHeight: 1,
       textAlign: 'center',
     }),
 
@@ -459,8 +604,8 @@ const canvasConfig = {
   backgroundColor: '#ffffff',
 }
 
-export function buildLayout() {
-  const layers = buildLayers()
+export function buildLayout(separatorImageUrl: string) {
+  const layers = buildLayers(separatorImageUrl)
 
   return {
     version: 2 as const,
@@ -477,6 +622,52 @@ export function buildLayout() {
     // Pastele ze wzorca - do wyboru w portalu, gdy klient zmienia kolor tekstu.
     palette: ['#3d3630', '#6b625a', '#a08b73', '#9aa892', '#c9a9b3'],
   }
+}
+
+/**
+ * Kropkowana kreska jako PNG - obie kreski pasa biora ten sam plik.
+ *
+ * Warstwa `shape` odpada: renderer druku jej nie rysuje, wiec kropki musza
+ * byc wypalone w pikselach. Plik ma docelowa wysokosc pasa, zeby skalowanie
+ * nie rozmylo kropek.
+ */
+async function ensureSeparatorAsset(templateId: string) {
+  const existing = await prisma.templateAsset.findFirst({
+    where: { templateId, assetType: 'DECORATION', fileName: { startsWith: 'kreska-kropki' } },
+  })
+  if (existing) return existing
+
+  const height = mm(RULE_HEIGHT_MM)
+  const canvas = createCanvas(RULE_WIDTH_PX, height)
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = INK_SOFT
+
+  // Kropka co 1,5 mm - tak gesto, zeby z odleglosci czytalo sie jak kreska,
+  // ale z bliska widac punkty, jak na wzorcu.
+  const step = Math.round(mm(1.5))
+  const dot = RULE_WIDTH_PX
+  for (let y = 0; y + dot <= height; y += step) {
+    ctx.fillRect(0, y, dot, dot)
+  }
+
+  const buffer = canvas.toBuffer('image/png')
+  const fileName = `kreska-kropki_${Date.now()}.png`
+  const dir = path.join(process.cwd(), 'storage', 'templates', TEMPLATE_CODE, 'decoration')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, fileName), buffer)
+
+  return prisma.templateAsset.create({
+    data: {
+      templateId,
+      assetType: 'DECORATION',
+      fileName,
+      filePath: path.join('templates', TEMPLATE_CODE, 'decoration', fileName),
+      fileSize: buffer.length,
+      mimeType: 'image/png',
+      metadata: { width: RULE_WIDTH_PX, height, originalName: 'kreska-kropki.png' },
+      sortOrder: 0,
+    },
+  })
 }
 
 /**
@@ -561,7 +752,8 @@ async function main() {
     await prisma.formField.deleteMany({ where: { id: { in: obsolete.map((field) => field.id) } } })
   }
 
-  const layout = buildLayout()
+  const separator = await ensureSeparatorAsset(template.id)
+  const layout = buildLayout(separator.filePath)
 
   await prisma.personalizationTemplate.update({
     where: { id: template.id },
@@ -577,6 +769,7 @@ async function main() {
         pageMm: [WIDTH_MM, HEIGHT_MM],
         miejsceNaGrafikeMm: [0, GRAPHIC_AREA_BOTTOM_MM],
         fields: FIELDS.map((field) => `${field.key} (${field.scope}, ${field.type})`),
+        separatorAsset: separator.filePath,
         layers: layout.layers.map((layer) => layer.name),
       },
       null,

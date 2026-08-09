@@ -21,13 +21,24 @@ import path from 'path'
 import { PrismaClient } from '@prisma/client'
 import { decrypt } from '../lib/encryption'
 import { renderMockupPng } from '../services/renderer/fabric-renderer.service'
+import {
+  LANGUAGE_ID,
+  cdata,
+  localized,
+  prestaShopApi,
+  setLangTag,
+  setTag,
+  slugify,
+  stripReadOnly,
+  xmlValue,
+  type PrestaShopApi,
+} from './lib/prestashop-webservice'
 
 const prisma = new PrismaClient()
 
 const SHOP_ID = process.env.SHOP_ID || 'cmscv7k7l0001h4khpd8arr5i' // Kreatywne-papierki
 const TEMPLATE_CODE = 'MIS'
 const CATEGORY_ID = process.env.CATEGORY_ID || '49' // Winietki i wizytówki na stół
-const LANGUAGE_ID = '1'
 const TAX_RULES_GROUP_ID = '1' // PL Standard Rate (23%)
 const TAX_RATE = 0.23
 
@@ -84,97 +95,6 @@ const DESCRIPTION = `<h2>Winietka personalizowana „Miś z Balonikami”</h2>
 </ul>
 <p>Winietka pochodzi z tej samej kolekcji co pozostała papeteria z misiem – zestaw dekoracji stołu można ułożyć w jednym stylu.</p>`
 
-// --- PrestaShop: minimalny klient webservice ---------------------------
-// Klient z `services/prestashop` obsluguje tworzenie produktu, ale nie
-// atrybutow ani kombinacji - a te sa tu sednem (dwa rodzaje papieru).
-
-type Shop = { baseUrl: string; apiKey: string }
-
-function api(shop: Shop) {
-  const baseUrl = shop.baseUrl.replace(/\/+$/, '').replace(/\/api$/, '')
-  const auth = 'Basic ' + Buffer.from(`${shop.apiKey}:`).toString('base64')
-
-  async function request(endpoint: string, init: RequestInit = {}, format: 'JSON' | 'XML' = 'JSON') {
-    const separator = endpoint.includes('?') ? '&' : '?'
-    const url = `${baseUrl}/api/${endpoint}${format === 'JSON' ? `${separator}output_format=JSON` : ''}`
-    const response = await fetch(url, {
-      ...init,
-      headers: {
-        Authorization: auth,
-        Accept: format === 'JSON' ? 'application/json' : 'application/xml',
-        ...(init.headers || {}),
-      },
-    })
-    const text = await response.text()
-    if (!response.ok) {
-      throw new Error(`${init.method || 'GET'} ${endpoint} -> ${response.status}: ${text.slice(0, 600)}`)
-    }
-    return { text, response }
-  }
-
-  return {
-    baseUrl,
-    async getJson<T = any>(endpoint: string): Promise<T> {
-      const { text } = await request(endpoint)
-      return text ? JSON.parse(text) : ({} as T)
-    },
-    async getXml(endpoint: string) {
-      const { text } = await request(endpoint, {}, 'XML')
-      return text
-    },
-    async sendXml(endpoint: string, method: 'POST' | 'PUT', body: string) {
-      const { text } = await request(
-        endpoint,
-        { method, body, headers: { 'Content-Type': 'application/xml' } },
-        'XML'
-      )
-      return text
-    },
-    async deleteImage(productId: string, imageId: string) {
-      await request(`images/products/${productId}/${imageId}`, { method: 'DELETE' }, 'XML')
-    },
-    async uploadImage(productId: string, filePath: string) {
-      const buffer = fs.readFileSync(filePath)
-      const form = new FormData()
-      const mimeType = filePath.endsWith('.png') ? 'image/png' : 'image/jpeg'
-      form.append('image', new Blob([buffer], { type: mimeType }), path.basename(filePath))
-      const response = await fetch(`${baseUrl}/api/images/products/${productId}`, {
-        method: 'POST',
-        headers: { Authorization: auth },
-        body: form,
-      })
-      const text = await response.text()
-      if (!response.ok) throw new Error(`upload zdjecia -> ${response.status}: ${text.slice(0, 400)}`)
-      return text
-    },
-  }
-}
-
-const cdata = (value: string) => value.replace(/]]>/g, ']]]]><![CDATA[>')
-const xmlValue = (text: string, tag: string) =>
-  text.match(new RegExp(`<${tag}>\\s*(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:]]>)?\\s*</${tag}>`))?.[1]?.trim() ?? ''
-
-/** Podmienia zawartosc pojedynczego pola w XML zasobu. */
-function setTag(xml: string, tag: string, value: string) {
-  const pattern = new RegExp(`<${tag}(\\s[^>]*)?>[\\s\\S]*?</${tag}>`)
-  const replacement = `<${tag}><![CDATA[${cdata(value)}]]></${tag}>`
-  return pattern.test(xml) ? xml.replace(pattern, replacement) : xml
-}
-
-/** Podmienia pole wielojezyczne (sklep ma jeden jezyk - pl). */
-function setLangTag(xml: string, tag: string, value: string) {
-  const pattern = new RegExp(`<${tag}(\\s[^>]*)?>[\\s\\S]*?</${tag}>`)
-  const replacement = `<${tag}><language id="${LANGUAGE_ID}"><![CDATA[${cdata(value)}]]></language></${tag}>`
-  return pattern.test(xml) ? xml.replace(pattern, replacement) : xml
-}
-
-/** Pola, ktore PrestaShop wystawia tylko do odczytu - PUT z nimi konczy sie bledem. */
-function stripReadOnly(xml: string) {
-  return xml
-    .replace(/<manufacturer_name[\s\S]*?<\/manufacturer_name>/g, '')
-    .replace(/<quantity[\s\S]*?<\/quantity>/g, '')
-}
-
 // --- Zdjecie produktu --------------------------------------------------
 
 /**
@@ -207,12 +127,11 @@ async function ensureProductPhoto(layout: any, force = false) {
 
 // --- Atrybut i kombinacje ---------------------------------------------
 
-async function ensureAttributeGroup(shop: ReturnType<typeof api>) {
+async function ensureAttributeGroup(shop: PrestaShopApi) {
   const groups = await shop.getJson<any>('product_options?display=full')
-  const existing = (groups.product_options || []).find((group: any) => {
-    const name = Array.isArray(group.name) ? group.name[0]?.value : group.name
-    return String(name).trim().toLowerCase() === ATTRIBUTE_GROUP_NAME.toLowerCase()
-  })
+  const existing = (groups.product_options || []).find(
+    (group: any) => localized(group.name).trim().toLowerCase() === ATTRIBUTE_GROUP_NAME.toLowerCase()
+  )
   if (existing) return String(existing.id)
 
   const payload = `<?xml version="1.0" encoding="UTF-8"?>
@@ -230,7 +149,7 @@ async function ensureAttributeGroup(shop: ReturnType<typeof api>) {
   return xmlValue(created, 'id')
 }
 
-async function ensureAttributeValues(shop: ReturnType<typeof api>, groupId: string) {
+async function ensureAttributeValues(shop: PrestaShopApi, groupId: string) {
   const group = await shop.getJson<any>(`product_options/${groupId}`)
   const valueIds: string[] = (group.product_option?.associations?.product_option_values || []).map((value: any) =>
     String(value.id)
@@ -239,10 +158,7 @@ async function ensureAttributeValues(shop: ReturnType<typeof api>, groupId: stri
   const byName = new Map<string, string>()
   for (const valueId of valueIds) {
     const value = await shop.getJson<any>(`product_option_values/${valueId}`)
-    const name = Array.isArray(value.product_option_value?.name)
-      ? value.product_option_value.name[0]?.value
-      : value.product_option_value?.name
-    byName.set(String(name).trim().toLowerCase(), valueId)
+    byName.set(localized(value.product_option_value?.name).trim().toLowerCase(), valueId)
   }
 
   const result: string[] = []
@@ -268,7 +184,7 @@ async function ensureAttributeValues(shop: ReturnType<typeof api>, groupId: stri
   return result
 }
 
-async function ensureCombinations(shop: ReturnType<typeof api>, productId: string, valueIds: string[]) {
+async function ensureCombinations(shop: PrestaShopApi, productId: string, valueIds: string[]) {
   const product = await shop.getJson<any>(`products/${productId}`)
   const existing: any[] = product.product?.associations?.combinations || []
   if (existing.length > 0) {
@@ -304,7 +220,7 @@ async function ensureCombinations(shop: ReturnType<typeof api>, productId: strin
  * Dostepnosc: winietka powstaje na zamowienie, wiec stan magazynowy zostaje
  * zerowy, a sklep ma pozwalac na zakup mimo braku stanu (`out_of_stock = 1`).
  */
-async function allowOrdersWithoutStock(shop: ReturnType<typeof api>, productId: string) {
+async function allowOrdersWithoutStock(shop: PrestaShopApi, productId: string) {
   const stock = await shop.getJson<any>(`stock_availables?display=full&filter[id_product]=[${productId}]`)
   for (const entry of stock.stock_availables || []) {
     const xml = await shop.getXml(`stock_availables/${entry.id}`)
@@ -315,7 +231,7 @@ async function allowOrdersWithoutStock(shop: ReturnType<typeof api>, productId: 
 
 // --- Produkt -----------------------------------------------------------
 
-async function findProductIdByReference(shop: ReturnType<typeof api>) {
+async function findProductIdByReference(shop: PrestaShopApi) {
   const data = await shop.getJson<any>(
     `products?filter[reference]=[${encodeURIComponent(REFERENCE)}]&display=[id,reference]&limit=1`
   )
@@ -323,22 +239,7 @@ async function findProductIdByReference(shop: ReturnType<typeof api>) {
   return products[0] ? String(products[0].id) : null
 }
 
-function slugify(value: string) {
-  return (
-    value
-      // NFD nie rozklada "l" z kreska, wiec bez tej podmiany "stol" gubi
-      // cala litere i w adresie zostaje "sto".
-      .replace(/\u0142/g, 'l')
-      .replace(/\u0141/g, 'L')
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '') || 'produkt'
-  )
-}
-
-async function createProduct(shop: ReturnType<typeof api>) {
+async function createProduct(shop: PrestaShopApi) {
   const payload = `<?xml version="1.0" encoding="UTF-8"?>
 <prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
   <product>
@@ -374,7 +275,7 @@ async function createProduct(shop: ReturnType<typeof api>) {
 }
 
 /** Dociaga tresci na istniejacej karcie - bez ruszania tego, czego nie znamy. */
-async function updateProduct(shop: ReturnType<typeof api>, productId: string) {
+async function updateProduct(shop: PrestaShopApi, productId: string) {
   let xml = await shop.getXml(`products/${productId}`)
   xml = stripReadOnly(xml)
   xml = setTag(xml, 'price', String(PRICE_NET))
@@ -426,7 +327,7 @@ async function main() {
 
   const shopRecord = await prisma.shop.findUnique({ where: { id: SHOP_ID } })
   if (!shopRecord) throw new Error(`Brak sklepu ${SHOP_ID}`)
-  const shop = api({ baseUrl: shopRecord.baseUrl, apiKey: decrypt(shopRecord.apiKey) })
+  const shop = prestaShopApi({ baseUrl: shopRecord.baseUrl, apiKey: decrypt(shopRecord.apiKey) })
 
   // REPLACE_PHOTO=1 - przerysowanie zdjecia i podmiana go na karcie, np. po
   // poprawce renderera albo zmianie ukladu winietki.
@@ -449,7 +350,7 @@ async function main() {
   const images: any[] = product.product?.associations?.images || []
   if (replacePhoto) {
     for (const image of images) {
-      await shop.deleteImage(productId, String(image.id))
+      await shop.deleteResource(`images/products/${productId}/${image.id}`)
     }
   }
   if (images.length === 0 || replacePhoto) {

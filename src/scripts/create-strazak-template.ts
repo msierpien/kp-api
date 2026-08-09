@@ -57,12 +57,17 @@ const RED = '#e0392e'
 const mm = (value: number) => Math.round((value / 25.4) * DPI)
 
 // Krój z rejestru czcionek serwera (storage/fonts) - tylko takie node-canvas
-// zarejestruje przy druku. Montserrat jest plikiem ZMIENNYM, wiec node-canvas
-// widzi wylacznie wage domyslna: wszedzie 400, a "grubosc" naglowkow robimy
-// stopniem pisma, wersalikami i swiatlem miedzy literami.
-const SANS_FONT = 'Montserrat'
+// zarejestruje przy druku. Poppins ma tam komplet plikow STATYCZNYCH, wiec
+// grubsze warianty naprawde sie drukuja; przy kroju zmiennym (Montserrat.ttf)
+// node-canvas widzi wylacznie wage domyslna i kazdy naglowek wyszedlby cienki.
+const SANS_FONT = 'Poppins'
 
-const FONTS = [{ family: SANS_FONT, src: 'fonts/Montserrat.ttf', weight: 400, style: 'normal' as const }]
+const FONTS = [
+  { family: SANS_FONT, src: 'fonts/Poppins-Regular.ttf', weight: 400, style: 'normal' as const },
+  { family: SANS_FONT, src: 'fonts/Poppins-Medium.ttf', weight: 500, style: 'normal' as const },
+  { family: SANS_FONT, src: 'fonts/Poppins-SemiBold.ttf', weight: 600, style: 'normal' as const },
+  { family: SANS_FONT, src: 'fonts/Poppins-Bold.ttf', weight: 700, style: 'normal' as const },
+]
 
 type FieldInput = {
   key: string
@@ -277,6 +282,8 @@ type TextboxInput = {
   heightMm: number
   zIndex: number
   fontSize: number
+  /** Waga MUSI miec swoj plik w rejestrze - patrz FONTS. */
+  fontWeight?: 400 | 500 | 600 | 700
   fill?: string
   lineHeight?: number
   letterSpacing?: number
@@ -311,7 +318,7 @@ function textbox(input: TextboxInput) {
       fontSize: input.fontSize,
       fontUnit: 'pt' as const,
       fontFamily: SANS_FONT,
-      fontWeight: 400,
+      fontWeight: input.fontWeight ?? 400,
       fontStyle: 'normal' as const,
       fill: input.fill ?? INK,
       textAlign: input.textAlign ?? 'center',
@@ -344,6 +351,7 @@ type TextPathInput = {
   pathSide: 'left' | 'right'
   zIndex: number
   fontSize: number
+  fontWeight?: 400 | 500 | 600 | 700
   letterSpacing?: number
   fill?: string
 }
@@ -389,7 +397,7 @@ function textPath(input: TextPathInput) {
       fontSize: input.fontSize,
       fontUnit: 'pt' as const,
       fontFamily: SANS_FONT,
-      fontWeight: 400,
+      fontWeight: input.fontWeight ?? 400,
       fontStyle: 'normal' as const,
       fill: input.fill ?? RED,
       letterSpacing: input.letterSpacing ?? 0,
@@ -430,7 +438,8 @@ function backLayers(backgroundUrl: string) {
       widthMm: COLUMN_WIDTH_MM,
       heightMm: 12,
       zIndex: 1,
-      fontSize: 19,
+      fontSize: 17,
+      fontWeight: 600,
     }),
 
     textbox({
@@ -443,7 +452,7 @@ function backLayers(backgroundUrl: string) {
       widthMm: COLUMN_WIDTH_MM,
       heightMm: 6,
       zIndex: 2,
-      fontSize: 9.5,
+      fontSize: 9,
     }),
 
     textbox({
@@ -456,8 +465,9 @@ function backLayers(backgroundUrl: string) {
       widthMm: COLUMN_WIDTH_MM,
       heightMm: 11,
       zIndex: 3,
-      fontSize: 15,
-      letterSpacing: 60,
+      fontSize: 12.5,
+      fontWeight: 700,
+      letterSpacing: 20,
       fill: RED,
     }),
 
@@ -471,7 +481,7 @@ function backLayers(backgroundUrl: string) {
       widthMm: COLUMN_WIDTH_MM,
       heightMm: 6,
       zIndex: 4,
-      fontSize: 9.5,
+      fontSize: 9,
     }),
 
     textbox({
@@ -483,7 +493,8 @@ function backLayers(backgroundUrl: string) {
       widthMm: COLUMN_WIDTH_MM,
       heightMm: 5,
       zIndex: 5,
-      fontSize: 7.5,
+      fontSize: 7,
+      fontWeight: 600,
       letterSpacing: 250,
       fill: RED,
     }),
@@ -498,7 +509,8 @@ function backLayers(backgroundUrl: string) {
       widthMm: COLUMN_WIDTH_MM,
       heightMm: 8,
       zIndex: 6,
-      fontSize: 11,
+      fontSize: 10,
+      fontWeight: 500,
     }),
 
     textbox({
@@ -510,7 +522,8 @@ function backLayers(backgroundUrl: string) {
       widthMm: COLUMN_WIDTH_MM,
       heightMm: 5,
       zIndex: 7,
-      fontSize: 7.5,
+      fontSize: 7,
+      fontWeight: 600,
       letterSpacing: 250,
       fill: RED,
     }),
@@ -525,7 +538,7 @@ function backLayers(backgroundUrl: string) {
       widthMm: COLUMN_WIDTH_MM,
       heightMm: 13,
       zIndex: 8,
-      fontSize: 10,
+      fontSize: 9.5,
       lineHeight: 1.35,
     }),
 
@@ -539,7 +552,7 @@ function backLayers(backgroundUrl: string) {
       widthMm: COLUMN_WIDTH_MM,
       heightMm: 6,
       zIndex: 9,
-      fontSize: 8.5,
+      fontSize: 8,
     }),
   ]
 }
@@ -570,8 +583,9 @@ function badgeLayers(badgeUrl: string) {
       sweepAngle: 180,
       pathSide: 'left',
       zIndex: 1,
-      fontSize: 9,
-      letterSpacing: 200,
+      fontSize: 8,
+      fontWeight: 600,
+      letterSpacing: 150,
     }),
 
     textbox({
@@ -584,7 +598,8 @@ function badgeLayers(badgeUrl: string) {
       widthMm: BADGE_MM - 18,
       heightMm: 14,
       zIndex: 2,
-      fontSize: 22,
+      fontSize: 19,
+      fontWeight: 700,
     }),
 
     textPath({
@@ -599,8 +614,9 @@ function badgeLayers(badgeUrl: string) {
       sweepAngle: 180,
       pathSide: 'right',
       zIndex: 3,
-      fontSize: 9,
-      letterSpacing: 200,
+      fontSize: 8,
+      fontWeight: 600,
+      letterSpacing: 150,
     }),
   ]
 }

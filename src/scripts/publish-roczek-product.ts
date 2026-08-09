@@ -442,13 +442,15 @@ async function updateProduct(
  * `ZAP-ROCZEK-P`. Wersja do samodzielnego uzupelnienia nie ma dopasowania,
  * wiec synchronizacja zamowien nie zaklada dla niej sprawy personalizacji.
  */
-async function ensurePersonalizedProduct(templateId: string) {
+async function ensurePersonalizedProduct(templateId: string, externalProductId: string) {
   const variant = VARIANTS.find((item) => item.personalized)!
   const existing = await prisma.personalizedProduct.findFirst({
     where: { shopId: SHOP_ID, identifierType: 'SKU', identifierValue: variant.reference },
   })
 
-  const data = { name: `${PRODUCT_NAME} (personalizowane)`, templateId, isActive: true }
+  // `externalProductId` panel tylko przechowuje (dopasowanie zamowien idzie po
+  // referencji), ale bez niego nie widac, ktora karta w sklepie to jest.
+  const data = { name: `${PRODUCT_NAME} (personalizowane)`, templateId, externalProductId, isActive: true }
 
   if (existing) {
     return prisma.personalizedProduct.update({ where: { id: existing.id }, data })
@@ -495,7 +497,7 @@ async function main() {
     }
   }
 
-  const personalizedProduct = await ensurePersonalizedProduct(template.id)
+  const personalizedProduct = await ensurePersonalizedProduct(template.id, productId)
 
   console.log(
     JSON.stringify(
@@ -518,6 +520,7 @@ async function main() {
         panel: {
           personalizedProductId: personalizedProduct.id,
           identifierValue: personalizedProduct.identifierValue,
+          externalProductId: personalizedProduct.externalProductId,
           templateId: template.id,
           templateCode: TEMPLATE_CODE,
           shop: shopRecord.name,

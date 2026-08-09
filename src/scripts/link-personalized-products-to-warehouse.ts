@@ -19,11 +19,9 @@
  *    stoi na referencjach kombinacji i produkcie personalizowanym, wiec ta
  *    flaga musi zostac wylaczona.
  *
- * UWAGA na stan bazy: produkcyjna tabela `shop_product_mappings` ma kolumne
- * `external_combination_id` i unikat na (shop_id, external_product_id,
- * external_combination_id), czego nie ma w `prisma/schema.prisma`. Dlatego
- * zapisy ida przez findFirst + create/update, a nie `upsert` - ten opiera sie
- * na kluczu ze schematu i konczy sie bledem 42P10.
+ * Mapowanie zakladamy na poziomie produktu-rodzica, czyli
+ * `externalCombinationId = '0'`. Kombinacje (warianty) maja wlasne mapowania
+ * i zaklada je import ze sklepu.
  *
  * Uruchamiany W KONTENERZE `personalization-api`:
  *   node dist/scripts/link-personalized-products-to-warehouse.js
@@ -35,6 +33,9 @@ const prisma = new PrismaClient()
 const TENANT_SLUG = process.env.TENANT_SLUG || 'kreatywne-papierki'
 const SHOP_ID = process.env.SHOP_ID || 'cmscv7k7l0001h4khpd8arr5i' // Kreatywne-papierki
 const CATALOG_NAME = 'Kreatywne Papierki'
+
+/** '0' = mapowanie produktu-rodzica; warianty maja tu id kombinacji. */
+const PARENT_COMBINATION_ID = '0'
 
 /** Karty, ktore maja trafic do magazynu. Cena detaliczna brutto, jak w sklepie. */
 const PRODUCTS = [
@@ -64,13 +65,6 @@ async function main() {
   const summary: any[] = []
 
   for (const product of PRODUCTS) {
-    // Wyszukanie + zapis zamiast `upsert`: klucze zlozone w tej bazie nie
-    // pokrywaja sie ze schematem w repozytorium (patrz komentarz na dole),
-    // a `upsert` opiera sie wlasnie na nich.
-    const existingProduct = await prisma.warehouseProduct.findFirst({
-      where: { tenantId: tenant.id, sku: product.sku },
-    })
-
     const productData = {
       name: product.name,
       retailPrice: product.retailPrice,
@@ -78,20 +72,16 @@ async function main() {
       isStockTracked: false,
     }
 
-    const warehouseProduct = existingProduct
-      ? await prisma.warehouseProduct.update({ where: { id: existingProduct.id }, data: productData })
-      : await prisma.warehouseProduct.create({
-          data: {
-            tenantId: tenant.id,
-            catalogId: catalog.id,
-            sku: product.sku,
-            unit: 'szt',
-            ...productData,
-          },
-        })
-
-    const existingMapping = await prisma.shopProductMapping.findFirst({
-      where: { shopId: SHOP_ID, externalProductId: product.externalProductId },
+    const warehouseProduct = await prisma.warehouseProduct.upsert({
+      where: { tenantId_sku: { tenantId: tenant.id, sku: product.sku } },
+      create: {
+        tenantId: tenant.id,
+        catalogId: catalog.id,
+        sku: product.sku,
+        unit: 'szt',
+        ...productData,
+      },
+      update: productData,
     })
 
     const mappingData = {
@@ -103,17 +93,24 @@ async function main() {
       lastSyncAt: new Date(),
     }
 
-    const mapping = existingMapping
-      ? await prisma.shopProductMapping.update({ where: { id: existingMapping.id }, data: mappingData })
-      : await prisma.shopProductMapping.create({
-          data: {
-            tenantId: tenant.id,
-            shopId: SHOP_ID,
-            externalProductId: product.externalProductId,
-            personalizationEnabled: false,
-            ...mappingData,
-          },
-        })
+    const mapping = await prisma.shopProductMapping.upsert({
+      where: {
+        shopId_externalProductId_externalCombinationId: {
+          shopId: SHOP_ID,
+          externalProductId: product.externalProductId,
+          externalCombinationId: PARENT_COMBINATION_ID,
+        },
+      },
+      create: {
+        tenantId: tenant.id,
+        shopId: SHOP_ID,
+        externalProductId: product.externalProductId,
+        externalCombinationId: PARENT_COMBINATION_ID,
+        personalizationEnabled: false,
+        ...mappingData,
+      },
+      update: mappingData,
+    })
 
     summary.push({
       sku: product.sku,

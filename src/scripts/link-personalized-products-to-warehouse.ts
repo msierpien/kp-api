@@ -19,9 +19,10 @@
  *    stoi na referencjach kombinacji i produkcie personalizowanym, wiec ta
  *    flaga musi zostac wylaczona.
  *
- * Mapowanie zakladamy na poziomie produktu-rodzica, czyli
- * `externalCombinationId = '0'`. Kombinacje (warianty) maja wlasne mapowania
- * i zaklada je import ze sklepu.
+ * Karte dostaje produkt-rodzic (`externalCombinationId = '0'`) oraz kazdy
+ * wariant osobno - dzieki temu sprzedaz obu wersji zaproszenia da sie
+ * rozdzielic w raportach. Mapowania wariantow zaklada import ze sklepu;
+ * tutaj tylko dopinamy je do kart magazynowych.
  *
  * Uruchamiany W KONTENERZE `personalization-api`:
  *   node dist/scripts/link-personalized-products-to-warehouse.js
@@ -37,8 +38,17 @@ const CATALOG_NAME = 'Kreatywne Papierki'
 /** '0' = mapowanie produktu-rodzica; warianty maja tu id kombinacji. */
 const PARENT_COMBINATION_ID = '0'
 
-/** Karty, ktore maja trafic do magazynu. Cena detaliczna brutto, jak w sklepie. */
-const PRODUCTS = [
+/**
+ * Karty, ktore maja trafic do magazynu. Cena detaliczna brutto, jak w sklepie.
+ * `combinationId` puste = produkt-rodzic.
+ */
+const PRODUCTS: Array<{
+  externalProductId: string
+  combinationId?: string
+  sku: string
+  name: string
+  retailPrice: number
+}> = [
   {
     externalProductId: '9406',
     sku: 'WIN-MIS',
@@ -49,6 +59,20 @@ const PRODUCTS = [
     externalProductId: '9407',
     sku: 'ZAP-ROCZEK',
     name: 'Zaproszenie na roczek – Miś z Balonikami',
+    retailPrice: 5,
+  },
+  {
+    externalProductId: '9407',
+    combinationId: '63',
+    sku: 'ZAP-ROCZEK-P',
+    name: 'Zaproszenie na roczek – Miś z Balonikami (personalizowane)',
+    retailPrice: 6.5,
+  },
+  {
+    externalProductId: '9407',
+    combinationId: '64',
+    sku: 'ZAP-ROCZEK-S',
+    name: 'Zaproszenie na roczek – Miś z Balonikami (do samodzielnego uzupełnienia)',
     retailPrice: 5,
   },
 ]
@@ -93,19 +117,21 @@ async function main() {
       lastSyncAt: new Date(),
     }
 
+    const combinationId = product.combinationId ?? PARENT_COMBINATION_ID
+
     const mapping = await prisma.shopProductMapping.upsert({
       where: {
         shopId_externalProductId_externalCombinationId: {
           shopId: SHOP_ID,
           externalProductId: product.externalProductId,
-          externalCombinationId: PARENT_COMBINATION_ID,
+          externalCombinationId: combinationId,
         },
       },
       create: {
         tenantId: tenant.id,
         shopId: SHOP_ID,
         externalProductId: product.externalProductId,
-        externalCombinationId: PARENT_COMBINATION_ID,
+        externalCombinationId: combinationId,
         personalizationEnabled: false,
         ...mappingData,
       },
@@ -118,6 +144,7 @@ async function main() {
       stockTracked: warehouseProduct.isStockTracked,
       mappingId: mapping.id,
       externalProductId: mapping.externalProductId,
+      combinationId: mapping.externalCombinationId,
       personalizationEnabledOnMapping: mapping.personalizationEnabled,
     })
   }

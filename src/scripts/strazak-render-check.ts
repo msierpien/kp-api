@@ -19,7 +19,7 @@ import path from 'path'
 import { getTemplatePages } from '@msierpien/kp-template-core'
 import { templateLayoutSchema } from '../schemas/admin.schema'
 import { renderPrintPagePng } from '../services/renderer/fabric-renderer.service'
-import { buildLayout, drawBadgePng } from './create-strazak-template'
+import { buildLayout, drawBadgeRulePng } from './create-strazak-template'
 
 const STORAGE_ROOT = process.env.STORAGE_PATH || path.join(process.cwd(), 'storage')
 const OUT_DIR = path.join(process.cwd(), 'tmp', 'strazak-check')
@@ -36,9 +36,12 @@ const ANSWERS: Record<string, string> = {
   party_datetime: '12 września 2026, godz. 15:00',
   party_place: 'Sala zabaw „Iskierka”\nul. Wesoła 3, Kraków',
   rsvp_line: 'Potwierdź przybycie: Mama Ania 600 100 200',
-  child_name: 'Bartek',
-  badge_top: 'STRAŻACKA EKIPA',
-  badge_bottom: '5 URODZINY',
+  child_name: 'Oliwiera',
+  badge_age_word: 'PIĘĆ',
+  badge_age_unit: 'latek',
+  badge_occasion: 'Piąte urodziny',
+  badge_date: '16 lipca 2027',
+  badge_time: 'godzina 14:00',
 }
 
 function copyToStorage(source: string, relative: string) {
@@ -52,13 +55,13 @@ async function main() {
   const frontUrl = copyToStorage(FRONT_SOURCE, 'templates/STRAZAK/background/strazak-przod-check.png')
   const backUrl = copyToStorage(BACK_SOURCE, 'templates/STRAZAK/background/strazak-tyl-check.png')
 
-  const badgeRelative = 'templates/STRAZAK/decoration/strazak-krazek-check.png'
-  const badgeTarget = path.join(STORAGE_ROOT, badgeRelative)
-  fs.mkdirSync(path.dirname(badgeTarget), { recursive: true })
-  const badge = await drawBadgePng(BACK_SOURCE)
-  fs.writeFileSync(badgeTarget, badge.buffer)
+  const ruleRelative = 'templates/STRAZAK/decoration/strazak-kreska-check.png'
+  const ruleTarget = path.join(STORAGE_ROOT, ruleRelative)
+  fs.mkdirSync(path.dirname(ruleTarget), { recursive: true })
+  const rule = await drawBadgeRulePng()
+  fs.writeFileSync(ruleTarget, rule.buffer)
 
-  const layout = buildLayout(frontUrl, backUrl, badgeRelative)
+  const layout = buildLayout(frontUrl, backUrl, ruleRelative)
 
   // Ten sam schemat, ktorym panel waliduje zapis layoutu. Nieznane pole nie
   // wywala bledu, tylko po cichu wypada - dlatego porownujemy tez ksztalt.

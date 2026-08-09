@@ -5,16 +5,18 @@
  *               SRODEK ZOSTAJE PUSTY, bo tam wchodzi doklejany krążek.
  *   2. Tył    - cała treść zaproszenia na czystym papierze, pas grafiki
  *               wchodzi dopiero od 112 mm.
- *   3. Krążek - OSOBNA strona 70 x 70 mm z imieniem dziecka, wycinana w koło
- *               i doklejana na środku przodu.
+ *   3. Krążek - OSOBNA strona 70 x 70 mm z danymi solenizanta, wycinana
+ *               w koło i doklejana na środku przodu.
  *
  * Krążek jest osobną stroną, a nie kształtem na przodzie, bo drukuje się go
  * na innym podłożu i wycina osobno. Strony róznią się wymiarem, więc sklad
  * idzie w trybie `separate` - kazda strona na wlasnym arkuszu.
  *
- * Grafika krążka POWSTAJE TUTAJ (node-canvas): papier wycięty z tła + dwie
- * czerwone obręcze. Format nie ma masek ani przycinania do kształtu -
- * `shape` renderer druku ignoruje - wiec kolo musi byc pikselami.
+ * Krążek nie ma TLA - sama typografia na bieli, jak na wzorcu od Michala.
+ * Kolo powstaje przy wycinaniu, nie na wydruku: format nie zna masek ani
+ * przycinania do kształtu, a `shape` renderer druku ignoruje. Jedyna grafika
+ * na tej stronie to cienka kreska rozdzielajaca, rysowana tutaj do PNG -
+ * warstwy `shape` nie byloby widac na papierze.
  *
  * Skrypt jest idempotentny: ponowne uruchomienie nadpisuje pola formularza
  * i layout zamiast zakladac drugi szablon o tym samym kodzie. UWAGA - nadpisze
@@ -29,7 +31,6 @@
 import fs from 'fs'
 import path from 'path'
 import { Prisma, PrismaClient } from '@prisma/client'
-import { buildTextPathD, getTextPathBBox } from '@msierpien/kp-template-core'
 
 const prisma = new PrismaClient()
 
@@ -50,8 +51,10 @@ const BADGE_MM = 70
 
 /** Ciemna szarosc z konturow rysunku - czern przy akwareli wyglada twardo. */
 const INK = '#3f3a38'
-/** Czerwien wozu i helmu - podpisy pomocnicze i obreczki krążka. */
+/** Czerwien wozu i helmu - podpisy pomocnicze na karcie. */
 const RED = '#e0392e'
+/** Ciemniejsza, ceglana czerwien - cala typografia krążka. */
+const BADGE_INK = '#8f2b22'
 
 /** Milimetry na piksele projektu. Format zyje w mm, renderer w px. */
 const mm = (value: number) => Math.round((value / 25.4) * DPI)
@@ -61,12 +64,18 @@ const mm = (value: number) => Math.round((value / 25.4) * DPI)
 // grubsze warianty naprawde sie drukuja; przy kroju zmiennym (Montserrat.ttf)
 // node-canvas widzi wylacznie wage domyslna i kazdy naglowek wyszedlby cienki.
 const SANS_FONT = 'Poppins'
+/** Kaligrafia na imie solenizanta (krążek). */
+const SCRIPT_FONT = 'Great Vibes'
+/** Szeryf o duzym kontrascie - liczebnik i data na krążku. */
+const SERIF_FONT = 'Playfair Display'
 
 const FONTS = [
   { family: SANS_FONT, src: 'fonts/Poppins-Regular.ttf', weight: 400, style: 'normal' as const },
   { family: SANS_FONT, src: 'fonts/Poppins-Medium.ttf', weight: 500, style: 'normal' as const },
   { family: SANS_FONT, src: 'fonts/Poppins-SemiBold.ttf', weight: 600, style: 'normal' as const },
   { family: SANS_FONT, src: 'fonts/Poppins-Bold.ttf', weight: 700, style: 'normal' as const },
+  { family: SCRIPT_FONT, src: 'fonts/GreatVibes-Regular.ttf', weight: 400, style: 'normal' as const },
+  { family: SERIF_FONT, src: 'fonts/PlayfairDisplay-Bold.ttf', weight: 700, style: 'normal' as const },
 ]
 
 type FieldInput = {
@@ -165,35 +174,66 @@ const FIELDS: FieldInput[] = [
   },
   {
     key: 'child_name',
-    label: 'Imię dziecka (na krążku)',
+    label: 'Krążek - imię dziecka',
     type: 'text',
     scope: 'SHARED',
     required: true,
     sortOrder: 8,
-    defaultValue: 'Bartek',
-    helpText: 'Wchodzi na doklejany krążek 70 mm - mianownik, samo imię.',
-    maxLength: 14,
+    defaultValue: 'Oliwiera',
+    // Napis czyta sie "Oliwiera PIEC latek", wiec dopelniacz - system nie odmieni.
+    helpText: 'Dopełniacz, jak w zdaniu „Oliwiera pięć latek”: „Oliwiera”, „Zosi”, „Antka”.',
+    maxLength: 16,
   },
   {
-    key: 'badge_top',
-    label: 'Krążek - napis nad imieniem',
+    key: 'badge_age_word',
+    label: 'Krążek - wiek słownie',
+    type: 'text',
+    scope: 'SHARED',
+    required: true,
+    sortOrder: 9,
+    defaultValue: 'PIĘĆ',
+    helpText: 'Wersaliki - to najwiekszy napis na krążku.',
+    maxLength: 12,
+  },
+  {
+    key: 'badge_age_unit',
+    label: 'Krążek - odmiana „latek”',
+    type: 'text',
+    scope: 'SHARED',
+    required: true,
+    sortOrder: 10,
+    defaultValue: 'latek',
+    helpText: 'Osobno, bo odmiana zalezy od liczby: „latek”, „lata”, „roczek”.',
+    maxLength: 12,
+  },
+  {
+    key: 'badge_occasion',
+    label: 'Krążek - okazja',
     type: 'text',
     scope: 'SHARED',
     required: false,
-    sortOrder: 9,
-    defaultValue: 'STRAŻACKA EKIPA',
-    helpText: 'Biegnie łukiem po górnej krawędzi krążka.',
+    sortOrder: 11,
+    defaultValue: 'Piąte urodziny',
+    maxLength: 26,
+  },
+  {
+    key: 'badge_date',
+    label: 'Krążek - data',
+    type: 'text',
+    scope: 'SHARED',
+    required: false,
+    sortOrder: 12,
+    defaultValue: '16 lipca 2027',
     maxLength: 22,
   },
   {
-    key: 'badge_bottom',
-    label: 'Krążek - napis pod imieniem',
+    key: 'badge_time',
+    label: 'Krążek - godzina',
     type: 'text',
     scope: 'SHARED',
     required: false,
-    sortOrder: 10,
-    defaultValue: '5 URODZINY',
-    helpText: 'Biegnie łukiem po dolnej krawędzi krążka.',
+    sortOrder: 13,
+    defaultValue: 'godzina 14:00',
     maxLength: 22,
   },
 ]
@@ -282,6 +322,8 @@ type TextboxInput = {
   heightMm: number
   zIndex: number
   fontSize: number
+  /** Krój; brak = Poppins. Musi byc w FONTS, inaczej druk podstawi systemowy. */
+  fontFamily?: string
   /** Waga MUSI miec swoj plik w rejestrze - patrz FONTS. */
   fontWeight?: 400 | 500 | 600 | 700
   fill?: string
@@ -317,7 +359,7 @@ function textbox(input: TextboxInput) {
       ...(input.fieldKey ? { fieldKey: input.fieldKey } : {}),
       fontSize: input.fontSize,
       fontUnit: 'pt' as const,
-      fontFamily: SANS_FONT,
+      fontFamily: input.fontFamily ?? SANS_FONT,
       fontWeight: input.fontWeight ?? 400,
       fontStyle: 'normal' as const,
       fill: input.fill ?? INK,
@@ -333,74 +375,6 @@ function textbox(input: TextboxInput) {
       clientDraggable: false,
       clientResizable: false,
       clientRotatable: false,
-    },
-  }
-}
-
-type TextPathInput = {
-  id: string
-  name: string
-  fieldKey: string
-  text: string
-  /** Srodek OKREGU w mm - nie srodek napisu. */
-  centerXMm: number
-  centerYMm: number
-  radiusMm: number
-  startAngle: number
-  sweepAngle: number
-  pathSide: 'left' | 'right'
-  zIndex: number
-  fontSize: number
-  fontWeight?: 400 | 500 | 600 | 700
-  letterSpacing?: number
-  fill?: string
-}
-
-/**
- * Napis po luku.
- *
- * Geometrie (`pathD`, ramke warstwy) liczy pakiet kp-template-core - te same
- * funkcje, ktorych uzywa edytor i renderer druku. Policzenie tego na miejscu
- * konczy sie warstwa, ktora skacze po pierwszym zapisie w panelu.
- */
-function textPath(input: TextPathInput) {
-  const geometry = {
-    pathShape: 'arc' as const,
-    radiusMm: input.radiusMm,
-    startAngle: input.startAngle,
-    sweepAngle: input.sweepAngle,
-  }
-  const box = getTextPathBBox(geometry, DPI)
-
-  return {
-    id: input.id,
-    name: input.name,
-    type: 'text_path' as const,
-    visible: true,
-    locked: false,
-    opacity: 1,
-    zIndex: input.zIndex,
-    x: mm(input.centerXMm),
-    y: mm(input.centerYMm),
-    width: box.width,
-    height: box.height,
-    rotation: 0,
-    properties: {
-      type: 'text_path' as const,
-      fieldKey: input.fieldKey,
-      text: input.text,
-      ...geometry,
-      pathSide: input.pathSide,
-      pathAlign: 'baseline' as const,
-      textPathAlign: 'center' as const,
-      pathD: buildTextPathD(geometry, DPI),
-      fontSize: input.fontSize,
-      fontUnit: 'pt' as const,
-      fontFamily: SANS_FONT,
-      fontWeight: input.fontWeight ?? 400,
-      fontStyle: 'normal' as const,
-      fill: input.fill ?? RED,
-      letterSpacing: input.letterSpacing ?? 0,
     },
   }
 }
@@ -558,65 +532,147 @@ function backLayers(backgroundUrl: string) {
 }
 
 // ============================================
-// Strona 3 - krążek z imieniem
+// Strona 3 - krążek z danymi solenizanta
 // ============================================
-// Imie stoi prosto na srodku, dwa napisy pomocnicze biegna po luku wzdluz
-// obreczy. Luk dolny rysujemy od godziny 3 zgodnie z zegarem i sadzamy tekst
-// po DRUGIEJ stronie krzywej (`right`) - inaczej napis wyszedlby do gory nogami.
+// Bez tla i bez obreczy - sama typografia na bieli, jak na wzorcu. Kolo
+// powstaje przy wycinaniu, wiec tresc trzymamy w kole o srednicy 56 mm:
+// przy 70 mm strony zostaje 7 mm marginesu na niedokladnosc wykrojnika.
+//
+// Kolumna zwezа sie ku dolowi, bo ciecie idzie po luku - napis, ktory na
+// wysokosci srodka miescilby sie swobodnie, przy dolnej krawedzi wyszedlby
+// poza kolo.
 
-const BADGE_CENTER_MM = BADGE_MM / 2
-const BADGE_TEXT_RADIUS_MM = 26
+const BADGE_COLUMN_LEFT_MM = 8
+const BADGE_COLUMN_WIDTH_MM = BADGE_MM - BADGE_COLUMN_LEFT_MM * 2
 
-function badgeLayers(badgeUrl: string) {
+function badgeText(input: {
+  id: string
+  name: string
+  fieldKey: string
+  topMm: number
+  heightMm: number
+  zIndex: number
+  fontSize: number
+  fontFamily?: string
+  fontWeight?: 400 | 500 | 600 | 700
+  letterSpacing?: number
+  insetMm?: number
+}) {
+  const inset = input.insetMm ?? 0
+  return textbox({
+    id: input.id,
+    name: input.name,
+    fieldKey: input.fieldKey,
+    text: defaults[input.fieldKey],
+    leftMm: BADGE_COLUMN_LEFT_MM + inset,
+    topMm: input.topMm,
+    widthMm: BADGE_COLUMN_WIDTH_MM - inset * 2,
+    heightMm: input.heightMm,
+    zIndex: input.zIndex,
+    fontSize: input.fontSize,
+    fontFamily: input.fontFamily,
+    fontWeight: input.fontWeight,
+    letterSpacing: input.letterSpacing,
+    fill: BADGE_INK,
+  })
+}
+
+/** Kreska rozdzielajaca - szerokosc i wysokosc jak w wygenerowanym PNG. */
+const BADGE_RULE_WIDTH_MM = 24
+const BADGE_RULE_HEIGHT_MM = 0.6
+const BADGE_RULE_TOP_MM = 41
+
+function badgeLayers(ruleUrl: string) {
   return [
-    backgroundLayer('badge_bg', 'Krążek - papier i obręcz', badgeUrl, BADGE_MM, BADGE_MM),
-
-    textPath({
-      id: 'badge_top',
-      name: 'Napis nad imieniem',
-      fieldKey: 'badge_top',
-      text: defaults.badge_top,
-      centerXMm: BADGE_CENTER_MM,
-      centerYMm: BADGE_CENTER_MM,
-      radiusMm: BADGE_TEXT_RADIUS_MM,
-      startAngle: 180,
-      sweepAngle: 180,
-      pathSide: 'left',
-      zIndex: 1,
-      fontSize: 8,
-      fontWeight: 600,
-      letterSpacing: 150,
-    }),
-
-    textbox({
+    badgeText({
       id: 'child_name',
       name: 'Imię dziecka',
       fieldKey: 'child_name',
-      text: defaults.child_name,
-      leftMm: 9,
-      topMm: 28,
-      widthMm: BADGE_MM - 18,
+      topMm: 6.5,
       heightMm: 14,
-      zIndex: 2,
-      fontSize: 19,
-      fontWeight: 700,
+      zIndex: 0,
+      fontSize: 30,
+      fontFamily: SCRIPT_FONT,
     }),
 
-    textPath({
-      id: 'badge_bottom',
-      name: 'Napis pod imieniem',
-      fieldKey: 'badge_bottom',
-      text: defaults.badge_bottom,
-      centerXMm: BADGE_CENTER_MM,
-      centerYMm: BADGE_CENTER_MM,
-      radiusMm: BADGE_TEXT_RADIUS_MM,
-      startAngle: 0,
-      sweepAngle: 180,
-      pathSide: 'right',
+    badgeText({
+      id: 'badge_age_word',
+      name: 'Wiek słownie',
+      fieldKey: 'badge_age_word',
+      topMm: 20,
+      heightMm: 13,
+      zIndex: 1,
+      fontSize: 29,
+      fontFamily: SERIF_FONT,
+      fontWeight: 700,
+      letterSpacing: 20,
+    }),
+
+    badgeText({
+      id: 'badge_age_unit',
+      name: 'Odmiana „latek”',
+      fieldKey: 'badge_age_unit',
+      topMm: 33,
+      heightMm: 7,
+      zIndex: 2,
+      fontSize: 12,
+      insetMm: 4,
+    }),
+
+    {
+      id: 'badge_rule',
+      name: 'Kreska rozdzielająca',
+      type: 'image' as const,
+      visible: true,
+      locked: true,
+      opacity: 1,
       zIndex: 3,
-      fontSize: 8,
-      fontWeight: 600,
-      letterSpacing: 150,
+      x: mm(BADGE_MM / 2),
+      y: mm(BADGE_RULE_TOP_MM + BADGE_RULE_HEIGHT_MM / 2),
+      width: mm(BADGE_RULE_WIDTH_MM),
+      height: mm(BADGE_RULE_HEIGHT_MM),
+      rotation: 0,
+      properties: {
+        type: 'image' as const,
+        imageUrl: ruleUrl,
+        fit: 'fill' as const,
+        lockAspectRatio: false,
+      },
+    },
+
+    badgeText({
+      id: 'badge_occasion',
+      name: 'Okazja',
+      fieldKey: 'badge_occasion',
+      topMm: 43,
+      heightMm: 7,
+      zIndex: 4,
+      fontSize: 10.5,
+      insetMm: 4,
+    }),
+
+    badgeText({
+      id: 'badge_date',
+      name: 'Data',
+      fieldKey: 'badge_date',
+      topMm: 49.5,
+      heightMm: 8,
+      zIndex: 5,
+      fontSize: 14,
+      fontFamily: SERIF_FONT,
+      fontWeight: 700,
+      insetMm: 4,
+    }),
+
+    badgeText({
+      id: 'badge_time',
+      name: 'Godzina',
+      fieldKey: 'badge_time',
+      topMm: 57,
+      heightMm: 7,
+      zIndex: 6,
+      fontSize: 10.5,
+      insetMm: 8,
     }),
   ]
 }
@@ -625,11 +681,11 @@ function badgeLayers(badgeUrl: string) {
 // Layout
 // ============================================
 
-export function buildLayout(frontUrl: string, backUrl: string, badgeUrl: string) {
+export function buildLayout(frontUrl: string, backUrl: string, ruleUrl: string) {
   const pages = [
     { id: 'page-1', name: 'Przód', canvas: cardCanvas, layers: frontLayers(frontUrl) },
     { id: 'page-2', name: 'Tył - treść', canvas: cardCanvas, layers: backLayers(backUrl) },
-    { id: 'page-3', name: 'Krążek z imieniem', canvas: badgeCanvas, layers: badgeLayers(badgeUrl) },
+    { id: 'page-3', name: 'Krążek z imieniem', canvas: badgeCanvas, layers: badgeLayers(ruleUrl) },
   ]
 
   return {
@@ -733,74 +789,36 @@ async function ensureBackgroundAsset(options: {
 }
 
 /**
- * Rysuje krążek: papier wyciety z tla karty plus dwie czerwone obreczki.
+ * Kreska rozdzielajaca na krążku, jako PNG w rozmiarze docelowym.
  *
- * Rysujemy go zamiast wstawiac kolo jako `shape`, bo renderer druku ksztaltow
- * nie zna - na wydruku zostalby sam tekst na bialym kwadracie. Papier bierzemy
- * z tej samej grafiki co tlo karty, zeby krążek po doklejeniu nie odcinal sie
- * odcieniem.
+ * Wlos w formacie mozna opisac tylko `shape`, a tego renderer druku nie rysuje -
+ * na papierze zostalaby dziura miedzy blokami tekstu. Stad piksele.
  */
-export async function drawBadgePng(paperSource: string): Promise<{ buffer: Buffer; size: number }> {
-  const { loadImage, createCanvas } = await import('canvas')
-  const paper = await loadImage(fs.readFileSync(paperSource))
+export async function drawBadgeRulePng(): Promise<{ buffer: Buffer; width: number; height: number }> {
+  const { createCanvas } = await import('canvas')
 
-  const size = mm(BADGE_MM)
-  const canvas = createCanvas(size, size)
+  const width = mm(BADGE_RULE_WIDTH_MM)
+  const height = mm(BADGE_RULE_HEIGHT_MM)
+  const canvas = createCanvas(width, height)
   const ctx = canvas.getContext('2d')
 
-  ctx.fillStyle = '#ffffff'
-  ctx.fillRect(0, 0, size, size)
+  // Krycie zamiast jasniejszego koloru: kreska ma byc tym samym atramentem
+  // co napisy, tylko cichszym.
+  ctx.globalAlpha = 0.45
+  ctx.fillStyle = BADGE_INK
+  ctx.fillRect(0, 0, width, height)
 
-  // Kwadratowy wycinek z GORNEJ, pustej czesci arkusza - tam jest sam papier,
-  // bez rekwizytow.
-  const crop = Math.min(paper.width, Math.round(paper.height * 0.45))
-  const cropX = Math.round((paper.width - crop) / 2)
-  const cropY = Math.round(paper.height * 0.06)
-
-  const radius = Math.round(size * 0.49)
-  ctx.save()
-  ctx.beginPath()
-  ctx.arc(size / 2, size / 2, radius, 0, Math.PI * 2)
-  ctx.clip()
-  ctx.drawImage(paper, cropX, cropY, crop, crop, 0, 0, size, size)
-  ctx.restore()
-
-  ctx.strokeStyle = RED
-  ctx.lineWidth = Math.round(size * 0.0145)
-  ctx.beginPath()
-  ctx.arc(size / 2, size / 2, Math.round(size * 0.479), 0, Math.PI * 2)
-  ctx.stroke()
-
-  ctx.globalAlpha = 0.55
-  ctx.lineWidth = Math.round(size * 0.005)
-  ctx.beginPath()
-  ctx.arc(size / 2, size / 2, Math.round(size * 0.45), 0, Math.PI * 2)
-  ctx.stroke()
-  ctx.globalAlpha = 1
-
-  return { buffer: canvas.toBuffer('image/png'), size }
+  return { buffer: canvas.toBuffer('image/png'), width, height }
 }
 
-async function ensureBadgeAsset(options: { templateId: string; paperSourceEnv: string; paperDefaultSource: string }) {
-  const baseName = 'strazak-krazek'
-  const existing = await findAsset(options.templateId, 'DECORATION', baseName)
+async function ensureRuleAsset(templateId: string) {
+  const baseName = 'strazak-kreska'
+  const existing = await findAsset(templateId, 'DECORATION', baseName)
   if (existing) return existing
 
-  const source = process.env[options.paperSourceEnv] || options.paperDefaultSource
-  if (!fs.existsSync(source)) {
-    throw new Error(`Brak pliku grafiki: ${source} (ustaw ${options.paperSourceEnv})`)
-  }
+  const { buffer, width, height } = await drawBadgeRulePng()
 
-  const { buffer, size } = await drawBadgePng(source)
-
-  return saveAsset({
-    templateId: options.templateId,
-    assetType: 'DECORATION',
-    baseName,
-    buffer,
-    width: size,
-    height: size,
-  })
+  return saveAsset({ templateId, assetType: 'DECORATION', baseName, buffer, width, height })
 }
 
 /**
@@ -899,13 +917,9 @@ async function main() {
     defaultSource: '/app/tmp/strazak-tyl.png',
   })
 
-  const badgeAsset = await ensureBadgeAsset({
-    templateId: template.id,
-    paperSourceEnv: 'BACK_SOURCE',
-    paperDefaultSource: '/app/tmp/strazak-tyl.png',
-  })
+  const ruleAsset = await ensureRuleAsset(template.id)
 
-  const layout = buildLayout(frontAsset.filePath, backAsset.filePath, badgeAsset.filePath)
+  const layout = buildLayout(frontAsset.filePath, backAsset.filePath, ruleAsset.filePath)
 
   await prisma.personalizationTemplate.update({
     where: { id: template.id },
@@ -923,7 +937,7 @@ async function main() {
         assets: {
           front: frontAsset.filePath,
           back: backAsset.filePath,
-          badge: badgeAsset.filePath,
+          kreska: ruleAsset.filePath,
         },
         pages: layout.pages.map((page) => ({
           id: page.id,

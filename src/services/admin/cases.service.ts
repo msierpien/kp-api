@@ -1479,7 +1479,7 @@ export async function resendPersonalizationEmail(id: string) {
     baseUrl,
     caseId: id, // Track case ID for update after send
     shopId: caseItem.order.shop.id,
-  });
+  }, { force: true });
 
   console.log(`[Cases] 📧 Email queued for ${caseItem.order.customerEmail}, case ${id} (token: ${maskToken(newToken)})`);
 

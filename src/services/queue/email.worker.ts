@@ -92,8 +92,10 @@ async function processPersonalizationEmail(data: PersonalizationEmailJob): Promi
   const mailer = shopMailer ?? emailService;
 
   if (!mailer.isConfigured()) {
-    console.warn('[EmailWorker] Email service not configured, skipping send');
-    return { success: false };
+    // Rzucamy zamiast zwracac `false`: BullMQ ma to policzyc jako blad
+    // i ponowic. Ciche `false` konczylo zadanie jako UDANE, wiec panel
+    // pokazywal "wyslane", mimo ze nic nie wyszlo.
+    throw new Error('Brak konfiguracji SMTP dla tej wysyłki');
   }
 
   const success = await mailer.sendPersonalizationEmail({
@@ -133,6 +135,12 @@ async function processPersonalizationEmail(data: PersonalizationEmailJob): Promi
     } catch (error) {
       console.error(`[EmailWorker] Failed to update case ${data.caseId}:`, error);
     }
+  }
+
+  // Nieudana wysylka konczy zadanie BLEDEM, nie sukcesem: inaczej BullMQ
+  // uznaje je za zrobione, nie ponawia, a panel pokazuje "wyslane".
+  if (!success) {
+    throw new Error(`Nie udało się wysłać wiadomości do ${data.to}`);
   }
 
   return { success };

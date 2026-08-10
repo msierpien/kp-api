@@ -83,10 +83,25 @@ export const emailQueue = new Queue<EmailJobData>('email', {
 /**
  * Add personalization email to queue
  */
-export async function queuePersonalizationEmail(data: PersonalizationEmailJob) {
-  const job = await emailQueue.add('personalization', data, {
-    jobId: data.caseId ? `personalization-${data.caseId}` : undefined,
-  });
+/**
+ * @param options.force wysylka ZLECONA RECZNIE - pomija deduplikacje po sprawie.
+ *
+ * Staly `jobId` chroni przed drugim mailem, gdy zakolejkowanie zostanie
+ * powtorzone automatycznie (ponowiona synchronizacja, retry). Ale BullMQ
+ * odrzuca zadanie o istniejacym id TAKZE wtedy, gdy poprzednie jest juz
+ * ukonczone - a ukonczone zostaje w kolejce. Bez tej furtki operator klikal
+ * "Wyslij ponownie" i nic sie nie dzialo: API zwracalo sukces, a zadanie
+ * nigdy nie trafialo do workera.
+ */
+export async function queuePersonalizationEmail(
+  data: PersonalizationEmailJob,
+  options: { force?: boolean } = {}
+) {
+  const jobId = data.caseId
+    ? `personalization-${data.caseId}${options.force ? `-${Date.now()}` : ''}`
+    : undefined;
+
+  const job = await emailQueue.add('personalization', data, { jobId });
 
   logger.info({ jobId: job.id, to: data.to }, 'Queued personalization email');
   return job;

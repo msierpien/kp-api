@@ -184,7 +184,7 @@ export async function emailRoutes(fastify: FastifyInstance) {
               baseUrl,
               caseId: caseItem.id,
               shopId: caseItem.order.shop.id,
-            });
+            }, { force: true });
             
             queued.push(caseItem.id);
           } catch (error) {

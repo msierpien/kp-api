@@ -751,11 +751,22 @@ function canvasMmDimensions(canvas: TemplateLayoutJson['canvas']): { widthMm: nu
  * Renderuje pojedyncza strone do PNG w natywnej rozdzielczosci canvas
  * (layer.x jest w pikselach canvas, wiec skala = 1 daje pelne DPI szablonu).
  */
+/**
+ * Ile razy gesciej od geometrii projektu renderujemy strone do DRUKU.
+ *
+ * Projekt zyje w 300 DPI i to wystarcza na ekranie, ale atramentowiec kladzie
+ * punkty duzo gesciej - przy 300 DPI widac schodki na cienkim pismie odrecznym
+ * i na kropkowanych kreskach. Mnoznik dotyczy wylacznie renderu do druku:
+ * geometria (mm, pozycje warstw) zostaje ta sama, rosnie tylko liczba pikseli.
+ */
+const PRINT_RENDER_SCALE = Math.max(1, Math.min(4, Number(process.env.PRINT_RENDER_SCALE) || 2));
+
 async function renderPageToPng(
   page: TemplatePage,
   answers: Record<string, any>,
   layoutOverrides: any,
-  itemIndex?: number
+  itemIndex?: number,
+  scale: number = 1
 ): Promise<{ buffer: Buffer; widthPx: number; heightPx: number }> {
   const pageLayout: TemplateLayoutJson = {
     version: 2,
@@ -766,8 +777,10 @@ async function renderPageToPng(
   const merged = mergeLayoutWithOverrides(pageLayout, layoutOverrides, itemIndex, page.id);
   await loadLayoutFonts(merged);
 
-  const { widthPx, heightPx } = canvasPxDimensions(merged.canvas);
+  const { widthPx: basePx, heightPx: baseHeightPx } = canvasPxDimensions(merged.canvas);
   const dpi = Number(merged.canvas.dpi || 300);
+  const widthPx = Math.round(basePx * scale);
+  const heightPx = Math.round(baseHeightPx * scale);
 
   const fabricCanvas = new StaticCanvas(undefined, {
     width: widthPx,
@@ -782,7 +795,7 @@ async function renderPageToPng(
 
   for (const layer of sortedLayers) {
     try {
-      const obj = await layerToFabricObject(layer, answers, 1, dpi);
+      const obj = await layerToFabricObject(layer, answers, scale, dpi);
       if (obj) fabricCanvas.add(obj);
     } catch (error) {
       console.error(`[Fabric] Failed to render layer ${layer.id} on page ${page.id}:`, error);
@@ -929,13 +942,15 @@ export async function renderPrintPagePng(
   const rotation = layout.print?.placements?.find((placement) => placement.pageId === page.id)?.rotation || 0;
   const swap = rotation === 90 || rotation === 270;
 
-  const render = await renderPageToPng(page, answers, layoutOverrides, itemIndex);
+  const render = await renderPageToPng(page, answers, layoutOverrides, itemIndex, PRINT_RENDER_SCALE);
 
   // Spad: arkusz rosnie o margines z kazdej strony, a brakujace pole
   // wypelniamy rozciagnietymi krawedziami projektu. Bez tego kartka po
   // przycieciu z tolerancja miala biala nitke przy krawedzi.
   const bleedMm = Math.max(0, Number(page.canvas.bleedMm) || 0);
-  const bleedPx = Math.round((bleedMm / MM_PER_INCH) * dpi);
+  // Spad liczymy w tej samej gestosci co render strony - inaczej ramka spadu
+  // nie zgadzalaby sie z obrazem i projekt wyszedlby przesuniety.
+  const bleedPx = Math.round((bleedMm / MM_PER_INCH) * dpi * PRINT_RENDER_SCALE);
   const contentWidthPx = render.widthPx + bleedPx * 2;
   const contentHeightPx = render.heightPx + bleedPx * 2;
 
@@ -970,7 +985,9 @@ export async function renderPrintPagePng(
     heightMm: swap ? withBleedWidthMm : withBleedHeightMm,
     widthPx: sheetWidthPx,
     heightPx: sheetHeightPx,
-    dpi,
+    // Gestosc BUFORA, nie projektu: konsument liczy z niej mm, wiec musi znac
+    // faktyczna liczbe pikseli na cal.
+    dpi: dpi * PRINT_RENDER_SCALE,
   };
 }
 
@@ -990,12 +1007,17 @@ async function composePrintSheet(
   // szablonu i wskazuje strony po id, wiec warianty maja te same identyfikatory.
   const pages = getTemplatePagesForAnswers(layout, answers);
   const print = layout.print && layout.print.placements?.length ? layout.print : defaultPrintLayout(pages);
-  const dpi = Number(layout.canvas.dpi || 300);
+  // Arkusz i strony musza byc liczone w TEJ SAMEJ gestosci - inaczej strona
+  // wyrenderowana gesciej zostalaby wklejona w skali 1:1 i wyszla za duza.
+  const dpi = Number(layout.canvas.dpi || 300) * PRINT_RENDER_SCALE;
   const mmToPx = (mm: number) => Math.round((mm / MM_PER_INCH) * dpi);
 
   const rendered = new Map<string, { buffer: Buffer; widthPx: number; heightPx: number }>();
   for (const page of pages) {
-    rendered.set(page.id, await renderPageToPng(page, answers, layoutOverrides, itemIndex));
+    rendered.set(
+      page.id,
+      await renderPageToPng(page, answers, layoutOverrides, itemIndex, PRINT_RENDER_SCALE)
+    );
   }
 
   const sheet = createCanvas(mmToPx(print.sheet.widthMm), mmToPx(print.sheet.heightMm));

@@ -32,6 +32,14 @@ export interface AgentProfileInput {
   maxPages?: number | null;
   copies?: number | null;
   enabled?: boolean;
+  /** Czym panel moze nadpisac profil - listy prosto z PPD drukarki. */
+  choices?: Array<{
+    role: string;
+    key: string;
+    label: string;
+    values: Array<{ value: string; label: string }>;
+  }>;
+  currentOptions?: Record<string, string>;
 }
 
 export interface AgentHelloInput {
@@ -118,6 +126,11 @@ export async function handleAgentHello(agentId: string, input: AgentHelloInput, 
     maxPages: profile.maxPages ?? null,
     copies: profile.copies ?? null,
     enabled: profile.enabled !== false,
+    // Przepisujemy JAWNIE, jak reszte pol: `profilesJson` jest jedynym
+    // zrodlem list dla panelu, wiec pominiecie tu znaczy pusty wybor w oknie
+    // druku - bez zadnego bledu po drodze.
+    choices: profile.choices ?? [],
+    currentOptions: profile.currentOptions ?? {},
   }));
 
   const agent = await prisma.printAgent.update({

@@ -1,32 +1,40 @@
 /**
- * Automatyzacja: mail z linkiem do edytora zaraz po zalozeniu sprawy.
+ * Automatyzacje wysylajace klientowi link do edytora - PO JEDNEJ NA SKLEP.
  *
- * Dlaczego automatyzacja, a nie flaga AUTO_SEND_EMAILS: obie sciezki
- * wychodza z tego samego miejsca (`CASE_CREATED`), wiec wlaczone naraz
- * wyslalyby klientowi DWA maile - jeden z szablonu zaszytego w kodzie,
- * drugi z tej reguly. Automatyzacja wygrywa, bo jej tresc redagujesz
- * w panelu (Automatyzacje) bez zmiany kodu i deployu.
+ * Dlaczego per sklep, a nie jedna wspolna: tresc maila jest czescia obslugi
+ * konkretnego sklepu (inny ton, inne terminy, inny podpis), a warunek
+ * `shopId` pozwala edytowac ja osobno w panelu. Nadawca i tak jest juz
+ * rozdzielony po sklepach w ustawieniach SMTP.
  *
- * `SEND_EMAIL` wysyla niezaleznie od AUTO_SEND_EMAILS - flaga steruje
- * wylacznie szablonem wbudowanym.
+ * UWAGA na duble: automatyzacja BEZ warunku obejmuje wszystkie sklepy, wiec
+ * zostawiona obok regul per sklep wyslalaby drugi mail z tego samego
+ * zdarzenia. Skrypt wylacza wiec stara regule ogolna o tej samej nazwie.
  *
- * Tresc jest ZWYKLYM TEKSTEM: `sendAutomationEmail` robi z niej HTML,
- * zamieniajac znaki nowej linii na `<br>`. Zmienne: {{customerName}},
- * {{orderReference}}, {{productName}}, {{quantity}}, {{shopName}},
- * {{personalizationUrl}}.
+ * Dlaczego automatyzacja, a nie flaga AUTO_SEND_EMAILS: `SEND_EMAIL` wysyla
+ * niezaleznie od flagi, a tresc redagujesz w panelu bez zmiany kodu. Obie
+ * sciezki wlaczone naraz to znowu dwa maile.
  *
- * Idempotentny - rozpoznaje regule po nazwie i nadpisuje jej tresc.
+ * Tresc jest ZWYKLYM TEKSTEM - `sendAutomationEmail` zamienia znaki nowej
+ * linii na `<br>`. Zmienne: {{customerName}}, {{orderReference}},
+ * {{productName}}, {{quantity}}, {{shopName}}, {{personalizationUrl}}.
+ *
+ * Idempotentny - regule rozpoznaje po nazwie i nadpisuje jej tresc.
  *
  * Uruchamiany W KONTENERZE `personalization-api`:
  *   node dist/scripts/create-personalization-email-automation.js
- *   DRY_RUN=1 - pokaz tresc, nie zapisuj
+ *   SHOP_IDS=id1,id2 - tylko wskazane sklepy (domyslnie: wszystkie tenanta)
+ *   DRY_RUN=1        - pokaz, co powstanie, bez zapisu
  */
 import { PrismaClient } from '@prisma/client'
 
 const prisma = new PrismaClient()
 
 const TENANT_SLUG = process.env.TENANT_SLUG || 'kreatywne-papierki'
-const NAME = 'Link do edytora po złożeniu zamówienia'
+
+/** Nazwa starej reguly bez warunku - wylaczamy ja, zeby nie dublowac maili. */
+const LEGACY_NAME = 'Link do edytora po złożeniu zamówienia'
+
+const ruleName = (shopName: string) => `${LEGACY_NAME} — ${shopName}`
 
 const SUBJECT = 'Zaproszenie czeka na Twoją treść — zamówienie {{orderReference}}'
 
@@ -35,13 +43,15 @@ const BODY = `Dzień dobry,
 
 dziękujemy za zamówienie {{orderReference}} w sklepie {{shopName}}.
 
-Treść zaproszenia ustalasz sam w edytorze — wpisujesz imiona gości, datę i godzinę przyjęcia, miejsce oraz pozostałe napisy, a podgląd od razu pokazuje gotową kartę:
+Zamówiony produkt jest personalizowany — treść ustalasz sam w edytorze:
 
 {{personalizationUrl}}
 
-Drukujemy dopiero po Twojej akceptacji, więc spokojnie sprawdź wszystko przed zatwierdzeniem. Link jest przypisany do Twojego zamówienia — prosimy nie udostępniać go dalej.
+Wpisujesz tam imiona gości, datę i godzinę przyjęcia, miejsce oraz pozostałe napisy, a podgląd od razu pokazuje gotową kartę. Jeśli zamówienie obejmuje kilka sztuk, każdą możesz zaadresować do innego gościa.
 
-Zamówiony produkt: {{productName}} — {{quantity}} szt.
+Drukujemy dopiero po Twojej akceptacji, więc spokojnie sprawdź wszystko przed zatwierdzeniem — na tym etapie każda poprawka jest jeszcze bezpłatna. Link jest przypisany do Twojego zamówienia, prosimy nie udostępniać go dalej.
+
+Zamówienie: {{productName}} — {{quantity}} szt.
 
 W razie pytań wystarczy odpowiedzieć na tę wiadomość.
 
@@ -52,48 +62,66 @@ async function main() {
   const tenant = await prisma.tenant.findFirst({ where: { slug: TENANT_SLUG }, select: { id: true } })
   if (!tenant) throw new Error(`Brak tenanta "${TENANT_SLUG}"`)
 
-  const data = {
-    name: NAME,
-    description: 'Wysyła klientowi link do personalizacji zaraz po założeniu sprawy.',
-    trigger: 'CASE_CREATED',
-    conditions: {},
-    actions: [
-      {
-        type: 'SEND_EMAIL',
-        config: {
-          to: 'customer',
-          subject: SUBJECT,
-          body: BODY,
-        },
-      },
-    ],
-    isActive: true,
-    priority: 0,
-  }
+  const only = (process.env.SHOP_IDS || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean)
+
+  const shops = await prisma.shop.findMany({
+    where: { tenantId: tenant.id, ...(only.length ? { id: { in: only } } : {}) },
+    select: { id: true, name: true },
+    orderBy: { createdAt: 'asc' },
+  })
+  if (shops.length === 0) throw new Error('Tenant nie ma sklepow do obsluzenia')
+
+  const planned = shops.map((shop) => ({
+    shop: shop.name,
+    name: ruleName(shop.name),
+    // `shopId` jest polem rozpoznawanym wprost przez silnik regul
+    // (`getFieldValue` czyta z niego `order.shop.id`).
+    conditions: [{ field: 'shopId', operator: 'equals', value: shop.id }],
+  }))
 
   if (process.env.DRY_RUN === '1') {
-    console.log(JSON.stringify({ dryRun: true, tenant: TENANT_SLUG, ...data }, null, 2))
+    console.log(JSON.stringify({ dryRun: true, tenant: TENANT_SLUG, reguly: planned, subject: SUBJECT }, null, 2))
     return
   }
 
-  const existing = await prisma.automation.findFirst({ where: { tenantId: tenant.id, name: NAME } })
-  const automation = existing
-    ? await prisma.automation.update({ where: { id: existing.id }, data })
-    : await prisma.automation.create({ data: { tenantId: tenant.id, ...data } })
+  const results = []
+  for (const shop of shops) {
+    const data = {
+      name: ruleName(shop.name),
+      description: `Wysyła link do personalizacji po założeniu sprawy — sklep ${shop.name}.`,
+      trigger: 'CASE_CREATED',
+      conditions: [{ field: 'shopId', operator: 'equals', value: shop.id }],
+      actions: [
+        {
+          type: 'SEND_EMAIL',
+          config: { to: 'customer', subject: SUBJECT, body: BODY },
+        },
+      ],
+      isActive: true,
+      priority: 0,
+    }
 
-  console.log(
-    JSON.stringify(
-      {
-        id: automation.id,
-        nazwa: automation.name,
-        wyzwalacz: automation.trigger,
-        aktywna: automation.isActive,
-        utworzona: !existing,
-      },
-      null,
-      2
-    )
-  )
+    const existing = await prisma.automation.findFirst({
+      where: { tenantId: tenant.id, name: data.name },
+    })
+    const automation = existing
+      ? await prisma.automation.update({ where: { id: existing.id }, data })
+      : await prisma.automation.create({ data: { tenantId: tenant.id, ...data } })
+
+    results.push({ sklep: shop.name, id: automation.id, utworzona: !existing })
+  }
+
+  // Regula ogolna obejmowalaby te same sprawy co reguly per sklep - zostawiona
+  // aktywna wyslalaby drugi mail z tego samego zdarzenia.
+  const legacy = await prisma.automation.updateMany({
+    where: { tenantId: tenant.id, name: LEGACY_NAME, isActive: true },
+    data: { isActive: false },
+  })
+
+  console.log(JSON.stringify({ reguly: results, wylaczonaOgolna: legacy.count }, null, 2))
 }
 
 main()

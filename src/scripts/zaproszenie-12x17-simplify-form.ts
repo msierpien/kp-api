@@ -36,6 +36,15 @@ const RSVP_KEY = 'rsvp_text'
 const RSVP_PLACEHOLDER = 'Prosimy o potwierdzenie przybycia do dnia 05.08.2028\nMama: 500-500-500'
 
 /**
+ * Tresc startowa pola - FORMULKA z miejscami do uzupelnienia, nie przyklad.
+ *
+ * Klient dostaje gotowy szkielet zdania i podmienia same iksy. Przykladowa
+ * data i numer telefonu wygladalyby na prawdziwe i wydrukowalyby sie
+ * u kogos, kto pola nie poprawil; "xx.xx.xxxx" widac na pierwszy rzut oka.
+ */
+const RSVP_DEFAULT = 'Prosimy o potwierdzenie przybycia do dnia xx.xx.xxxx\nMama: xxx-xxx-xxx'
+
+/**
  * Pola, przy ktorych podpowiedz nie ma sensu: przy liscie wyboru i kalendarzu
  * `placeholder` sie nie pokazuje, wiec zostaje samo wyczyszczenie wartosci.
  */
@@ -145,9 +154,7 @@ async function main() {
     await prisma.formField.update({
       where: { id: rsvp.id },
       data: {
-        // Pusto zamiast gotowej tresci: data i numer z szablonu wydrukowalyby
-        // sie u klienta, ktory ich nie poprawil.
-        defaultValue: null,
+        defaultValue: RSVP_DEFAULT,
         placeholder: RSVP_PLACEHOLDER,
         helpText: 'Dwa wiersze: termin potwierdzenia i telefon. Puste pole zostawia ten pas karty pusty.',
       },
@@ -172,6 +179,7 @@ async function main() {
         zamrozoneWarstwy: frozenTotal,
         usunietePola: toRemove.map((field) => field.key),
         trescNaPodpowiedz: withDefaults.map((field) => field.key),
+        formulkaStartowa: rsvp ? RSVP_DEFAULT.replace(/\n/g, ' / ') : null,
         poleFormularza: left.map((field) => `${field.key} (${field.type}, ${field.scope})`),
       },
       null,

@@ -38,16 +38,21 @@ export const emailSettingsRoutes: FastifyPluginAsync = async (server: any) => {
     schema: {
       tags: ['email'],
       summary: 'Przetestuj konfigurację email SMTP',
+      // Nazwy pol musza sie zgadzac z emailSettingsSchema (Zod) - Fastify
+      // waliduje body przed handlerem, wiec rozjazd konczy sie bledem 400
+      // zanim Zod zobaczy dane.
       body: {
         type: 'object',
-        required: ['host', 'port', 'from'],
+        required: ['host', 'port', 'user', 'password', 'fromEmail'],
         properties: {
           host: { type: 'string' },
           port: { type: 'integer' },
           user: { type: 'string' },
           password: { type: 'string' },
-          from: { type: 'string', format: 'email' },
+          fromEmail: { type: 'string' },
+          fromName: { type: 'string', nullable: true },
           secure: { type: 'boolean' },
+          isActive: { type: 'boolean' },
         },
       },
       response: { 200: { type: 'object', properties: { success: { type: 'boolean' }, message: { type: 'string' } } } },
@@ -86,14 +91,15 @@ export const emailSettingsRoutes: FastifyPluginAsync = async (server: any) => {
       summary: 'Utwórz konfigurację email SMTP',
       body: {
         type: 'object',
-        required: ['host', 'port', 'from'],
+        required: ['host', 'port', 'user', 'password', 'fromEmail'],
         properties: {
           tenantId: { type: 'string' },
           host: { type: 'string' },
           port: { type: 'integer' },
           user: { type: 'string' },
           password: { type: 'string' },
-          from: { type: 'string', format: 'email' },
+          fromEmail: { type: 'string' },
+          fromName: { type: 'string', nullable: true },
           secure: { type: 'boolean' },
           isActive: { type: 'boolean' },
         },

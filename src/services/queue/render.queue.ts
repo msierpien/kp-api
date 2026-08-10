@@ -81,6 +81,9 @@ export interface PrintPackageOptions {
   combinedPdf?: boolean;
   /** Tekst znaku wodnego na każdej sztuce. Brak/null = bez znaku wodnego. */
   watermarkText?: string | null;
+  /** Korekta pozycji wydruku w mm (ujemna = w lewo / do góry). */
+  printOffsetXMm?: number;
+  printOffsetYMm?: number;
 }
 
 export interface RenderJobData {

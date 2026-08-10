@@ -8,6 +8,9 @@ export interface PrintSettingsView {
   combinedPdf: boolean;
   watermarkEnabled: boolean;
   watermarkText: string;
+  /** Korekta pozycji wydruku w mm; ujemna przesuwa w lewo / do gory. */
+  printOffsetXMm: number;
+  printOffsetYMm: number;
 }
 
 export interface UpdatePrintSettingsInput {
@@ -16,6 +19,8 @@ export interface UpdatePrintSettingsInput {
   combinedPdf?: boolean;
   watermarkEnabled?: boolean;
   watermarkText?: string;
+  printOffsetXMm?: number;
+  printOffsetYMm?: number;
 }
 
 const defaults: PrintSettingsView = {
@@ -24,6 +29,8 @@ const defaults: PrintSettingsView = {
   combinedPdf: true,
   watermarkEnabled: false,
   watermarkText: 'PODGLĄD',
+  printOffsetXMm: 0,
+  printOffsetYMm: 0,
 };
 
 function requireTenantId() {
@@ -40,6 +47,8 @@ function toView(record: {
   combinedPdf: boolean;
   watermarkEnabled: boolean;
   watermarkText: string;
+  printOffsetXMm?: number;
+  printOffsetYMm?: number;
 } | null): PrintSettingsView {
   if (!record) return { ...defaults };
   return {
@@ -48,7 +57,18 @@ function toView(record: {
     combinedPdf: record.combinedPdf,
     watermarkEnabled: record.watermarkEnabled,
     watermarkText: record.watermarkText,
+    printOffsetXMm: record.printOffsetXMm ?? 0,
+    printOffsetYMm: record.printOffsetYMm ?? 0,
   };
+}
+
+/** Korekta ponad centymetr to niemal na pewno pomylka, nie ustawienie drukarki. */
+const MAX_OFFSET_MM = 10;
+
+function clampOffset(value: number | undefined, fallback: number): number {
+  const next = value ?? fallback;
+  if (!Number.isFinite(next)) return fallback;
+  return Math.max(-MAX_OFFSET_MM, Math.min(MAX_OFFSET_MM, Math.round(next * 10) / 10));
 }
 
 export async function getPrintSettings(): Promise<PrintSettingsView> {
@@ -67,6 +87,8 @@ export async function updatePrintSettings(input: UpdatePrintSettingsInput): Prom
     combinedPdf: input.combinedPdf ?? current.combinedPdf,
     watermarkEnabled: input.watermarkEnabled ?? current.watermarkEnabled,
     watermarkText: (input.watermarkText ?? current.watermarkText).trim() || defaults.watermarkText,
+    printOffsetXMm: clampOffset(input.printOffsetXMm, current.printOffsetXMm),
+    printOffsetYMm: clampOffset(input.printOffsetYMm, current.printOffsetYMm),
   };
 
   if (!next.formatPdf && !next.formatPng && !next.combinedPdf) {
@@ -99,5 +121,7 @@ export async function resolvePrintPackageOptions(tenantId?: string): Promise<Pri
     formats,
     combinedPdf: settings.combinedPdf,
     watermarkText: settings.watermarkEnabled ? settings.watermarkText : null,
+    printOffsetXMm: settings.printOffsetXMm,
+    printOffsetYMm: settings.printOffsetYMm,
   };
 }

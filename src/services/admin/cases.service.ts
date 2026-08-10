@@ -90,11 +90,14 @@ function normalizePrintPackageOptions(input?: PrintPackageOptions) {
   );
   const combinedPdf = input?.combinedPdf ?? true;
   const watermarkText = input?.watermarkText?.trim() || null;
+  // Korekta pozycji wydruku - kompensuje przesuniecie podajnika drukarki.
+  const offsetXMm = Number(input?.printOffsetXMm) || 0;
+  const offsetYMm = Number(input?.printOffsetYMm) || 0;
 
   // Paczka bez zadnego pliku nie ma sensu - wymuszamy sensowne minimum.
   if (!formats.size && !combinedPdf) formats.add('pdf');
 
-  return { formats, combinedPdf, watermarkText };
+  return { formats, combinedPdf, watermarkText, offsetXMm, offsetYMm };
 }
 
 type CasesSummary = ReturnType<typeof buildCasesSummary>;
@@ -851,7 +854,14 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
         }
 
         if (pkg.formats.has('pdf')) {
-          const pdfBuffer = await pngToPdfBuffer(render.png, render.widthPx, render.heightPx, render.dpi);
+          const pdfBuffer = await pngToPdfBuffer(
+            render.png,
+            render.widthPx,
+            render.heightPx,
+            render.dpi,
+            pkg.offsetXMm,
+            pkg.offsetYMm
+          );
           const savedPdf = await saveFile(pdfBuffer, {
             orderId: caseItem.orderId,
             templateVersion: caseItem.templateVersionFrozen,
@@ -882,7 +892,7 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
     // Zbiorczy PDF: wszystkie sztuki jako kolejne strony jednego pliku.
     let combinedPdfInfo: { assetId: string; filePath: string; fileUrl: string; fileSize: number } | null = null;
     if (pkg.combinedPdf && combinedPages.length > 0) {
-      const combinedBuffer = await pngsToPdfBuffer(combinedPages);
+      const combinedBuffer = await pngsToPdfBuffer(combinedPages, pkg.offsetXMm, pkg.offsetYMm);
       const savedCombined = await saveFile(combinedBuffer, {
         orderId: caseItem.orderId,
         templateVersion: caseItem.templateVersionFrozen,
@@ -1132,7 +1142,9 @@ function expandLayerForBleed(
 
 /** Jeden wielostronicowy PDF z listy stron PNG (zbiorczy plik paczki). */
 async function pngsToPdfBuffer(
-  pages: Array<{ png: Buffer; widthPx: number; heightPx: number; dpi: number }>
+  pages: Array<{ png: Buffer; widthPx: number; heightPx: number; dpi: number }>,
+  offsetXMm = 0,
+  offsetYMm = 0
 ): Promise<Buffer> {
   const PDFDocument = (await import('pdfkit')).default;
 
@@ -1148,18 +1160,34 @@ async function pngsToPdfBuffer(
       const widthPt = (page.widthPx / page.dpi) * 72;
       const heightPt = (page.heightPx / page.dpi) * 72;
       doc.addPage({ size: [widthPt, heightPt], margin: 0 });
-      doc.image(page.png, 0, 0, { width: widthPt, height: heightPt, fit: [widthPt, heightPt] });
+      // Ta sama korekta co przy plikach per sztuka - zbiorczy PDF tez idzie
+      // na te sama drukarke.
+      doc.image(page.png, mmToPt(offsetXMm), mmToPt(offsetYMm), {
+        width: widthPt,
+        height: heightPt,
+        fit: [widthPt, heightPt],
+      });
     }
 
     doc.end();
   });
 }
 
+/**
+ * PNG na strone PDF, z korekta pozycji.
+ *
+ * Offset przesuwa RYSUNEK wzgledem strony (strona zostaje w swoim rozmiarze),
+ * bo kompensujemy mechanike drukarki, a nie zmieniamy formatu arkusza.
+ * To, co wyjdzie poza strone, przycina sie samo - przy druku bezramkowym
+ * i tak idzie w spad.
+ */
 async function pngToPdfBuffer(
   pngBuffer: Buffer,
   widthPx: number,
   heightPx: number,
-  dpi: number
+  dpi: number,
+  offsetXMm = 0,
+  offsetYMm = 0
 ): Promise<Buffer> {
   const PDFDocument = (await import('pdfkit')).default;
   const widthPt = (widthPx / dpi) * 72;
@@ -1178,13 +1206,18 @@ async function pngToPdfBuffer(
     doc.on('error', reject);
 
     doc.addPage({ size: [widthPt, heightPt], margin: 0 });
-    doc.image(pngBuffer, 0, 0, {
+    doc.image(pngBuffer, mmToPt(offsetXMm), mmToPt(offsetYMm), {
       width: widthPt,
       height: heightPt,
       fit: [widthPt, heightPt],
     });
     doc.end();
   });
+}
+
+/** Milimetry na punkty PDF (1 pt = 1/72 cala). */
+function mmToPt(mm: number): number {
+  return (mm / 25.4) * 72;
 }
 
 async function syncAnswerRows(

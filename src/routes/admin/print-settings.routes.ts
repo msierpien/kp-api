@@ -32,6 +32,8 @@ export const printSettingsRoutes: FastifyPluginAsync = async (server: any) => {
           combinedPdf: { type: 'boolean' },
           watermarkEnabled: { type: 'boolean' },
           watermarkText: { type: 'string', maxLength: 60 },
+          printOffsetXMm: { type: 'number', minimum: -10, maximum: 10 },
+          printOffsetYMm: { type: 'number', minimum: -10, maximum: 10 },
         },
       },
       response: {

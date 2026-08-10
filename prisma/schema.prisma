@@ -1137,6 +1137,11 @@ model PrintSettings {
   combinedPdf      Boolean  @default(true) @map("combined_pdf")
   watermarkEnabled Boolean  @default(false) @map("watermark_enabled")
   watermarkText    String   @default("PODGLĄD") @map("watermark_text")
+
+  /// Korekta pozycji wydruku w mm - kompensuje przesuniecie podajnika drukarki.
+  /// Ujemna wartosc przesuwa projekt w lewo / do gory.
+  printOffsetXMm   Float    @default(0) @map("print_offset_x_mm")
+  printOffsetYMm   Float    @default(0) @map("print_offset_y_mm")
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
 

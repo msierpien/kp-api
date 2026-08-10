@@ -43,7 +43,8 @@ import {
 import { getCaseLayout } from '../../lib/case-layout';
 import { addPrintPackageJob, type PrintPackageOptions } from '../queue/render.queue';
 import { resolvePrintPackageOptions } from './print-settings.service';
-import { buildStorageUrl, saveFile } from '../storage/local-storage.service';
+import { buildStorageUrl, deleteFile, saveFile } from '../storage/local-storage.service';
+import { PRINT_JOB_ACTIVE_STATUSES } from '../../lib/print-job-statuses';
 import { isPersonalizationCaseStatus } from '../../lib/personalization-case-statuses';
 
 /** Jeden wyrenderowany arkusz sztuki: cala kartka albo pojedyncza strona. */
@@ -81,6 +82,71 @@ interface GeneratePrintPackageOptions {
   onProgress?: (progress: number) => Promise<void>;
   /** Opcje z ustawień druku (formaty, zbiorczy PDF, znak wodny). Brak = domyślne. */
   packageOptions?: PrintPackageOptions;
+}
+
+/** Pliki paczki do druku - wszystko, co powstaje przy generowaniu. */
+const PRINT_PACKAGE_ASSET_TYPES = ['PRINT_PACKAGE_ZIP', 'PDF_PRINT', 'PNG_PRINT'];
+
+export interface DeletePrintAssetsResult {
+  deleted: number;
+  freedBytes: number;
+  skippedActive: number;
+}
+
+/**
+ * Kasuje pliki paczek do druku razem z plikami na dysku.
+ *
+ * `createdBefore` ogranicza kasowanie do plikow starszych niz podany moment -
+ * tak sprzatamy przy generowaniu nowej paczki. Kryterium jest CZAS, a nie
+ * "wszystko poza tym jednym ZIP-em": paczka to nie jeden plik, tylko ZIP plus
+ * PDF-y i PNG-y kazdej sztuki, wiec wyjatek na pojedyncze id skasowalby
+ * swiezo wyrenderowane pliki.
+ *
+ * Plik z AKTYWNYM zadaniem druku zostaje nietkniety: `PrintJob` kasuje sie
+ * kaskadowo razem z assetem, wiec usuniecie zabraloby agentowi zadanie
+ * w trakcie pobierania albo drukowania.
+ */
+export async function deleteCasePrintAssets(
+  caseId: string,
+  options: { createdBefore?: Date } = {}
+): Promise<DeletePrintAssetsResult> {
+  const assets = await prisma.asset.findMany({
+    where: {
+      caseId,
+      assetType: { in: PRINT_PACKAGE_ASSET_TYPES },
+      ...(options.createdBefore ? { createdAt: { lt: options.createdBefore } } : {}),
+    },
+    select: {
+      id: true,
+      filePath: true,
+      fileSize: true,
+      printJobs: {
+        where: { status: { in: [...PRINT_JOB_ACTIVE_STATUSES] } },
+        select: { id: true },
+      },
+    },
+  });
+
+  const removable = assets.filter((asset) => asset.printJobs.length === 0);
+  const skippedActive = assets.length - removable.length;
+  if (removable.length === 0) return { deleted: 0, freedBytes: 0, skippedActive };
+
+  // Najpierw baza, potem dysk: osierocony plik to strata miejsca, a osierocony
+  // wpis w bazie to bledny link w panelu i wywrocony podglad.
+  await prisma.asset.deleteMany({ where: { id: { in: removable.map((asset) => asset.id) } } });
+
+  let freedBytes = 0;
+  for (const asset of removable) {
+    freedBytes += asset.fileSize;
+    try {
+      await deleteFile(asset.filePath);
+    } catch (error) {
+      // Brak pliku nie jest bledem - wpis i tak juz zniknal z bazy.
+      console.warn(`[Cases] Nie udalo sie skasowac pliku ${asset.filePath}:`, error);
+    }
+  }
+
+  return { deleted: removable.length, freedBytes, skippedActive };
 }
 
 /** Znormalizowane opcje paczki z bezpiecznymi domyślnymi. */
@@ -622,6 +688,10 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
 
   let renderJob: { id: string; metadata: unknown } | null = null;
 
+  // Znacznik startu: po udanym generowaniu kasujemy pliki STARSZE od niego,
+  // czyli poprzednie paczki, nie te wlasnie wyrenderowane.
+  const packageStartedAt = new Date();
+
   try {
     const layout = getCaseLayout(caseItem);
 
@@ -962,6 +1032,16 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
     });
 
     await options.onProgress?.(92);
+
+    // Poprzednie paczki i ich pliki - panel pokazuje wylacznie najnowsza, wiec
+    // starsze byly niewidoczne i tylko rosly na dysku. Sprzatamy PO zapisaniu
+    // nowej, zeby nieudane generowanie nie zabralo sprawie jedynej paczki.
+    const cleanup = await deleteCasePrintAssets(id, { createdBefore: packageStartedAt });
+    if (cleanup.deleted > 0) {
+      console.log(
+        `[Cases] Sprzatnieto ${cleanup.deleted} starszych plikow paczki (${Math.round(cleanup.freedBytes / 1024 / 1024)} MB)`
+      );
+    }
 
     await prisma.$transaction([
       prisma.personalizationCase.update({

@@ -3,6 +3,7 @@ import {
   getCases,
   getCaseById,
   enqueueCasePrintPackage,
+  deleteCasePrintAssets,
   updateCaseAnswers,
   validateCaseAnswers,
   updateCaseStatus,
@@ -373,6 +374,33 @@ export async function casesRoutes(fastify: FastifyInstance) {
           .send({ error: 'Validation Error', message: parsed.error.errors[0].message });
       }
       return reply.send({ assets: await listCasePrintAssets(parsed.data.id) });
+    }
+  );
+
+  // DELETE /admin/cases/:id/print-assets - sprzatanie paczek do druku
+  fastify.delete<{ Params: CaseIdParams }>(
+    '/:id/print-assets',
+    {
+      schema: {
+        tags: ['cases'],
+        summary: 'Usuniecie plikow paczki do druku (ZIP, PDF i PNG sztuk)',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          200: { type: 'object', additionalProperties: true },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: CaseIdParams }>, reply: FastifyReply) => {
+      const parsed = caseIdParamsSchema.safeParse(request.params);
+      if (!parsed.success) {
+        return reply
+          .status(400)
+          .send({ error: 'Validation Error', message: parsed.error.errors[0].message });
+      }
+
+      const result = await deleteCasePrintAssets(parsed.data.id);
+      return reply.send(result);
     }
   );
 

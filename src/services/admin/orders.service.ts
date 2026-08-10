@@ -602,6 +602,7 @@ export async function createManualOrder(data: CreateManualOrderInput): Promise<M
         ],
         baseUrl: config.frontend.portalUrl,
         caseId: caseItem.id,
+        shopId: data.shopId,
       });
     }
   }

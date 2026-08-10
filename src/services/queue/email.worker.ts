@@ -1,6 +1,7 @@
 import { Worker } from 'bullmq';
 import { config } from '../../config';
 import { emailService } from '../email/email.service';
+import { createShopEmailService } from '../admin/email-settings.service';
 import type {
   EmailJobData,
   HelpRequestEmailJob,
@@ -79,12 +80,23 @@ export async function stopEmailWorker() {
  * Process personalization email job
  */
 async function processPersonalizationEmail(data: PersonalizationEmailJob): Promise<{ success: boolean; messageId?: string }> {
-  if (!emailService.isConfigured()) {
+  // Nadawca zalezy od sklepu: kazdy wysyla z wlasnej domeny, inaczej SPF
+  // i DKIM nie zgadzaja sie z adresem. Serwis globalny zostaje jako zapas
+  // dla zadan bez sklepu (starsze wpisy w kolejce).
+  const shopMailer = data.shopId
+    ? await createShopEmailService(data.shopId).catch((error) => {
+        console.warn('[EmailWorker] Nie udalo sie zbudowac nadawcy dla sklepu:', error);
+        return null;
+      })
+    : null;
+  const mailer = shopMailer ?? emailService;
+
+  if (!mailer.isConfigured()) {
     console.warn('[EmailWorker] Email service not configured, skipping send');
     return { success: false };
   }
 
-  const success = await emailService.sendPersonalizationEmail({
+  const success = await mailer.sendPersonalizationEmail({
     to: data.to,
     customerName: data.customerName,
     orderReference: data.orderReference,

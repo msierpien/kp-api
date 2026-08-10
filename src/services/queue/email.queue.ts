@@ -19,6 +19,13 @@ export interface PersonalizationEmailJob {
   }>;
   baseUrl: string;
   caseId?: string; // Optional: for tracking
+  /**
+   * Sklep, w imieniu ktorego wysylamy - decyduje o adresie nadawcy.
+   *
+   * Bez niego worker uzyje serwisu globalnego, czyli adresu pierwszego
+   * lepszego sklepu; klient dostalby maila z obcej domeny.
+   */
+  shopId?: string;
 }
 
 export interface TestEmailJob {

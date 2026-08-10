@@ -10,6 +10,31 @@ import {
 // Agent
 // ---------------------------------------------------------------------------
 
+/**
+ * Opcje wydruku wybierane w panelu (jakosc, typ papieru).
+ *
+ * Wartosci ida na wiersz polecenia `lp` po stronie agenta, wiec ksztalt jest
+ * ciasny: krotkie klucze i wartosci bez spacji i znakow powloki. Agent i tak
+ * przepuszcza je jeszcze raz przez liste, ktora sam zglosil - to jest druga
+ * bariera, nie jedyna.
+ */
+const optionKey = z.string().regex(/^[A-Za-z0-9_.-]{1,40}$/);
+const optionValue = z.string().regex(/^[A-Za-z0-9_.:-]{1,64}$/);
+export const printOptionsSchema = z.record(optionKey, optionValue).refine(
+  (value) => Object.keys(value).length <= 8,
+  { message: 'Za dużo opcji wydruku' }
+);
+
+/** Do wyboru w panelu - lista zgloszona przez agenta, prosto z PPD drukarki. */
+const agentChoiceSchema = z.object({
+  role: z.string().max(32),
+  key: optionKey,
+  label: z.string().max(80),
+  values: z
+    .array(z.object({ value: optionValue, label: z.string().max(120) }))
+    .max(60),
+});
+
 const agentProfileSchema = z.object({
   name: z.string().min(1).max(64),
   printer: z.string().max(200).optional(),
@@ -20,6 +45,8 @@ const agentProfileSchema = z.object({
   maxPages: z.number().int().positive().nullish(),
   copies: z.number().int().positive().nullish(),
   enabled: z.boolean().optional(),
+  choices: z.array(agentChoiceSchema).max(8).optional(),
+  currentOptions: printOptionsSchema.optional(),
 });
 
 export const printAgentHelloSchema = z.object({
@@ -71,12 +98,15 @@ export const createPrintJobSchema = z.object({
   profile: z.string().min(1).max(64),
   copies: z.number().int().min(1).max(50).optional(),
   priority: z.number().int().min(-100).max(100).optional(),
+  /** Nadpisanie ustawien profilu na to jedno zlecenie. Brak = jak w profilu. */
+  options: printOptionsSchema.optional(),
 });
 
 export const casePrintSchema = z.object({
   agentId: z.string().min(1),
   profile: z.string().min(1).max(64),
   copies: z.number().int().min(1).max(50).optional(),
+  options: printOptionsSchema.optional(),
   scope: z.enum(['combined', 'items', 'selected']),
   assetIds: z.array(z.string().min(1)).max(200).optional(),
 });

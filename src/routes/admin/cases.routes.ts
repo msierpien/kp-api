@@ -437,6 +437,7 @@ export async function casesRoutes(fastify: FastifyInstance) {
             agentId: body.data.agentId,
             profile: body.data.profile,
             copies: body.data.copies,
+            options: body.data.options,
             requestedById: request.user?.userId ?? null,
           });
           created.push(toPrintJobDto(job));

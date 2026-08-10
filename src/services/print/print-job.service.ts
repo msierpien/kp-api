@@ -35,6 +35,8 @@ export interface ClaimedJob {
   downloadPath: string;
   expectedPageMm: number[] | null;
   maxPages: number | null;
+  /** Wybor z panelu - agent naklada go na opcje profilu. */
+  options: Record<string, string> | null;
   claimExpiresAt: Date;
 }
 
@@ -175,6 +177,7 @@ export async function claimPrintJobs(
       downloadPath: `/print-agent/jobs/${job.id}/file`,
       expectedPageMm: (meta.expectedPageMm as number[]) ?? null,
       maxPages: (meta.maxPages as number) ?? null,
+      options: (meta.options as Record<string, string>) ?? null,
       claimExpiresAt,
     });
   }
@@ -322,6 +325,8 @@ export interface CreatePrintJobInput {
   copies?: number;
   priority?: number;
   requestedById?: string | null;
+  /** Nadpisanie ustawien profilu (jakosc, typ papieru) na to jedno zlecenie. */
+  options?: Record<string, string>;
 }
 
 /**
@@ -365,6 +370,8 @@ export async function createPrintJob(input: CreatePrintJobInput) {
     throw new ValidationError('Naklad musi miescic sie w zakresie 1-50');
   }
 
+  const options = pickKnownOptions(profile, input.options);
+
   const assetMeta = (asset.metadata || {}) as Record<string, unknown>;
 
   return prisma.printJob.create({
@@ -386,9 +393,44 @@ export async function createPrintJob(input: CreatePrintJobInput) {
         expectedPageMm: profile.expectSizeMm ?? null,
         maxPages: profile.maxPages ?? null,
         profileSnapshot: { printer: profile.printer ?? null, media: profile.media ?? null },
+        // Opcje leza w metadata, a nie w osobnej kolumnie: agent czyta je
+        // razem z reszta opisu zadania, a schemat bazy zostaje bez migracji.
+        options,
       },
     },
   });
+}
+
+/**
+ * Opcje wydruku przyciete do tego, co agent zglosil dla danego profilu.
+ *
+ * Panel wysyla wybor obslugujacego, ale listy pochodza z PPD drukarki, wiec
+ * to one rozstrzygaja. Wartosc spoza listy odrzucamy z bledem zamiast po cichu
+ * pomijac - inaczej operator zobaczylby "wydrukowano" przy ustawieniu, ktore
+ * nigdy nie dojechalo do drukarki.
+ */
+function pickKnownOptions(
+  profile: Record<string, unknown>,
+  options: Record<string, string> | undefined
+): Record<string, string> | undefined {
+  if (!options || Object.keys(options).length === 0) return undefined;
+
+  const choices = (profile.choices || []) as Array<{
+    key: string;
+    values?: Array<{ value: string }>;
+  }>;
+
+  const allowed = new Map(
+    choices.map((choice) => [choice.key, new Set((choice.values || []).map((v) => v.value))])
+  );
+
+  for (const [key, value] of Object.entries(options)) {
+    const values = allowed.get(key);
+    if (!values) throw new ValidationError(`Drukarka nie zna opcji "${key}"`);
+    if (!values.has(value)) throw new ValidationError(`Opcja "${key}" nie przyjmuje wartosci "${value}"`);
+  }
+
+  return options;
 }
 
 export async function cancelPrintJob(jobId: string) {

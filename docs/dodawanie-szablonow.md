@@ -189,8 +189,52 @@ obrazu.
 
 - Grafika leży w `storage/templates/<CODE>/background/` — sprawdź, że plik
   faktycznie tam jest (`docker exec personalization-api ls -l ...`).
-- Mockup, jeśli miał być, podłóż w panelu.
-- Produkt sklepowy podpina osobny skrypt `publish-*-product.ts`.
+- Mockup podłóż w panelu (zakładka Mockupy, narożniki przeciągane po zdjęciu).
+- Jeśli po drodze zmieniałeś szablon w edytorze, sprawdź, co panel tam
+  faktycznie zapisał — potrafi podmienić krój i **włączyć wszystkie zgody
+  klienta** (`clientDraggable`, `clientFontFamily`, …), których skrypt nie
+  ustawiał. Krój z edytora musi być w `storage/fonts`; renderer rozwiązuje go
+  po `fontFamily` z warstwy, a nie po tablicy `layout.fonts` (ta zostaje
+  z pierwotnego skryptu i po zmianie w panelu jest po prostu nieaktualna).
+
+## 7. Publikacja jako produkt w sklepie
+
+Wzorzec: `src/scripts/publish-winietka-botaniczna-product.ts` (bez wariantów)
+albo `publish-mis-product.ts` (z atrybutem „Rodzaj papieru”).
+
+Co robi jedno uruchomienie:
+
+1. renderuje zdjęcie produktowe z **mockupu szablonu** (`renderMockupPng`) —
+   karta pokazuje dokładnie to, co dostanie klient; PNG idzie do JPEG, bo
+   PrestaShop odrzuca pliki powyżej 2000 KB,
+2. zakłada/aktualizuje kartę w PrestaShop (rozpoznanie po `reference`),
+3. ustawia `out_of_stock = 1` — papeteria powstaje na zamówienie, więc stan 0
+   nie może zamykać sprzedaży,
+4. zakłada `PersonalizedProduct` wiążący referencję z szablonem — bez tego
+   zamówienie nie trafi do personalizacji.
+
+`PHOTO_ONLY=1` zatrzymuje skrypt po zdjęciu — obejrzyj je, zanim cokolwiek
+pojawi się w sklepie. Pierwsze uruchomienie warto też zrobić z
+`PRODUCT_ACTIVE=0`. `REPLACE_PHOTO=1` przerysowuje zdjęcie i podmienia je
+na karcie.
+
+Cena w PrestaShop jest **netto** — brutto dzielimy przez 1,23
+(1,50 zł brutto = 1.219512).
+
+**Kombinacje nie mogą dostawać własnych referencji.** PrestaShop wpisuje do
+pozycji zamówienia referencję kombinacji, jeśli ta jest ustawiona, a
+dopasowanie produktu personalizowanego (`sync-orders`) szuka po referencji
+produktu — własna referencja kombinacji zerwałaby dopasowanie.
+
+Na koniec magazyn:
+
+```bash
+docker exec -e DRY_RUN=1 personalization-api node /app/dist/scripts/sync-personalization-to-shop-mappings.js
+docker exec personalization-api node /app/dist/scripts/sync-personalization-to-shop-mappings.js
+```
+
+Skrypt dopina mapowanie sklepowe i kartę magazynową; `DRY_RUN=1` najpierw
+pokazuje, czego dotknie.
 
 ---
 
@@ -204,4 +248,7 @@ obrazu.
 - [ ] layout przechodzi `templateLayoutSchema`
 - [ ] render-check obejrzany okiem
 - [ ] skrypt idempotentny (odpalony dwa razy nie robi drugiego szablonu)
+- [ ] zdjęcie produktowe obejrzane (`PHOTO_ONLY=1`) przed publikacją
+- [ ] `PersonalizedProduct` wskazuje szablon, mapowanie magazynowe dociągnięte
+- [ ] karta produktu otwarta w przeglądarce: cena, minimalna ilość, zdjęcie
 - [ ] `/tmp` na serwerze posprzątane

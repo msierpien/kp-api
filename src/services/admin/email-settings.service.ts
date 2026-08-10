@@ -27,6 +27,67 @@ export async function getActiveEmailSettings(tenantId?: string) {
 }
 
 /**
+ * Konfiguracja SMTP dla konkretnego sklepu, z zapasem na poziomie tenanta.
+ *
+ * Kazdy sklep ma wysylac z WLASNEJ domeny - inaczej SPF i DKIM nie zgadzaja
+ * sie z adresem nadawcy i poczta laduje w spamie albo wraca. Sklep bez
+ * wlasnego wpisu dostaje ustawienie zapasowe tenanta (`shopId` = NULL),
+ * zeby brak konfiguracji nie zatrzymywal wysylki.
+ */
+export async function getEmailSettingsForShop(shopId: string) {
+  const shop = await prisma.shop.findUnique({
+    where: { id: shopId },
+    select: { tenantId: true },
+  });
+  if (!shop) return null;
+
+  const own = await prisma.emailSettings.findFirst({
+    where: { shopId, isActive: true },
+  });
+  const settings =
+    own ??
+    (await prisma.emailSettings.findFirst({
+      where: { tenantId: shop.tenantId, shopId: null, isActive: true },
+    }));
+
+  if (!settings) return null;
+  return { ...settings, password: decrypt(settings.password), isShopSpecific: Boolean(own) };
+}
+
+/**
+ * Serwis pocztowy nadajacy z adresu przypisanego do sklepu.
+ *
+ * Globalny `emailService` trzyma JEDEN transporter na proces, wiec nie da sie
+ * nim wyslac raz z jednej, raz z drugiej domeny - stad osobna instancja na
+ * czas wysylki.
+ */
+export async function createShopEmailService(shopId: string) {
+  const settings = await getEmailSettingsForShop(shopId);
+  if (!settings) return null;
+
+  const service = new EmailService();
+  service.initialize({
+    host: settings.host,
+    port: settings.port,
+    secure: settings.secure,
+    user: settings.user,
+    pass: settings.password,
+    from: settings.fromEmail,
+    fromName: settings.fromName,
+  });
+  return service;
+}
+
+/** Zapasowa konfiguracja tenanta - ta bez przypisanego sklepu. */
+async function getDefaultEmailSettings() {
+  const settings = await prisma.emailSettings.findFirst({
+    where: { isActive: true, shopId: null },
+    orderBy: { createdAt: 'desc' },
+  });
+  return settings ? { ...settings, password: decrypt(settings.password) } : null;
+}
+
+/**
  * Pobiera wszystkie konfiguracje email (bez haseł)
  */
 export async function getAllEmailSettings() {
@@ -64,10 +125,12 @@ export async function getEmailSettingsById(id: string) {
  * Tworzy nową konfigurację email
  */
 export async function createEmailSettings(data: EmailSettingsInput) {
-  // Jeśli ta konfiguracja ma być aktywna, dezaktywuj wszystkie inne
+  // Aktywna moze byc jedna konfiguracja NA ZAKRES: jedna zapasowa tenanta
+  // i po jednej na sklep. Dezaktywowanie wszystkich odebraloby drugiemu
+  // sklepowi jego wlasny adres nadawcy.
   if (data.isActive) {
     await prisma.emailSettings.updateMany({
-      where: { isActive: true },
+      where: { isActive: true, shopId: data.shopId ?? null },
       data: { isActive: false },
     });
   }
@@ -96,12 +159,18 @@ export async function createEmailSettings(data: EmailSettingsInput) {
  * Aktualizuje konfigurację email
  */
 export async function updateEmailSettings(id: string, data: Partial<EmailSettingsInput>) {
-  // Jeśli ta konfiguracja ma być aktywna, dezaktywuj wszystkie inne
+  // Aktywna moze byc jedna konfiguracja NA ZAKRES (zapasowa tenanta albo
+  // konkretny sklep) - patrz `createEmailSettings`.
   if (data.isActive === true) {
+    const current = await prisma.emailSettings.findUnique({
+      where: { id },
+      select: { shopId: true },
+    });
     await prisma.emailSettings.updateMany({
-      where: { 
+      where: {
         id: { not: id },
-        isActive: true 
+        isActive: true,
+        shopId: data.shopId !== undefined ? data.shopId ?? null : current?.shopId ?? null,
       },
       data: { isActive: false },
     });
@@ -180,7 +249,11 @@ export async function testEmailSettings(data: EmailSettingsInput) {
  * Przeładowuje email service z aktywnymi ustawieniami z bazy
  */
 export async function reloadEmailService() {
-  const settings = await getActiveEmailSettings();
+  // Globalny serwis obsluguje sciezki bez sklepu w kontekscie (np. wysylka
+  // reczna z panelu), wiec bierze konfiguracje ZAPASOWA tenanta. Sklepowe
+  // wpisy sa uzywane przez `createShopEmailService` przy konkretnej sprawie.
+  const settings =
+    (await getDefaultEmailSettings()) ?? (await getActiveEmailSettings());
   
   if (!settings) {
     console.warn('[EmailSettings] No active settings found, email service disabled');

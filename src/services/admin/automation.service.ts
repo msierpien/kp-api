@@ -5,6 +5,7 @@ import { decrypt } from '../../lib/encryption';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
 import { generateAccessToken, getTokenExpiryDate, maskToken } from '../../lib/token';
 import { emailService } from '../email/email.service';
+import { createShopEmailService } from './email-settings.service';
 import { confirmDocument, syncWzDraftItemsWithReservations } from './warehouse-documents.service';
 import {
   buildDryRunResult,
@@ -129,15 +130,23 @@ async function executeSendEmail(config: Record<string, any>, caseData: any): Pro
     variables,
   );
 
-  if (typeof (emailService as any).sendAutomationEmail === 'function') {
-    await (emailService as any).sendAutomationEmail({
+  // Nadawca zalezy od SKLEPU sprawy: kazdy sklep ma wysylac z wlasnej domeny,
+  // inaczej SPF i DKIM nie zgadzaja sie z adresem i poczta laduje w spamie.
+  // Brak wpisu dla sklepu = konfiguracja zapasowa tenanta, a gdy i jej nie
+  // ma - globalny serwis (ustawienia z ENV).
+  const shopId = caseData?.order?.shop?.id || caseData?.shop?.id || null;
+  const sender = shopId ? await createShopEmailService(shopId).catch(() => null) : null;
+  const mailer = sender ?? emailService;
+
+  if (typeof (mailer as any).sendAutomationEmail === 'function') {
+    await (mailer as any).sendAutomationEmail({
       to,
       subject,
       body,
       shopName: String(variables.shopName),
     });
   } else {
-    await emailService.sendPersonalizationEmail({
+    await mailer.sendPersonalizationEmail({
       to,
       customerName: String(variables.customerName),
       orderReference: String(variables.orderReference),

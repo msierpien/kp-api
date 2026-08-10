@@ -133,6 +133,7 @@ model Shop {
 
   tenant               Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   orders               Order[]
+  emailSettings        EmailSettings?
   syncLogs             SyncLog[]
   personalizedProducts PersonalizedProduct[]
   productMappings      ShopProductMapping[]
@@ -1032,8 +1033,13 @@ model PrintJob {
 // ============================================
 
 model EmailSettings {
-  id        String   @id @default(cuid())
-  tenantId  String   @unique @map("tenant_id") // jeden EmailSettings per tenant
+  id       String @id @default(cuid())
+  tenantId String @map("tenant_id")
+
+  /// Sklep, ktorego dotyczy ta konfiguracja. NULL = ustawienie zapasowe
+  /// tenanta, uzywane przez sklepy bez wlasnego wpisu. Kazdy sklep wysyla
+  /// z wlasnej domeny, inaczej SPF i DKIM nie zgadzaja sie z nadawca.
+  shopId String? @unique @map("shop_id")
   host      String
   port      Int
   secure    Boolean  @default(false)
@@ -1046,6 +1052,7 @@ model EmailSettings {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shop   Shop?  @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@map("email_settings")

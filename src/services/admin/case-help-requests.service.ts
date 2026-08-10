@@ -33,8 +33,10 @@ function requireTenantId() {
  */
 async function resolveNotificationTarget(tenantId: string) {
   const [settings, tenant] = await Promise.all([
-    prisma.emailSettings.findUnique({
-      where: { tenantId },
+    // Konfiguracja ZAPASOWA tenanta (bez sklepu) - powiadomienie dla obslugi
+    // nie dotyczy konkretnego sklepu, wiec idzie na adres ogolny.
+    prisma.emailSettings.findFirst({
+      where: { tenantId, shopId: null },
       select: { fromEmail: true, fromName: true, isActive: true },
     }),
     prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true } }),

@@ -271,6 +271,8 @@ export const emailSettingsSchema = z.object({
   password: z.string().min(1, 'Hasło SMTP jest wymagane'),
   fromEmail: z.string().email('Nieprawidłowy adres email'),
   fromName: z.string().optional().nullable(),
+  /** Sklep, ktory ma nadawac z tego adresu. Brak = konfiguracja zapasowa. */
+  shopId: z.string().min(1).optional().nullable(),
   isActive: z.boolean().default(true),
 });
 

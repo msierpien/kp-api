@@ -1142,7 +1142,10 @@ model PrintSettings {
   formatPdf        Boolean  @default(true) @map("format_pdf")
   formatPng        Boolean  @default(true) @map("format_png")
   combinedPdf      Boolean  @default(true) @map("combined_pdf")
-  watermarkEnabled Boolean  @default(false) @map("watermark_enabled")
+  /// Znak wodny na materialach POKAZYWANYCH KLIENTOWI (podglad w portalu,
+  /// PDF podgladowy). Pliki produkcyjne nigdy go nie dostaja - wczesniej
+  /// dostawaly, co psulo wydruk.
+  watermarkEnabled Boolean  @default(true) @map("watermark_enabled")
   watermarkText    String   @default("PODGLĄD") @map("watermark_text")
 
   /// Korekta pozycji wydruku w mm - kompensuje przesuniecie podajnika drukarki.

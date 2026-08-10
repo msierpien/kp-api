@@ -6,6 +6,9 @@ import { validatePrintPackageAnswers } from '../../services/renderer/answers-val
 import { getCaseLayout } from '../../lib/case-layout';
 import { saveFile, fileExists, buildStorageUrl } from '../../services/storage/local-storage.service';
 import { enqueueCasePrintPackage } from '../../services/admin/cases.service';
+import { PROOF_ASSET_TYPE, enqueueCaseProofPdf } from '../../services/renderer/proof.service';
+import { resolveProofWatermarkText } from '../../services/admin/print-settings.service';
+import { applyWatermarkToImage } from '../../services/renderer/fabric-renderer.service';
 import { listFonts } from '../../services/admin/fonts.service';
 import { ZodError } from 'zod';
 import {
@@ -44,6 +47,25 @@ import {
 
 interface PersonalizationParams {
   token: string;
+}
+
+/**
+ * Gestosc podgladu zapisywanego w magazynie.
+ *
+ * Liczona wzgledem FORMATU kartki, nie w stalych pikselach: 1200 px to duzo
+ * dla A4, a dla wizytowki wciaz jakosc produkcyjna. Przy 150 DPI klient po
+ * powiekszeniu wylapie literowke, ale material jest o polowe rzadszy od
+ * projektu, przeskalowany i skompresowany stratnie.
+ */
+const PREVIEW_DPI = Math.max(72, Math.min(200, Number(process.env.PREVIEW_DPI) || 150));
+/** Twardy sufit dla duzych formatow - chroni dysk i skrzynke klienta. */
+const PREVIEW_MAX_WIDTH_PX = Math.max(600, Number(process.env.PREVIEW_MAX_WIDTH_PX) || 1400);
+
+/** Docelowa szerokosc podgladu dla formatu szablonu. */
+function previewWidthPxForLayout(layout: { canvas?: { widthMm?: unknown } } | null): number {
+  const widthMm = Number(layout?.canvas?.widthMm) || 0;
+  if (!widthMm) return PREVIEW_MAX_WIDTH_PX;
+  return Math.min(PREVIEW_MAX_WIDTH_PX, Math.max(600, Math.round((widthMm / 25.4) * PREVIEW_DPI)));
 }
 
 /**
@@ -462,6 +484,17 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
             ? buildStorageUrl(savedPreview.filePath)
             : null;
 
+        // PDF podgladowy powstaje po zatwierdzeniu i idzie mailem. Link w
+        // portalu jest dla tych, u ktorych mail utknal w spamie albo zginal.
+        const savedProof = await prisma.asset.findFirst({
+          where: { caseId: personalizationCase.id, assetType: PROOF_ASSET_TYPE },
+          orderBy: { createdAt: 'desc' },
+        });
+        const proofUrl =
+          savedProof && (await fileExists(savedProof.filePath))
+            ? buildStorageUrl(savedProof.filePath)
+            : null;
+
         // Czy portal ma w ogole pokazac asystenta. Bez tej flagi ikona
         // wisialaby w szynie u kazdego klienta i dopiero klikniecie
         // ujawnialoby, ze sprzedawca funkcji nie wlaczyl. Flaga niesie tez
@@ -492,6 +525,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           submittedAt: personalizationCase.submittedAt,
           aiAssistantEnabled,
           previewUrl,
+          proofUrl,
           layoutOverrides: personalizationCase.layoutOverrides,
           validationSummary: personalizationCase.validationSummary,
           answersJson: personalizationCase.answersJson,
@@ -1086,8 +1120,8 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
 
         // Zatwierdzenie generuje komplet plikow jak "Generuj paczke" w adminie:
         // wszystkie pozycje (per gosc), ustawienia druku tenanta (formaty,
-        // zbiorczy PDF, znak wodny). Wczesniej PDF_PRINT renderowal tylko
-        // pierwsza pozycje. Blad kolejkowania nie cofa zatwierdzenia klienta -
+        // zbiorczy PDF). Wczesniej PDF_PRINT renderowal tylko pierwsza
+        // pozycje. Blad kolejkowania nie cofa zatwierdzenia klienta -
         // admin zobaczy status sprawy i moze ponowic z panelu.
         let renderJobInfo: { id: string; bullmqJobId?: string | number; status: string } | null = null;
         try {
@@ -1106,6 +1140,24 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           fastify.log.error(
             { err: packageError, caseId: personalizationCase.id },
             'Nie udalo sie zakolejkowac paczki po zatwierdzeniu'
+          );
+        }
+
+        // PDF podgladowy dla klienta - osobny job, bo idzie mailem i nie moze
+        // opozniac ani blokowac paczki produkcyjnej. Brak podgladu to
+        // niedogodnosc, brak paczki to wstrzymana produkcja.
+        try {
+          const proofResult = await enqueueCaseProofPdf(personalizationCase.id, {
+            tenantId: personalizationCase.order?.shop?.tenantId,
+            sendEmail: true,
+          });
+          fastify.log.info(
+            `Proof PDF queued: ${proofResult.renderJobId} (bullmq ${proofResult.bullmqJobId}) for case: ${personalizationCase.id}`
+          );
+        } catch (proofError) {
+          fastify.log.error(
+            { err: proofError, caseId: personalizationCase.id },
+            'Nie udalo sie zakolejkowac podgladu PDF po zatwierdzeniu'
           );
         }
 
@@ -1169,6 +1221,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
             status: true,
             tokenActive: true,
             customerTokenExpiresAt: true,
+            layoutSnapshot: true,
             orderItem: {
               select: {
                 orderId: true,
@@ -1176,14 +1229,14 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
                 personalizedProduct: {
                   select: {
                     template: {
-                      select: { version: true },
+                      select: { version: true, layoutJson: true },
                     },
                   },
                 },
               },
             },
             template: {
-              select: { version: true },
+              select: { version: true, layoutJson: true },
             },
           },
         });
@@ -1216,15 +1269,37 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         const buffer = await data.toBuffer();
         assertAllowedPngUpload(buffer, data.mimetype, { maxBytes: MAX_PREVIEW_UPLOAD_BYTES });
 
+        // Przegladarka eksportuje kanwe w natywnej rozdzielczosci szablonu,
+        // czyli oddaje material gotowy do druku. Zanim cokolwiek trafi na dysk
+        // (a adres pliku do klienta), scinamy rozdzielczosc i klademy znak
+        // wodny - o jakosci podgladu decyduje serwer, nie klient.
+        const previewWatermark = await resolveProofWatermarkText(
+          personalizationCase.orderItem?.order?.shop?.tenantId
+        );
+        const previewLayout = getCaseLayout({
+          layoutSnapshot: personalizationCase.layoutSnapshot,
+          template: {
+            layoutJson:
+              personalizationCase.template?.layoutJson ??
+              personalizationCase.orderItem?.personalizedProduct?.template?.layoutJson ??
+              null,
+          },
+        });
+        const preview = await applyWatermarkToImage(buffer, previewWatermark || '', {
+          maxWidthPx: previewWidthPxForLayout(previewLayout),
+          format: 'jpeg',
+          quality: 0.82,
+        });
+
         // Zapisz plik
-        const savedFile = await saveFile(buffer, {
+        const savedFile = await saveFile(preview.buffer, {
           orderId: personalizationCase.orderItem?.orderId || 'unknown',
           templateVersion:
             personalizationCase.template?.version ||
             personalizationCase.orderItem?.personalizedProduct?.template?.version ||
             1,
           filename: `preview-${personalizationCase.id}`,
-          extension: 'png',
+          extension: 'jpg',
         });
 
         fastify.log.info(`[UploadPreview] File saved: ${savedFile.path}`);
@@ -1243,8 +1318,8 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
             where: { id: existingAsset.id },
             data: {
               filePath: savedFile.path,
-              fileSize: buffer.length,
-              mimeType: 'image/png',
+              fileSize: savedFile.size,
+              mimeType: 'image/jpeg',
             },
           });
         } else {
@@ -1254,8 +1329,8 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
               caseId: personalizationCase.id,
               assetType: 'PNG_PREVIEW',
               filePath: savedFile.path,
-              fileSize: buffer.length,
-              mimeType: 'image/png',
+              fileSize: savedFile.size,
+              mimeType: 'image/jpeg',
             },
           });
         }
@@ -1263,7 +1338,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
         return reply.send({
           success: true,
           previewUrl: savedFile.url,
-          size: buffer.length,
+          size: savedFile.size,
         });
       } catch (error) {
         fastify.log.error({ err: error }, '[UploadPreview] Failed');

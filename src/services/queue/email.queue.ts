@@ -68,11 +68,24 @@ export interface HelpRequestEmailJob {
   helpRequestId: string;
 }
 
+/**
+ * Mail z PDF-em podgladowym po zatwierdzeniu projektu.
+ *
+ * Niesie tylko identyfikatory - adresata, nadawce i tresc worker sklada przy
+ * wysylce, tak jak przy mailach o personalizacji.
+ */
+export interface CaseProofEmailJob {
+  caseId: string;
+  /** Sciezka wzgledna w magazynie; worker dolacza plik z dysku. */
+  proofFilePath: string;
+}
+
 export type EmailJobData =
   | PersonalizationEmailJob
   | OrderPersonalizationEmailJob
   | TestEmailJob
-  | HelpRequestEmailJob;
+  | HelpRequestEmailJob
+  | CaseProofEmailJob;
 
 /**
  * BullMQ Queue for email sending
@@ -164,6 +177,28 @@ export async function queueHelpRequestEmail(data: HelpRequestEmailJob) {
   });
 
   logger.info({ jobId: job.id, to: data.to }, 'Queued help request email');
+  return job;
+}
+
+/**
+ * Mail z podgladem projektu.
+ *
+ * `jobId` po sprawie chroni przed dublem, gdy render podgladu zostanie
+ * ponowiony. `force` przepuszcza wysylke zlecona recznie z panelu -
+ * ukonczone zadanie zostaje w kolejce i bez tego blokowaloby ponowienie.
+ */
+export async function queueCaseProofEmail(
+  caseId: string,
+  proofFilePath: string,
+  options: { force?: boolean } = {}
+) {
+  const job = await emailQueue.add(
+    'case-proof',
+    { caseId, proofFilePath },
+    { jobId: `case-proof-${caseId}${options.force ? `-${Date.now()}` : ''}` }
+  );
+
+  logger.info({ jobId: job.id, caseId }, 'Queued proof email');
   return job;
 }
 

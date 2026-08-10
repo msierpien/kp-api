@@ -761,6 +761,15 @@ function canvasMmDimensions(canvas: TemplateLayoutJson['canvas']): { widthMm: nu
  */
 const PRINT_RENDER_SCALE = Math.max(1, Math.min(4, Number(process.env.PRINT_RENDER_SCALE) || 2));
 
+/**
+ * Gestosc renderu podgladowego (proof) dla klienta.
+ *
+ * Ma wystarczyc do wychwycenia literowki na ekranie i do wydruku kontrolnego
+ * na domowej drukarce, ale nie do reprodukcji - dlatego wyraznie ponizej
+ * 300 DPI projektu i twardo ograniczone z gory.
+ */
+const PROOF_DPI = Math.max(72, Math.min(200, Number(process.env.PROOF_DPI) || 150));
+
 async function renderPageToPng(
   page: TemplatePage,
   answers: Record<string, any>,
@@ -904,23 +913,108 @@ function drawBleedEdges(
   ctx.drawImage(img, widthPx - strip, heightPx - strip, strip, strip, halfW, halfH, bleedPx, bleedPx);
 }
 
-function drawWatermark(ctx: any, widthPx: number, heightPx: number, watermarkText?: string | null): void {
+export interface WatermarkStyle {
+  /** Krycie napisow; 0.16 jest czytelne, a nie zabija projektu. */
+  opacity?: number;
+  angleDeg?: number;
+  /** Ile powtorzen napisu ma zmiescic sie w szerokosci obrazu. */
+  columns?: number;
+}
+
+/**
+ * Kafelkowy znak wodny na calej powierzchni.
+ *
+ * Pojedynczy napis na srodku (tak bylo wczesniej) wycina sie w minute -
+ * wystarczy zaslonic go kawalkiem tla. Siatka powtorzen z przesunieciem co
+ * drugi rzad nie zostawia ani czystego pola, ani pionowych korytarzy, wiec
+ * usuniecie jej wymaga odtworzenia projektu, a nie retuszu.
+ */
+function drawWatermark(
+  ctx: any,
+  widthPx: number,
+  heightPx: number,
+  watermarkText?: string | null,
+  style: WatermarkStyle = {}
+): void {
   if (!watermarkText || !watermarkText.trim()) return;
 
   const text = watermarkText.trim();
-  // Rozmiar dobrany do szerokosci arkusza, zeby napis byl czytelny
-  // niezaleznie od formatu; przekatna, polprzezroczysty.
-  const fontSize = Math.max(24, Math.round(widthPx / Math.max(6, text.length)));
+  const columns = Math.max(1, style.columns ?? 3);
+  const angle = ((style.angleDeg ?? -30) * Math.PI) / 180;
+
   ctx.save();
-  ctx.translate(widthPx / 2, heightPx / 2);
-  ctx.rotate(-Math.PI / 6);
-  ctx.globalAlpha = 0.18;
-  ctx.fillStyle = '#000000';
+
+  // Rozmiar liczymy z faktycznej szerokosci napisu, nie z liczby znakow -
+  // "OK" i "NIE DO DRUKU" maja skrajnie rozna dlugosc przy tym samym stopniu.
+  const probeSize = 100;
+  ctx.font = `bold ${probeSize}px sans-serif`;
+  const probeWidth = Number(ctx.measureText(text).width) || probeSize;
+  const fontSize = Math.max(12, (widthPx / columns) * (probeSize / probeWidth));
   ctx.font = `bold ${fontSize}px sans-serif`;
+  const textWidth = Number(ctx.measureText(text).width) || widthPx / columns;
+
+  const stepX = textWidth * 1.5;
+  const stepY = fontSize * 2.6;
+  // Siatka rysowana w ukladzie obroconym musi pokryc przekatna, inaczej
+  // przy krawedziach zostaja puste trojkaty.
+  const reach = Math.hypot(widthPx, heightPx) / 2 + Math.max(stepX, stepY);
+
+  ctx.globalAlpha = style.opacity ?? 0.16;
+  ctx.fillStyle = '#000000';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(text, 0, 0);
+  ctx.translate(widthPx / 2, heightPx / 2);
+  ctx.rotate(angle);
+
+  let row = 0;
+  for (let y = -reach; y <= reach; y += stepY) {
+    const rowOffset = (row % 2) * (stepX / 2);
+    for (let x = -reach; x <= reach; x += stepX) {
+      ctx.fillText(text, x + rowOffset, y);
+    }
+    row += 1;
+  }
+
   ctx.restore();
+}
+
+/**
+ * Nanosi kafelkowy znak wodny na gotowy obraz (PNG/JPEG) i zwraca nowy bufor.
+ *
+ * Uzywane tam, gdzie obrazu nie renderujemy sami - np. podglad przyslany
+ * przez przegladarke klienta.
+ */
+export async function applyWatermarkToImage(
+  imageBuffer: Buffer,
+  watermarkText: string,
+  options: WatermarkStyle & { maxWidthPx?: number; format?: 'png' | 'jpeg'; quality?: number } = {}
+): Promise<{ buffer: Buffer; widthPx: number; heightPx: number }> {
+  const { createCanvas } = await import('canvas');
+  const image = await loadImage(imageBuffer);
+
+  // Degradacja rozdzielczosci jest czescia ochrony: podglad ma wystarczyc do
+  // sprawdzenia literowki, a nie do wydrukowania u konkurencji.
+  const maxWidthPx = options.maxWidthPx;
+  const scale = maxWidthPx && image.width > maxWidthPx ? maxWidthPx / image.width : 1;
+  const widthPx = Math.max(1, Math.round(image.width * scale));
+  const heightPx = Math.max(1, Math.round(image.height * scale));
+
+  const canvas = createCanvas(widthPx, heightPx);
+  const ctx = canvas.getContext('2d');
+  // Biale tlo pod spodem - przezroczysty PNG zapisany jako JPEG dostalby
+  // czarne tlo zamiast papieru.
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, widthPx, heightPx);
+  ctx.drawImage(image as any, 0, 0, widthPx, heightPx);
+
+  drawWatermark(ctx, widthPx, heightPx, watermarkText, options);
+
+  const buffer =
+    options.format === 'png'
+      ? canvas.toBuffer('image/png')
+      : canvas.toBuffer('image/jpeg', { quality: options.quality ?? 0.8 });
+
+  return { buffer, widthPx, heightPx };
 }
 
 /**
@@ -1075,6 +1169,48 @@ export async function renderPrintSheetPng(
     widthPx: Math.round((widthMm / MM_PER_INCH) * dpi),
     heightPx: Math.round((heightMm / MM_PER_INCH) * dpi),
     dpi,
+  };
+}
+
+/**
+ * Strona projektu w rozdzielczosci podgladowej, ze znakiem wodnym.
+ *
+ * To NIE jest arkusz do druku: bez spadow, bez obrotow ze skladania i bez
+ * lustra. Klient ma zobaczyc kartke tak, jak ja dostanie do reki, a nie
+ * plik technologiczny. JPEG zamiast PNG - o rzad wielkosci mniejszy zalacznik
+ * i material gorszy do dalszej reprodukcji.
+ */
+export async function renderProofPagePng(
+  page: TemplatePage,
+  answers: Record<string, any>,
+  layoutOverrides?: any,
+  itemIndex?: number,
+  options: { dpi?: number; watermarkText?: string | null; quality?: number } = {}
+): Promise<{ buffer: Buffer; widthMm: number; heightMm: number; widthPx: number; heightPx: number }> {
+  const { createCanvas, Image } = await import('canvas');
+
+  const nativeDpi = Number(page.canvas.dpi || 300);
+  const proofDpi = Math.max(72, Math.min(nativeDpi, Number(options.dpi) || PROOF_DPI));
+  const render = await renderPageToPng(page, answers, layoutOverrides, itemIndex, proofDpi / nativeDpi);
+
+  const canvas = createCanvas(render.widthPx, render.heightPx);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, render.widthPx, render.heightPx);
+
+  const img = new Image();
+  img.src = render.buffer;
+  ctx.drawImage(img, 0, 0, render.widthPx, render.heightPx);
+
+  drawWatermark(ctx, render.widthPx, render.heightPx, options.watermarkText);
+
+  const dims = canvasMmDimensions(page.canvas);
+  return {
+    buffer: canvas.toBuffer('image/jpeg', { quality: options.quality ?? 0.78 }),
+    widthMm: dims.widthMm,
+    heightMm: dims.heightMm,
+    widthPx: render.widthPx,
+    heightPx: render.heightPx,
   };
 }
 

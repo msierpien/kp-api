@@ -155,7 +155,6 @@ function normalizePrintPackageOptions(input?: PrintPackageOptions) {
     input?.formats && input.formats.length ? input.formats : ['pdf', 'png']
   );
   const combinedPdf = input?.combinedPdf ?? true;
-  const watermarkText = input?.watermarkText?.trim() || null;
   // Korekta pozycji wydruku - kompensuje przesuniecie podajnika drukarki.
   const offsetXMm = Number(input?.printOffsetXMm) || 0;
   const offsetYMm = Number(input?.printOffsetYMm) || 0;
@@ -163,7 +162,7 @@ function normalizePrintPackageOptions(input?: PrintPackageOptions) {
   // Paczka bez zadnego pliku nie ma sensu - wymuszamy sensowne minimum.
   if (!formats.size && !combinedPdf) formats.add('pdf');
 
-  return { formats, combinedPdf, watermarkText, offsetXMm, offsetYMm };
+  return { formats, combinedPdf, offsetXMm, offsetYMm };
 }
 
 type CasesSummary = ReturnType<typeof buildCasesSummary>;
@@ -806,7 +805,7 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
             page,
             flatAnswers,
             caseItem.layoutOverrides || undefined,
-            pkg.watermarkText,
+            null,
             itemIndex
           );
           itemRenders.push({
@@ -825,7 +824,7 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
           layout,
           flatAnswers,
           caseItem.layoutOverrides || undefined,
-          pkg.watermarkText,
+          null,
           itemIndex
         );
         pngBuffer = sheet.buffer;
@@ -847,9 +846,6 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
           layoutOverrides: caseItem.layoutOverrides || undefined,
           // Bez indeksu druk zignorowalby poprawki zrobione dla tej sztuki.
           itemIndex,
-          watermark: pkg.watermarkText
-            ? { text: pkg.watermarkText, opacity: 0.18, angle: -30 }
-            : undefined,
         };
 
         pngBuffer = await renderPreview(templateData as any, {
@@ -858,7 +854,7 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
           scale: 1,
           deviceScaleFactor: 1,
           format: 'png',
-          includeWatermark: Boolean(pkg.watermarkText),
+          includeWatermark: false,
         });
         itemRenders.push({
           png: pngBuffer,
@@ -892,7 +888,6 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
           heightPx: render.heightPx,
           bleedPx: isMultiPage ? 0 : printTarget.bleedPx,
           bleedMm: isMultiPage ? 0 : printTarget.bleedMm,
-          watermark: pkg.watermarkText || undefined,
         };
         const renderedItem: RenderedPackageItem = {
           itemIndex,
@@ -981,7 +976,6 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
             combined: true,
             pages: combinedPages.length,
             generatedAt: new Date().toISOString(),
-            watermark: pkg.watermarkText || undefined,
           },
         },
       });
@@ -1024,7 +1018,6 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
           packageOptions: {
             formats: [...pkg.formats],
             combinedPdf: pkg.combinedPdf,
-            watermarkText: pkg.watermarkText,
           },
           combinedPdf: combinedPdfInfo,
         })),

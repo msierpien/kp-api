@@ -71,19 +71,30 @@ export function getBullMqConnection() {
 }
 
 // Job types
-export type RenderJobType = 'PNG_PREVIEW' | 'PDF_PRINT' | 'PDF_PRINT_PACKAGE';
+export type RenderJobType = 'PNG_PREVIEW' | 'PDF_PRINT' | 'PDF_PRINT_PACKAGE' | 'PDF_PROOF';
 
-/** Opcje paczki do druku wybierane w panelu przy "Generuj paczkę". */
+/**
+ * Opcje paczki do druku wybierane w panelu przy "Generuj paczkę".
+ *
+ * Bez znaku wodnego — te pliki jadą na maszynę. Znak wodny obowiązuje
+ * wyłącznie materiały dla klienta (podgląd, PDF podglądowy).
+ */
 export interface PrintPackageOptions {
   /** Formaty plików per sztuka. Domyślnie oba. */
   formats?: Array<'pdf' | 'png'>;
   /** Dodatkowo jeden zbiorczy PDF ze wszystkimi sztukami jako stronami. Domyślnie tak. */
   combinedPdf?: boolean;
-  /** Tekst znaku wodnego na każdej sztuce. Brak/null = bez znaku wodnego. */
-  watermarkText?: string | null;
   /** Korekta pozycji wydruku w mm (ujemna = w lewo / do góry). */
   printOffsetXMm?: number;
   printOffsetYMm?: number;
+}
+
+/** Opcje PDF-a podglądowego wysyłanego klientowi po zatwierdzeniu. */
+export interface ProofOptions {
+  /** Tekst znaku wodnego. Brak/null = sprzedawca wyłączył znak wodny. */
+  watermarkText?: string | null;
+  /** Czy po wygenerowaniu wysłać plik mailem do klienta. */
+  sendEmail?: boolean;
 }
 
 export interface RenderJobData {
@@ -91,6 +102,7 @@ export interface RenderJobData {
   renderJobId?: string;
   jobType: RenderJobType;
   packageOptions?: PrintPackageOptions;
+  proofOptions?: ProofOptions;
   answers: Record<string, string | number | boolean>;
   templateName: string;
   templateVersion: number;
@@ -278,6 +290,28 @@ export async function addPrintPackageJob(data: Omit<RenderJobData, 'jobType'>): 
   );
 
   console.log(`[RenderQueue] Print package job added: ${job.id}`);
+  return job;
+}
+
+/**
+ * Dodaje job generowania PDF-a podgladowego dla klienta.
+ *
+ * Nizszy priorytet niz paczka: druk czeka na produkcje, podglad tylko na
+ * skrzynke klienta.
+ */
+export async function addProofPdfJob(data: Omit<RenderJobData, 'jobType'>): Promise<Job<RenderJobData, RenderJobResult>> {
+  const queue = getRenderQueue();
+
+  const job = await queue.add(
+    'proof-pdf',
+    { ...data, jobType: 'PDF_PROOF' },
+    {
+      priority: 8,
+      jobId: `proof-${data.caseId}-${Date.now()}`,
+    }
+  );
+
+  console.log(`[RenderQueue] Proof PDF job added: ${job.id}`);
   return job;
 }
 

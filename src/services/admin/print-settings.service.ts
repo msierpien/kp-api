@@ -27,7 +27,7 @@ const defaults: PrintSettingsView = {
   formatPdf: true,
   formatPng: true,
   combinedPdf: true,
-  watermarkEnabled: false,
+  watermarkEnabled: true,
   watermarkText: 'PODGLĄD',
   printOffsetXMm: 0,
   printOffsetYMm: 0,
@@ -108,6 +108,10 @@ export async function updatePrintSettings(input: UpdatePrintSettingsInput): Prom
  * Ustawienia druku przetłumaczone na opcje joba paczki. Wołane przy zlecaniu
  * (kontekst tenanta jest w request adminowym; worker dostaje gotowe opcje).
  * Publiczny submit nie ma kontekstu tenanta — podaje tenantId sprawy wprost.
+ *
+ * Znak wodny NIE trafia do paczki: pliki z tego joba jadą prosto na maszynę.
+ * Wcześniej włączenie znaku wodnego psuło wydruk — dziś ustawienie dotyczy
+ * wyłącznie podglądów dla klienta (`resolveProofWatermarkText`).
  */
 export async function resolvePrintPackageOptions(tenantId?: string): Promise<PrintPackageOptions> {
   const settings = tenantId
@@ -120,8 +124,25 @@ export async function resolvePrintPackageOptions(tenantId?: string): Promise<Pri
   return {
     formats,
     combinedPdf: settings.combinedPdf,
-    watermarkText: settings.watermarkEnabled ? settings.watermarkText : null,
     printOffsetXMm: settings.printOffsetXMm,
     printOffsetYMm: settings.printOffsetYMm,
   };
+}
+
+/**
+ * Tekst znaku wodnego dla materiałów pokazywanych klientowi (podgląd w
+ * portalu, PDF podglądowy). `null` = sprzedawca wyłączył znak wodny.
+ *
+ * Brak kontekstu tenanta nie może wywrócić podglądu — sprawa i tak zostanie
+ * zatwierdzona, więc przy braku ustawień wracamy do domyślnego napisu.
+ */
+export async function resolveProofWatermarkText(tenantId?: string): Promise<string | null> {
+  try {
+    const settings = tenantId
+      ? toView(await prisma.printSettings.findUnique({ where: { tenantId } }))
+      : await getPrintSettings();
+    return settings.watermarkEnabled ? settings.watermarkText : null;
+  } catch {
+    return defaults.watermarkText;
+  }
 }

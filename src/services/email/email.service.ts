@@ -34,6 +34,19 @@ export interface InvoiceEmailData {
   pdfPath?: string | null;
 }
 
+/** Mail z PDF-em podglądowym wysyłany po zatwierdzeniu personalizacji. */
+export interface ProofEmailData {
+  to: string;
+  customerName?: string | null;
+  orderReference: string;
+  shopName: string;
+  productName?: string | null;
+  /** Ścieżka pliku na dysku — załącznik czytany przy wysyłce. */
+  pdfPath: string;
+  /** Link do sprawy w portalu klienta. */
+  caseUrl?: string | null;
+}
+
 export interface AutomationEmailData {
   to: string;
   subject: string;
@@ -152,6 +165,42 @@ export class EmailService {
       return { success: true, messageId: result.messageId };
     } catch (error) {
       console.error('[Email] Failed to send invoice email:', error instanceof Error ? error.message : error);
+      return { success: false };
+    }
+  }
+
+  /**
+   * PDF podglądowy po zatwierdzeniu projektu.
+   *
+   * Plik jest znakowany wodnym i w obniżonej rozdzielczości — ma pokazać
+   * klientowi, co pójdzie do druku, a nie dać mu materiału produkcyjnego.
+   */
+  async sendProofEmail(data: ProofEmailData): Promise<{ success: boolean; messageId?: string }> {
+    if (!this.transporter || !this.config) {
+      console.warn('[Email] Service not configured, skipping proof email send');
+      return { success: false };
+    }
+
+    const subject = `Podgląd projektu do zamówienia ${data.orderReference} - ${data.shopName}`;
+
+    try {
+      const result = await this.transporter.sendMail({
+        from: this.formatFrom(data.shopName),
+        to: data.to,
+        subject,
+        text: this.generateProofEmailText(data),
+        html: this.generateProofEmailHtml(data),
+        attachments: [
+          {
+            filename: `podglad-${data.orderReference || 'projekt'}.pdf`,
+            path: data.pdfPath,
+          },
+        ],
+      });
+
+      return { success: true, messageId: result.messageId };
+    } catch (error) {
+      console.error('[Email] Failed to send proof email:', error instanceof Error ? error.message : error);
       return { success: false };
     }
   }
@@ -288,6 +337,49 @@ WAŻNE: Link do personalizacji jest ważny przez 30 dni.
 Po wypełnieniu formularza nie będzie możliwości edycji.
 
 Pozdrawiamy,
+${data.shopName}
+    `.trim();
+  }
+
+  private generateProofEmailHtml(data: ProofEmailData): string {
+    const product = data.productName ? ` (${data.productName})` : '';
+    return `
+<!DOCTYPE html>
+<html lang="pl">
+<head><meta charset="UTF-8"><title>Podgląd projektu</title></head>
+<body style="font-family: Arial, sans-serif; color: #1f2937;">
+  <p>Dzień dobry${data.customerName ? ` ${data.customerName}` : ''},</p>
+  <p>
+    Dziękujemy za zatwierdzenie personalizacji do zamówienia <strong>${data.orderReference}</strong>${product}.
+    W załączniku przesyłamy podgląd projektu — tak zostanie wydrukowany.
+  </p>
+  <p style="color: #6b7280; font-size: 14px;">
+    Załączony plik ma obniżoną rozdzielczość i znak wodny, dlatego nie nadaje się do samodzielnego wydruku.
+    Do produkcji trafia wersja bez znaku wodnego, w pełnej jakości.
+  </p>
+  ${
+    data.caseUrl
+      ? `<p><a href="${data.caseUrl}" style="display:inline-block;background-color:#2563eb;color:#ffffff;padding:10px 20px;text-decoration:none;border-radius:6px;font-weight:500;">Zobacz projekt w przeglądarce</a></p>`
+      : ''
+  }
+  <p>${data.shopName}</p>
+</body>
+</html>
+    `.trim();
+  }
+
+  private generateProofEmailText(data: ProofEmailData): string {
+    const product = data.productName ? ` (${data.productName})` : '';
+    return `
+Dzień dobry${data.customerName ? ` ${data.customerName}` : ''},
+
+Dziękujemy za zatwierdzenie personalizacji do zamówienia ${data.orderReference}${product}.
+W załączniku przesyłamy podgląd projektu - tak zostanie wydrukowany.
+
+Załączony plik ma obniżoną rozdzielczość i znak wodny, dlatego nie nadaje się
+do samodzielnego wydruku. Do produkcji trafia wersja bez znaku wodnego,
+w pełnej jakości.
+${data.caseUrl ? `\nProjekt w przeglądarce: ${data.caseUrl}\n` : ''}
 ${data.shopName}
     `.trim();
   }

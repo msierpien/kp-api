@@ -7,6 +7,7 @@ import {
   getOrderPersonalizationLinks,
 } from '../../lib/case-personalization-links';
 import type {
+  CaseProofEmailJob,
   EmailJobData,
   HelpRequestEmailJob,
   OrderPersonalizationEmailJob,
@@ -14,6 +15,8 @@ import type {
   TestEmailJob,
 } from './email.queue';
 import prisma from '../../lib/prisma';
+import { decrypt } from '../../lib/encryption';
+import { resolveStorageFilePath } from '../storage/local-storage.service';
 
 /**
  * BullMQ Worker for processing email jobs
@@ -42,6 +45,8 @@ export function startEmailWorker() {
           return await processTestEmail(data as TestEmailJob);
         } else if (name === 'help-request') {
           return await processHelpRequestEmail(data as HelpRequestEmailJob);
+        } else if (name === 'case-proof') {
+          return await processCaseProofEmail(data as CaseProofEmailJob);
         } else {
           throw new Error(`Unknown email job type: ${name}`);
         }
@@ -138,6 +143,75 @@ async function processOrderPersonalizationEmail(
   });
 
   return { success };
+}
+
+/**
+ * Mail z PDF-em podgladowym po zatwierdzeniu projektu.
+ *
+ * Adresata i nadawce czytamy tu, a nie przy kolejkowaniu: zadanie powstaje
+ * w workerze renderu, ktory zna tylko sprawe.
+ */
+async function processCaseProofEmail(data: CaseProofEmailJob): Promise<{ success: boolean }> {
+  const caseItem = await prisma.personalizationCase.findUnique({
+    where: { id: data.caseId },
+    select: {
+      tokenActive: true,
+      customerTokenEncrypted: true,
+      orderItem: { select: { productNameSnapshot: true } },
+      order: {
+        select: {
+          orderReference: true,
+          customerEmail: true,
+          customerName: true,
+          shopId: true,
+          shop: { select: { name: true } },
+        },
+      },
+    },
+  });
+
+  if (!caseItem?.order?.customerEmail) {
+    throw new Error(`Sprawa ${data.caseId} nie ma adresu e-mail klienta`);
+  }
+
+  const shopMailer = caseItem.order.shopId
+    ? await createShopEmailService(caseItem.order.shopId).catch((error) => {
+        console.warn('[EmailWorker] Nie udalo sie zbudowac nadawcy dla sklepu:', error);
+        return null;
+      })
+    : null;
+  const mailer = shopMailer ?? emailService;
+
+  if (!mailer.isConfigured()) {
+    throw new Error('Brak konfiguracji SMTP dla tej wysyłki');
+  }
+
+  // Link tylko wtedy, gdy token wciaz zyje. Nowego nie wystawiamy - sprawa
+  // jest juz zatwierdzona i nie ma powodu otwierac do niej dostepu na nowo.
+  let caseUrl: string | null = null;
+  if (caseItem.tokenActive && caseItem.customerTokenEncrypted) {
+    try {
+      caseUrl = `${config.frontend.portalUrl}/${decrypt(caseItem.customerTokenEncrypted)}`;
+    } catch {
+      caseUrl = null;
+    }
+  }
+
+  const result = await mailer.sendProofEmail({
+    to: caseItem.order.customerEmail,
+    customerName: caseItem.order.customerName,
+    orderReference: caseItem.order.orderReference || '',
+    shopName: caseItem.order.shop?.name || 'Sklep',
+    productName: caseItem.orderItem?.productNameSnapshot,
+    pdfPath: resolveStorageFilePath(data.proofFilePath),
+    caseUrl,
+  });
+
+  if (!result.success) {
+    throw new Error(`Nie udało się wysłać podglądu do ${caseItem.order.customerEmail}`);
+  }
+
+  return { success: true };
 }
 
 /**

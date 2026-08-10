@@ -106,7 +106,9 @@ export function classifyStorageFile(relativePath: string): StorageFileKind {
   if (topLevel === 'decorations') return 'decoration';
 
   const fileName = path.basename(relativePath);
-  if (fileName.startsWith('preview-')) return 'preview';
+  // `podglad-` to PDF podgladowy wysylany klientowi po zatwierdzeniu -
+  // dla panelu to ten sam rodzaj co podglad z edytora.
+  if (fileName.startsWith('preview-') || fileName.startsWith('podglad-')) return 'preview';
   if (fileName.startsWith('final-') || fileName.startsWith('print-package')) return 'print';
 
   return 'other';

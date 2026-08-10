@@ -4,6 +4,8 @@ import { renderPreview, renderPDF, renderPrintPdf } from '../renderer/fabric-ren
 import { validateAnswers } from '../renderer/text-validator.service';
 import { saveFile } from '../storage/local-storage.service';
 import { generateCasePrintPackage } from '../admin/cases.service';
+import { generateCaseProofPdf } from '../renderer/proof.service';
+import { queueCaseProofEmail } from './email.queue';
 import {
   getBullMqConnection,
   RENDER_QUEUE_NAME,
@@ -46,6 +48,47 @@ async function processRenderJob(
           },
         },
       });
+    }
+
+    if (jobType === 'PDF_PROOF') {
+      const proof = await generateCaseProofPdf(caseId, {
+        watermarkText: job.data.proofOptions?.watermarkText,
+      });
+      await job.updateProgress(80);
+
+      if (job.data.proofOptions?.sendEmail) {
+        // Mail to osobne zadanie: nieudana wysylka nie moze kasowac gotowego
+        // pliku, a klient i tak ma do niego link w portalu.
+        await queueCaseProofEmail(caseId, proof.filePath).catch((error) => {
+          console.error(`[RenderWorker] Nie udalo sie zakolejkowac maila z podgladem dla ${caseId}:`, error);
+        });
+      }
+
+      if (activeRenderJob) {
+        await prisma.renderJob.update({
+          where: { id: activeRenderJob.id },
+          data: {
+            status: 'COMPLETED',
+            completedAt: new Date(),
+            metadata: {
+              ...(activeRenderJob.metadata as object || {}),
+              bullmqJobId: job.id,
+              assetId: proof.assetId,
+              pageCount: proof.pageCount,
+            },
+          },
+        });
+      }
+
+      await job.updateProgress(100);
+
+      return {
+        success: true,
+        assetId: proof.assetId,
+        filePath: proof.filePath,
+        fileUrl: proof.fileUrl,
+        fileSize: proof.fileSize,
+      };
     }
 
     if (jobType === 'PDF_PRINT_PACKAGE') {

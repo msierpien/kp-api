@@ -50,10 +50,17 @@ Wskazówki dla Claude Code (claude.ai/code) podczas pracy z kodem w tym repozyto
 
 2. **Personalizacja — stan na 2026-07-25**
    - Strony projektu, składanie do druku, paczki per pozycja, ustawienia druku
-     (formaty/zbiorczy PDF/znak wodny), mockup na zdjęciu produktu — wdrożone.
+     (formaty/zbiorczy PDF), mockup na zdjęciu produktu — wdrożone.
    - Szczegółowy dziennik: ../STAN-PRAC.md
 
-3. **Uwaga przy dodawaniu pól do layoutu/odpowiedzi**
+3. **Znak wodny dotyczy WYŁĄCZNIE materiałów dla klienta**
+   - Podgląd z edytora (`upload-preview` skaluje go w dół i znakuje po stronie
+     serwera) oraz PDF podglądowy wysyłany po zatwierdzeniu (`proof.service`).
+   - Paczka do druku nigdy go nie dostaje — wcześniej dostawała i psuło to wydruk.
+   - `pdfkit` nie ma polskich znaków we wbudowanych krojach: każdy tekst w PDF
+     rysuj na canvasie i wklejaj jako obraz (patrz `renderCaptionPng`).
+
+4. **Uwaga przy dodawaniu pól do layoutu/odpowiedzi**
    - Każde nowe pole musi trafić do schematu Zod w `src/schemas/admin.schema.ts`,
      inaczej zapis po cichu je wytnie.
    - Każda odpowiedź `type: 'object'` bez `additionalProperties: true` zwraca

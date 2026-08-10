@@ -28,6 +28,22 @@ export interface PersonalizationEmailJob {
   shopId?: string;
 }
 
+/**
+ * Jeden mail na ZAMOWIENIE, nie na sprawe.
+ *
+ * Tresc przychodzi z automatyzacji (redagowana w panelu), a linki worker
+ * zbiera dopiero przy wysylce - dzieki opoznieniu widzi juz wszystkie
+ * pozycje zamowienia.
+ */
+export interface OrderPersonalizationEmailJob {
+  orderId: string;
+  shopId?: string;
+  to: string;
+  subject: string;
+  body: string;
+  shopName: string;
+}
+
 export interface TestEmailJob {
   to: string;
   subject?: string;
@@ -52,7 +68,11 @@ export interface HelpRequestEmailJob {
   helpRequestId: string;
 }
 
-export type EmailJobData = PersonalizationEmailJob | TestEmailJob | HelpRequestEmailJob;
+export type EmailJobData =
+  | PersonalizationEmailJob
+  | OrderPersonalizationEmailJob
+  | TestEmailJob
+  | HelpRequestEmailJob;
 
 /**
  * BullMQ Queue for email sending
@@ -93,6 +113,13 @@ export const emailQueue = new Queue<EmailJobData>('email', {
  * "Wyslij ponownie" i nic sie nie dzialo: API zwracalo sukces, a zadanie
  * nigdy nie trafialo do workera.
  */
+/**
+ * Ile czekamy na pozostale pozycje zamowienia. Import zamowienia zaklada
+ * sprawy sekwencyjnie i miesci sie w sekundach; minuta to zapas na wolna
+ * synchronizacje, a dla klienta to wciaz "od razu".
+ */
+const ORDER_EMAIL_DELAY_MS = Number(process.env.ORDER_EMAIL_DELAY_MS) || 60_000;
+
 export async function queuePersonalizationEmail(
   data: PersonalizationEmailJob,
   options: { force?: boolean } = {}
@@ -104,6 +131,24 @@ export async function queuePersonalizationEmail(
   const job = await emailQueue.add('personalization', data, { jobId });
 
   logger.info({ jobId: job.id, to: data.to }, 'Queued personalization email');
+  return job;
+}
+
+/**
+ * Mail zbiorczy dla zamowienia - z opoznieniem i deduplikacja po zamowieniu.
+ *
+ * Sprawy powstaja jedna po drugiej, wiec przy pierwszej z nich pozostale
+ * jeszcze nie istnieja. Opoznienie daje czas na komplet, a `jobId` po
+ * ZAMOWIENIU sprawia, ze kolejne sprawy tego samego zamowienia trafiaja
+ * w istniejace zadanie zamiast dokladac wiadomosci.
+ */
+export async function queueOrderPersonalizationEmail(data: OrderPersonalizationEmailJob) {
+  const job = await emailQueue.add('order-personalization', data, {
+    jobId: `order-personalization-${data.orderId}`,
+    delay: ORDER_EMAIL_DELAY_MS,
+  });
+
+  logger.info({ jobId: job.id, to: data.to, orderId: data.orderId }, 'Queued order personalization email');
   return job;
 }
 

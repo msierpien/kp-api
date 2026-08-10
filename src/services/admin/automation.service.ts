@@ -6,6 +6,7 @@ import { getTenantContext, getTenantId } from '../../lib/tenant-context';
 import { generateAccessToken, getTokenExpiryDate, maskToken } from '../../lib/token';
 import { emailService } from '../email/email.service';
 import { createShopEmailService } from './email-settings.service';
+import { queueOrderPersonalizationEmail } from '../queue/email.queue';
 import { confirmDocument, syncWzDraftItemsWithReservations } from './warehouse-documents.service';
 import {
   buildDryRunResult,
@@ -129,6 +130,37 @@ async function executeSendEmail(config: Record<string, any>, caseData: any): Pro
     String(config.body || config.template || 'Link do personalizacji: {{personalizationUrl}}'),
     variables,
   );
+
+  // Zamowienie moze miec KILKA produktow personalizowanych, a kazdy zaklada
+  // wlasna sprawe - wysylka wprost daloby klientowi tyle maili, ile pozycji.
+  // Zadanie w kolejce jest deduplikowane po ZAMOWIENIU i czeka chwile, az
+  // powstana pozostale sprawy; linki zbiera dopiero przy wysylce.
+  const orderId = caseData.order?.id ?? caseData.orderId;
+  if (orderId) {
+    // Podstawiamy tylko to, co znamy teraz. Linki i nazwy produktow zostaja
+    // jako {{...}} - wypelni je worker, gdy zobaczy komplet pozycji.
+    await queueOrderPersonalizationEmail({
+      orderId,
+      shopId: caseData?.order?.shop?.id || caseData?.shop?.id || undefined,
+      to,
+      subject: renderTemplate(
+        String(config.subject || `Personalizacja zamówienia {{orderReference}} - {{shopName}}`),
+        { ...variables, productName: '{{productName}}', quantity: '{{quantity}}' },
+      ),
+      body: renderTemplate(
+        String(config.body || config.template || 'Link do personalizacji: {{personalizationUrl}}'),
+        {
+          ...variables,
+          personalizationUrl: '{{personalizationUrl}}',
+          personalizationLinks: '{{personalizationLinks}}',
+          productName: '{{productName}}',
+          quantity: '{{quantity}}',
+        },
+      ),
+      shopName: String(variables.shopName),
+    });
+    return;
+  }
 
   // Nadawca zalezy od SKLEPU sprawy: kazdy sklep ma wysylac z wlasnej domeny,
   // inaczej SPF i DKIM nie zgadzaja sie z adresem i poczta laduje w spamie.

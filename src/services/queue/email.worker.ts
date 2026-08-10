@@ -2,9 +2,14 @@ import { Worker } from 'bullmq';
 import { config } from '../../config';
 import { emailService } from '../email/email.service';
 import { createShopEmailService } from '../admin/email-settings.service';
+import {
+  formatLinksForEmail,
+  getOrderPersonalizationLinks,
+} from '../../lib/case-personalization-links';
 import type {
   EmailJobData,
   HelpRequestEmailJob,
+  OrderPersonalizationEmailJob,
   PersonalizationEmailJob,
   TestEmailJob,
 } from './email.queue';
@@ -31,6 +36,8 @@ export function startEmailWorker() {
       try {
         if (name === 'personalization') {
           return await processPersonalizationEmail(data as PersonalizationEmailJob);
+        } else if (name === 'order-personalization') {
+          return await processOrderPersonalizationEmail(data as OrderPersonalizationEmailJob);
         } else if (name === 'test') {
           return await processTestEmail(data as TestEmailJob);
         } else if (name === 'help-request') {
@@ -74,6 +81,63 @@ export async function stopEmailWorker() {
     emailWorker = null;
     console.log('[EmailWorker] Worker stopped');
   }
+}
+
+/**
+ * Jeden mail na zamowienie - z linkami do wszystkich jego spraw.
+ *
+ * Linki zbieramy DOPIERO TERAZ, a nie przy kolejkowaniu: zadanie czeka
+ * minute wlasnie po to, zeby zdazyly powstac pozostale pozycje zamowienia.
+ */
+async function processOrderPersonalizationEmail(
+  data: OrderPersonalizationEmailJob
+): Promise<{ success: boolean }> {
+  const links = await getOrderPersonalizationLinks(data.orderId, config.frontend.portalUrl);
+  if (links.length === 0) {
+    throw new Error(`Zamówienie ${data.orderId} nie ma spraw personalizacji`);
+  }
+
+  const mailer =
+    (data.shopId ? await createShopEmailService(data.shopId).catch(() => null) : null) ?? emailService;
+  if (!mailer.isConfigured()) {
+    throw new Error('Brak konfiguracji SMTP dla tej wysyłki');
+  }
+
+  // Podstawiamy dopiero tutaj, bo dopiero teraz znamy komplet linkow.
+  // `personalizationUrl` zostaje dla zgodnosci z trescia napisana pod jeden
+  // produkt - dostaje adres pierwszej sprawy.
+  const replacements: Record<string, string> = {
+    personalizationLinks: formatLinksForEmail(links),
+    personalizationUrl: links[0].url,
+    productName: links.map((link) => link.productName).join(', '),
+    quantity: String(links.reduce((sum, link) => sum + link.quantity, 0)),
+  };
+
+  const render = (text: string) =>
+    Object.entries(replacements).reduce(
+      (acc, [key, value]) => acc.replace(new RegExp(`{{\\s*${key}\\s*}}`, 'g'), value),
+      text
+    );
+
+  const success = await mailer.sendAutomationEmail({
+    to: data.to,
+    subject: render(data.subject),
+    body: render(data.body),
+    shopName: data.shopName,
+  });
+
+  if (!success) {
+    throw new Error(`Nie udało się wysłać wiadomości do ${data.to}`);
+  }
+
+  // Znacznik wysylki na każdej sprawie zamowienia - panel pokazuje go przy
+  // sprawie, a mail byl jeden na wszystkie.
+  await prisma.personalizationCase.updateMany({
+    where: { id: { in: links.map((link) => link.caseId) } },
+    data: { emailSentAt: new Date(), emailAttempts: { increment: 1 } },
+  });
+
+  return { success };
 }
 
 /**

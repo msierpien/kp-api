@@ -16,7 +16,9 @@
  *
  * Tresc jest ZWYKLYM TEKSTEM - `sendAutomationEmail` zamienia znaki nowej
  * linii na `<br>`. Zmienne: {{customerName}}, {{orderReference}},
- * {{productName}}, {{quantity}}, {{shopName}}, {{personalizationUrl}}.
+ * {{shopName}}, {{personalizationLinks}} (wszystkie produkty zamowienia,
+ * kazdy z nazwa, liczba sztuk i adresem edytora) oraz {{personalizationUrl}}
+ * (adres pierwszej sprawy - dla tresci pisanych pod jeden produkt).
  *
  * Idempotentny - regule rozpoznaje po nazwie i nadpisuje jej tresc.
  *
@@ -43,15 +45,13 @@ const BODY = `Dzień dobry,
 
 dziękujemy za zamówienie {{orderReference}} w sklepie {{shopName}}.
 
-Zamówiony produkt jest personalizowany — treść ustalasz sam w edytorze:
+Zamówione produkty są personalizowane — treść ustalasz sam w edytorze:
 
-{{personalizationUrl}}
+{{personalizationLinks}}
 
 Wpisujesz tam imiona gości, datę i godzinę przyjęcia, miejsce oraz pozostałe napisy, a podgląd od razu pokazuje gotową kartę. Jeśli zamówienie obejmuje kilka sztuk, każdą możesz zaadresować do innego gościa.
 
-Drukujemy dopiero po Twojej akceptacji, więc spokojnie sprawdź wszystko przed zatwierdzeniem — na tym etapie każda poprawka jest jeszcze bezpłatna. Link jest przypisany do Twojego zamówienia, prosimy nie udostępniać go dalej.
-
-Zamówienie: {{productName}} — {{quantity}} szt.
+Drukujemy dopiero po Twojej akceptacji, więc spokojnie sprawdź wszystko przed zatwierdzeniem — na tym etapie każda poprawka jest jeszcze bezpłatna. Linki są przypisane do Twojego zamówienia, prosimy nie udostępniać ich dalej.
 
 W razie pytań wystarczy odpowiedzieć na tę wiadomość.
 

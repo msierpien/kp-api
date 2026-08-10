@@ -107,10 +107,14 @@ export async function updateEmailSettings(id: string, data: Partial<EmailSetting
     });
   }
 
-  // Zaszyfruj hasło jeśli zostało podane
+  // Zaszyfruj hasło jeśli zostało podane. Panel przy edycji wysyła puste
+  // hasło w znaczeniu "bez zmian", więc musi wypaść z danych do zapisu -
+  // inaczej nadpisałoby zaszyfrowane hasło pustym stringiem.
   const updateData: any = { ...data };
   if (data.password) {
     updateData.password = encrypt(data.password);
+  } else {
+    delete updateData.password;
   }
 
   const settings = await prisma.emailSettings.update({

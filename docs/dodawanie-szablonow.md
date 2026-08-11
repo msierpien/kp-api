@@ -75,6 +75,21 @@ Czego pomiar nie załatwi: pojedyncze słowo dłuższe niż ~24 znaki i tak wyjd
 poza kartę. `maxLength` pola tego nie pilnuje (liczy całość razem ze spacjami),
 więc taki wpis poprawia się ręcznie w edytorze.
 
+### `textbox` czy `text`?
+
+| | `textbox` | `text` (i `static_text`) |
+|---|---|---|
+| skład | zawija po spacjach w ramce `width`, `verticalAlign` działa | jedna linia, bez zawijania |
+| co ustawia rozmiar | `fontSize` w ramce o zadanej szerokości | wyłącznie `fontSize` |
+| czym jest `width`/`height` | realna ramka tekstu | **ramka kontrolna** — granica dla odpowiedzi klienta |
+
+Dla `text` ramka **nie skaluje napisu** — ani na wydruku, ani (od 2026-08-11)
+w podglądzie edytora. Służy walidacji: `answers-validation.service` bierze
+`layer.width` jako maksimum i odrzuca dłuższy wpis komunikatem „Linia jest za
+długa”. Ramka węższa niż napis w rozmiarze z wydruku blokuje więc zamówienie —
+zmierz napis i nadaj ramce co najmniej tę szerokość (audyt istniejących
+szablonów: `src/scripts/audit-text-layer-scale.ts`).
+
 ## 3. Skrypt zakładający szablon
 
 Skopiuj `create-winietka-botaniczna-template.ts` i zmień stałe u góry. Rzeczy,

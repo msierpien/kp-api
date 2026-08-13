@@ -37,6 +37,8 @@ interface PreparedOperation {
   refundShipping: boolean;
   restockItems: boolean;
   autoConfirmWarehouseDocument: boolean;
+  issueIfirmaCorrection: boolean;
+  createPrestashopSlip: boolean;
   externalStatusId: string | null;
   externalStatusName: string | null;
   items: PreparedReturnItem[];
@@ -231,6 +233,8 @@ async function createOrderReturnRecord(order: LoadedOrder, prepared: PreparedOpe
         refundShipping: prepared.refundShipping,
         restockItems: prepared.restockItems,
         autoConfirmWarehouseDocument: prepared.autoConfirmWarehouseDocument,
+        issueIfirmaCorrection: prepared.issueIfirmaCorrection,
+        createPrestashopSlip: prepared.createPrestashopSlip,
         totalRefundTaxIncl: prepared.totalRefundTaxIncl,
         totalRefundTaxExcl: prepared.totalRefundTaxExcl,
         shippingRefundTaxIncl: prepared.shippingRefundTaxIncl,
@@ -473,6 +477,15 @@ async function performWarehouseStep(orderReturn: LoadedOrderReturn) {
 }
 
 async function performIfirmaStep(orderReturn: LoadedOrderReturn) {
+  // Korekta wystawiona recznie w iFirma: druga poszlaby na te sama fakture zrodlowa.
+  if (!orderReturn.issueIfirmaCorrection) {
+    await prisma.orderReturn.update({
+      where: { id: orderReturn.id },
+      data: { ifirmaStatus: 'SKIPPED', ifirmaErrorMessage: null },
+    });
+    return;
+  }
+
   const sourceInvoice = getPrimaryInvoice(orderReturn.order);
   if (!sourceInvoice) {
     await prisma.orderReturn.update({
@@ -618,6 +631,16 @@ async function performIfirmaStep(orderReturn: LoadedOrderReturn) {
 }
 
 async function performPrestaShopStep(orderReturn: LoadedOrderReturn) {
+  // Wylaczony krok pomija tez zmiane statusu — refund zrobiony recznie w PrestaShop
+  // zawsze niesie ze soba wlasny status, wiec panel nie ma czego dokladac.
+  if (!orderReturn.createPrestashopSlip) {
+    await prisma.orderReturn.update({
+      where: { id: orderReturn.id },
+      data: { prestashopStatus: 'SKIPPED', prestashopErrorMessage: null },
+    });
+    return;
+  }
+
   if (orderReturn.order.shop.platform !== 'PRESTASHOP') {
     await prisma.orderReturn.update({
       where: { id: orderReturn.id },
@@ -740,6 +763,8 @@ async function buildPreview(order: LoadedOrder, prepared: PreparedOperation) {
     refundShipping: prepared.refundShipping,
     restockItems: prepared.restockItems,
     autoConfirmWarehouseDocument: prepared.autoConfirmWarehouseDocument,
+    issueIfirmaCorrection: prepared.issueIfirmaCorrection,
+    createPrestashopSlip: prepared.createPrestashopSlip,
     externalStatusId: prepared.externalStatusId,
     externalStatusName: prepared.externalStatusName,
     items: prepared.items,
@@ -763,6 +788,16 @@ async function buildPreview(order: LoadedOrder, prepared: PreparedOperation) {
 }
 
 async function buildIfirmaPreview(order: LoadedOrder, prepared: PreparedOperation) {
+  if (!prepared.issueIfirmaCorrection) {
+    return {
+      status: 'SKIPPED',
+      invoice: null,
+      payload: null,
+      errors: [],
+      warnings: ['Korekta iFirma pominięta — obsłuż ją poza panelem.'],
+    };
+  }
+
   const sourceInvoice = getPrimaryInvoice(order);
   if (!sourceInvoice) {
     return { status: 'SKIPPED', invoice: null, payload: null, errors: [], warnings: ['Brak faktury iFirma do korekty.'] };
@@ -817,6 +852,15 @@ async function buildIfirmaPreview(order: LoadedOrder, prepared: PreparedOperatio
 }
 
 function buildPrestaShopPreview(order: LoadedOrder, prepared: PreparedOperation) {
+  if (!prepared.createPrestashopSlip) {
+    return {
+      status: 'SKIPPED',
+      payload: null,
+      errors: [],
+      warnings: ['Refund i zmiana statusu w PrestaShop pominięte — obsłuż je poza panelem.'],
+    };
+  }
+
   const orderReturn = {
     ...prepared,
     id: 'preview',
@@ -862,6 +906,8 @@ async function prepareOperation(
     refundShipping: input.refundShipping ?? false,
     restockItems: input.restockItems ?? true,
     autoConfirmWarehouseDocument: input.autoConfirmWarehouseDocument ?? true,
+    issueIfirmaCorrection: input.issueIfirmaCorrection ?? true,
+    createPrestashopSlip: input.createPrestashopSlip ?? true,
     externalStatusId: externalStatus?.externalStatusId ?? null,
     externalStatusName: externalStatus?.name ?? null,
     items,

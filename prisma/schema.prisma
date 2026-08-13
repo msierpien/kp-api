@@ -578,6 +578,10 @@ model OrderReturn {
   refundShipping             Boolean           @default(false) @map("refund_shipping")
   restockItems               Boolean           @default(true) @map("restock_items")
   autoConfirmWarehouseDocument Boolean          @default(true) @map("auto_confirm_warehouse_document")
+  // Wylaczamy krok, gdy korekta albo refund powstaly juz recznie poza panelem —
+  // inaczej operacja dolozylaby drugi dokument w iFirma/PrestaShop.
+  issueIfirmaCorrection      Boolean           @default(true) @map("issue_ifirma_correction")
+  createPrestashopSlip       Boolean           @default(true) @map("create_prestashop_slip")
   totalRefundTaxIncl         Decimal           @default(0) @map("total_refund_tax_incl") @db.Decimal(10, 2)
   totalRefundTaxExcl         Decimal           @default(0) @map("total_refund_tax_excl") @db.Decimal(10, 2)
   shippingRefundTaxIncl      Decimal           @default(0) @map("shipping_refund_tax_incl") @db.Decimal(10, 2)

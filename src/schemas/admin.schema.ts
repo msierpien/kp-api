@@ -423,6 +423,9 @@ export const orderReturnActionSchema = z.object({
   refundShipping: z.boolean().default(false),
   restockItems: z.boolean().default(true),
   autoConfirmWarehouseDocument: z.boolean().default(true),
+  // Odznaczane, gdy korekta lub refund powstaly juz recznie poza panelem.
+  issueIfirmaCorrection: z.boolean().default(true),
+  createPrestashopSlip: z.boolean().default(true),
   externalStatusId: z.string().min(1).optional().nullable(),
 });
 

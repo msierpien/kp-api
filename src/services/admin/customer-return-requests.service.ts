@@ -74,17 +74,168 @@ export async function listCustomerReturnRequests(query: CustomerReturnRequestsQu
   };
 }
 
+// Szczegoly celowo ciagna caly kontekst zamowienia: zgloszenie samo w sobie nie
+// mowi, czy zwrot da sie w ogole obsluzyc z panelu - o tym decyduja WZ, faktura
+// i wczesniejsze operacje zwrotu.
+const detailInclude = {
+  shop: { select: { id: true, name: true, platform: true, baseUrl: true } },
+  payments: { orderBy: { createdAt: 'desc' as const } },
+  order: {
+    include: {
+      items: { orderBy: { createdAt: 'asc' as const } },
+      returns: {
+        include: {
+          items: true,
+          warehouseDocument: { select: { id: true, number: true, type: true, status: true, date: true } },
+          salesDocument: {
+            select: {
+              id: true, documentType: true, status: true, externalId: true,
+              externalNumber: true, issuedAt: true, pdfPath: true, errorMessage: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' as const },
+      },
+      warehouseDocuments: {
+        select: { id: true, number: true, type: true, status: true, date: true, description: true },
+        orderBy: { date: 'asc' as const },
+      },
+      salesDocuments: {
+        select: {
+          id: true, documentType: true, status: true, externalId: true,
+          externalNumber: true, issuedAt: true, pdfPath: true, errorMessage: true, parentDocumentId: true,
+        },
+        orderBy: { createdAt: 'asc' as const },
+      },
+    },
+  },
+};
+
 export async function getCustomerReturnRequest(id: string) {
   const request = await prisma.customerReturnRequest.findFirst({
     where: {
       id,
       ...tenantWhere(),
     },
-    include,
+    include: detailInclude,
   });
 
   if (!request) throw new Error('Zgłoszenie zwrotu nie znalezione');
-  return request;
+
+  return {
+    ...request,
+    matchedItems: matchRequestItemsToOrder(request),
+    diagnostics: buildDiagnostics(request),
+  };
+}
+
+type RequestDetail = Prisma.CustomerReturnRequestGetPayload<{ include: typeof detailInclude }>;
+
+interface RequestedItem {
+  sku?: string;
+  productName?: string;
+  quantity?: number;
+  orderDetailId?: string;
+}
+
+function requestedItems(itemsJson: unknown): RequestedItem[] {
+  return Array.isArray(itemsJson) ? itemsJson as RequestedItem[] : [];
+}
+
+/** Ile sztuk kazdej pozycji zamowienia zeszlo juz zwrotami (anulowane pomijamy). */
+function returnedQuantities(request: RequestDetail) {
+  const result = new Map<string, number>();
+  for (const orderReturn of request.order?.returns ?? []) {
+    if (orderReturn.status === 'CANCELLED') continue;
+    for (const item of orderReturn.items) {
+      result.set(item.orderItemId, (result.get(item.orderItemId) ?? 0) + Number(item.quantity));
+    }
+  }
+  return result;
+}
+
+// Zgloszenie z formularza niesie tylko SKU i orderDetailId ze sklepu. Dopasowanie
+// do pozycji zamowienia to jedyny sposob, zeby pokazac, ile faktycznie zostalo
+// do zwrotu - i wychwycic zgloszenie wystawione na niewlasciwe zamowienie.
+function matchRequestItemsToOrder(request: RequestDetail) {
+  const orderItems = request.order?.items ?? [];
+  const returned = returnedQuantities(request);
+
+  return requestedItems(request.itemsJson).map((item) => {
+    const orderItem = orderItems.find((candidate) => {
+      if (item.orderDetailId && String(candidate.externalItemId).split(':')[0] === String(item.orderDetailId)) return true;
+      return Boolean(item.sku) && candidate.sku === item.sku;
+    }) ?? null;
+
+    const orderedQuantity = orderItem ? Number(orderItem.quantity) : null;
+    const returnedQuantity = orderItem ? returned.get(orderItem.id) ?? 0 : 0;
+
+    return {
+      sku: item.sku ?? orderItem?.sku ?? null,
+      productName: item.productName ?? orderItem?.productNameSnapshot ?? null,
+      requestedQuantity: Number(item.quantity ?? 0),
+      orderDetailId: item.orderDetailId ?? null,
+      orderItemId: orderItem?.id ?? null,
+      orderedQuantity,
+      returnedQuantity,
+      availableQuantity: orderedQuantity === null ? null : Math.max(0, orderedQuantity - returnedQuantity),
+      unitPriceTaxIncl: orderItem?.unitPriceTaxIncl ?? null,
+      warehouseProductId: orderItem?.warehouseProductId ?? null,
+      matched: Boolean(orderItem),
+    };
+  });
+}
+
+// Te same warunki, o ktore wyklada sie operacja zwrotu w order-returns.service.
+// Lepiej pokazac je na zgloszeniu, niz pozwolic uzytkownikowi trafic na blad
+// dopiero po kliknieciu "Zapisz zwrot".
+function buildDiagnostics(request: RequestDetail) {
+  const order = request.order;
+  const warnings: string[] = [];
+
+  if (!order) {
+    return {
+      hasOrder: false,
+      orderCancelled: false,
+      hasConfirmedWz: false,
+      hasInvoiceInPanel: false,
+      canRestock: false,
+      completedReturnsCount: 0,
+      warnings: ['Zgłoszenie nie jest powiązane z zamówieniem w panelu — zwrotu nie da się wykonać z poziomu zamówienia.'],
+    };
+  }
+
+  const hasConfirmedWz = order.warehouseDocuments.some((document) => document.type === 'WZ' && document.status === 'CONFIRMED');
+  const hasInvoiceInPanel = order.salesDocuments.some((document) => document.documentType === 'INVOICE');
+  const orderCancelled = order.operationalStatus === 'CANCELLED';
+  const activeReturns = order.returns.filter((item) => item.status !== 'CANCELLED');
+  const unmatched = matchRequestItemsToOrder(request).filter((item) => !item.matched);
+
+  if (orderCancelled) {
+    warnings.push('Zamówienie jest anulowane — sprawdź, czy zgłoszenie nie trafiło na niewłaściwe zamówienie klienta.');
+  }
+  if (!hasConfirmedWz) {
+    warnings.push('Brak zatwierdzonego WZ — towar nigdy nie zszedł ze stanu, więc przyjęcie na magazyn odrzuci operację.');
+  }
+  if (!hasInvoiceInPanel) {
+    warnings.push('Brak faktury w panelu — korekta iFirma zostanie pominięta. Jeśli faktura istnieje tylko w iFirma, wystaw korektę ręcznie.');
+  }
+  if (unmatched.length > 0) {
+    warnings.push(`Nie dopasowano do pozycji zamówienia: ${unmatched.map((item) => item.sku || item.productName || '?').join(', ')}.`);
+  }
+  if (activeReturns.some((item) => item.type === 'CANCELLATION')) {
+    warnings.push('Zamówienie ma operację anulowania — pieniądze mogły już zostać zwrócone tą drogą.');
+  }
+
+  return {
+    hasOrder: true,
+    orderCancelled,
+    hasConfirmedWz,
+    hasInvoiceInPanel,
+    canRestock: hasConfirmedWz && !orderCancelled,
+    completedReturnsCount: activeReturns.length,
+    warnings,
+  };
 }
 
 export async function updateCustomerReturnRequestStatus(id: string, status: CustomerReturnRequestStatus) {

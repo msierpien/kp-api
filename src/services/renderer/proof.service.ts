@@ -1,7 +1,7 @@
 import prisma from '../../lib/prisma';
 import { getCaseLayout } from '../../lib/case-layout';
 import { flattenCaseAnswers, normalizeCaseAnswers } from '../../lib/personalization-answers';
-import { getTemplatePagesForAnswers } from '../../types/template-layout';
+import { getTemplatePagesForAnswers, resolvePrimaryColor } from '../../types/template-layout';
 import { renderProofPagePng } from './fabric-renderer.service';
 import { saveFile } from '../storage/local-storage.service';
 import { resolveProofWatermarkText } from '../admin/print-settings.service';
@@ -107,7 +107,12 @@ export async function renderCaseProofPdf(
         flatAnswers,
         caseItem.layoutOverrides || undefined,
         itemIndex,
-        { watermarkText, dpi: options.dpi }
+        {
+          watermarkText,
+          dpi: options.dpi,
+          // Podglad dla klienta ma pokazywac ten sam kolor co wydruk.
+          primaryColor: resolvePrimaryColor(layout, caseItem.layoutOverrides as any),
+        }
       );
 
       const pageName = itemPages[pageIndex].name || `Strona ${pageIndex + 1}`;

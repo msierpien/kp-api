@@ -1452,13 +1452,28 @@ export async function renderProofPagePng(
   answers: Record<string, any>,
   layoutOverrides?: any,
   itemIndex?: number,
-  options: { dpi?: number; watermarkText?: string | null; quality?: number } = {}
+  // `primaryColor` przychodzi z zewnatrz, bo proof dostaje pojedyncza STRONE,
+  // a kolor wiodacy siedzi na szczycie layoutu. Bez niego podglad dla klienta
+  // pokazywalby czarny tekst na przemalowanym projekcie.
+  options: {
+    dpi?: number;
+    watermarkText?: string | null;
+    quality?: number;
+    primaryColor?: string | null;
+  } = {}
 ): Promise<{ buffer: Buffer; widthMm: number; heightMm: number; widthPx: number; heightPx: number }> {
   const { createCanvas, Image } = await import('canvas');
 
   const nativeDpi = Number(page.canvas.dpi || 300);
   const proofDpi = Math.max(72, Math.min(nativeDpi, Number(options.dpi) || PROOF_DPI));
-  const render = await renderPageToPng(page, answers, layoutOverrides, itemIndex, proofDpi / nativeDpi);
+  const render = await renderPageToPng(
+    page,
+    answers,
+    layoutOverrides,
+    itemIndex,
+    proofDpi / nativeDpi,
+    options.primaryColor ?? null
+  );
 
   const canvas = createCanvas(render.widthPx, render.heightPx);
   const ctx = canvas.getContext('2d');
@@ -1524,7 +1539,14 @@ export async function renderMockupPng(
       continue;
     }
 
-    const rendered = await renderPageToPng(page, answers, layoutOverrides);
+    const rendered = await renderPageToPng(
+      page,
+      answers,
+      layoutOverrides,
+      undefined,
+      1,
+      resolvePrimaryColor(layout, layoutOverrides)
+    );
     const design = new Image();
     design.src = rendered.buffer;
 

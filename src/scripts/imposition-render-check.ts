@@ -63,18 +63,24 @@ const TOLERANCE_MM = 0.2
 /** Najdluzsze sensowne wpisy - krotkie imie zawsze sie zmiesci, dlugie nie. */
 const ANSWERS = [
   {
-    couple_names: 'Aleksandra i Krzysztof',
-    guest_name: 'Państwo Anna i Jan Nowakowscy',
-    event_date: '15 sierpnia 2026, godzina 16:00',
-    event_place: 'Kościół pw. Świętego Krzyża w Warszawie',
-    rsvp_info: 'Prosimy o potwierdzenie do 1 lipca',
+    age_number: '20',
+    celebrant_genitive: 'Kasi',
+    front_date: 'SOBOTA · 20 LISTOPADA · 17:00',
+    guest_name: 'Annę Kowalską',
+    invite_body: 'na przyjęcie z okazji moich dwudziestych urodzin, które odbędzie się dnia',
+    event_datetime: '20 LISTOPADA 2025 ROKU O GODZINIE 17:00',
+    event_place: 'w Restauracji Primma Vera w Warszawie.',
+    signature: 'Kasia',
   },
   {
-    couple_names: 'Anna i Piotr',
-    guest_name: 'Katarzyna Wiśniewska-Kowalczyk',
-    event_date: '15 sierpnia 2026, godzina 16:00',
-    event_place: 'Kościół pw. Świętego Krzyża w Warszawie',
-    rsvp_info: 'Prosimy o potwierdzenie do 1 lipca',
+    age_number: '18',
+    celebrant_genitive: 'Aleksandry',
+    front_date: 'PIĄTEK · 28 LISTOPADA · 19:30',
+    guest_name: 'Panią Katarzynę',
+    invite_body: 'na przyjęcie z okazji moich osiemnastych urodzin, które odbędzie się dnia',
+    event_datetime: '28 LISTOPADA 2026 ROKU O GODZINIE 19:30',
+    event_place: 'w Restauracji Pod Różą w Krakowie.',
+    signature: 'Ola',
   },
 ]
 
@@ -153,12 +159,20 @@ async function main() {
     throw new Error('Skład arkuszowy zgłasza ostrzeżenia')
   }
 
-  const sheet = await renderImpositionSheetPng(
-    layout,
-    ANSWERS.map((answers, itemIndex) => ({ answers, itemIndex }))
-  )
-
+  const items = ANSWERS.map((answers, itemIndex) => ({ answers, itemIndex }))
   fs.mkdirSync(OUT_DIR, { recursive: true })
+
+  // Kazda strona to osobny arkusz: przod na wstazce, tyl na czystym papierze.
+  const pageFiles: string[] = []
+  for (let index = 1; index < layout.pages.length; index += 1) {
+    const page = layout.pages[index]
+    const extra = await renderImpositionSheetPng(layout, items, { pageId: page.id })
+    const extraFile = path.join(OUT_DIR, `arkusz-str-${index + 1}.png`)
+    fs.writeFileSync(extraFile, extra.buffer)
+    pageFiles.push(`${extraFile} (${page.name})`)
+  }
+
+  const sheet = await renderImpositionSheetPng(layout, items, { pageId: layout.pages[0].id })
   const file = path.join(OUT_DIR, 'arkusz.png')
   fs.writeFileSync(file, sheet.buffer)
 
@@ -248,6 +262,7 @@ async function main() {
         layoutOk: true,
         arkusz: `${file} (${sheet.widthMm} x ${sheet.heightMm} mm, ${sheet.widthPx} x ${sheet.heightPx} px, ${sheet.dpi} dpi)`,
         stronaPdfMm: `${pageWidthMm.toFixed(2)} x ${pageHeightMm.toFixed(2)}`,
+        pozostaleArkusze: pageFiles,
         paseryMm: Object.fromEntries(
           Object.entries(measured).map(([name, box]) => [
             name,

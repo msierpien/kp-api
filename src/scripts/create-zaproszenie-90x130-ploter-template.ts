@@ -1,31 +1,30 @@
 /**
- * Zaproszenie 90 x 130 mm drukowane po DWIE SZTUKI na arkuszu A4 i wycinane
- * na ploterze Silhouette.
+ * Zaproszenie urodzinowe 90 x 130 mm, DWUSTRONNE, wycinane na ploterze
+ * Silhouette.
  *
- * Projekt jest PIONOWY, ale w gniazdo wchodzi obrocony o 90 stopni, bo ramki
- * na podkladzie leza poziomo. Kokarda z podkladu wypada wtedy u GORY gotowej
- * kartki - tak, jak ma wygladac produkt w reku klienta.
+ * Kazda strona jedzie na WLASNY arkusz A4, po dwie sztuki na arkuszu:
+ *   - arkusz przodow laduje na wydrukowanym podkladzie z falowana ramka
+ *     i kokarda,
+ *   - arkusz tylow jest czysty - sama tresc na bialym papierze.
+ * Rozroznia je `imposition.pageBackgrounds`: strona tylu ma tam pusty wpis,
+ * czyli swiadome "ten arkusz bez podkladu".
  *
- * Roznica wobec pozostalych szablonow jest w skladzie, nie w projekcie: blok
- * `imposition` sprawia, ze paczka do druku ma jeden plik na ARKUSZ, nie na
- * sztuke, i dokleja pasery Print & Cut. Bez paserow ploter nie ma czego
- * szukac i tnie obok grafiki.
+ * Gniazda i pasery sa wspolne dla obu arkuszy, wiec ploter tnie oba tak samo.
  *
- * `guest_name` jest w zakresie INDIVIDUAL, wiec panel poprosi o osobny wpis
- * dla kazdego zamowionego zaproszenia - to jest lista gosci. Reszta pol jest
- * wspolna dla calego zamowienia.
+ * `guest_name` jest w zakresie INDIVIDUAL - to jedyne pole rozne dla kazdego
+ * zaproszenia (imie gościa na tyle). Reszta jest wspolna dla calego naboru.
  *
- * Podklad arkusza (ozdobna ramka drukowana pod uzytkami) jest OPCJONALNY:
- * bez niego arkusz ma same pasery i uzytki. Renderer nie czyta PDF - podklad
- * musi byc PNG albo JPG o proporcji arkusza.
+ * Naglowki z liczba i imieniem sa POLAMI, wiec ten sam szablon obsluzy 18, 20
+ * i 30 urodziny bez dotykania layoutu.
  *
  * Skrypt jest idempotentny - ponowne uruchomienie nadpisuje pola formularza
- * i layout zamiast tworzyc drugi szablon o tym samym kodzie.
+ * i layout zamiast tworzyc drugi szablon o tym samym kodzie. UWAGA: nadpisuje
+ * rowniez zmiany zrobione recznie w panelu.
  *
  * Uruchamiany W KONTENERZE `personalization-api` (baza nie jest wystawiona
  * poza siec dockera):
  *   node dist/scripts/create-zaproszenie-90x130-ploter-template.js
- *   SHEET_BG_SOURCE=/app/tmp/podklad-a4.png node dist/scripts/...
+ *   SHEET_BG_SOURCE=/tmp/czarne.png node dist/scripts/...
  */
 import fs from 'fs'
 import path from 'path'
@@ -37,9 +36,9 @@ const prisma = new PrismaClient()
 const TENANT_SLUG = 'kreatywne-papierki'
 
 const TEMPLATE_CODE = 'ZAPROSZENIE_90X130_PLOTER'
-const TEMPLATE_NAME = 'Zaproszenie 90 x 130 (ploter)'
+const TEMPLATE_NAME = 'Zaproszenie urodzinowe 90 x 130, dwustronne (ploter)'
 const TEMPLATE_DESCRIPTION =
-  'Zaproszenie 90 x 130 mm z kokardą u góry, drukowane po dwie sztuki na arkuszu A4 z paserami Print & Cut, wycinane na ploterze Silhouette.'
+  'Dwustronne zaproszenie urodzinowe 90 x 130 mm. Przód na podkładzie z falowaną ramką i kokardą, tył na czystej kartce. Dwa arkusze A4 z paserami Print & Cut, wycinane na ploterze Silhouette.'
 
 const DPI = 300
 const WIDTH_MM = 90
@@ -52,6 +51,9 @@ const HEIGHT_MM = 130
  * marginesu (ramka tekstu 70 mm) czyste wnetrze owalu siega w ukladzie kartki
  * od 8,0 do 123,5 mm - zmierzone na podkladzie, juz po uwzglednieniu obrotu
  * gniazda. Pierwsze 8 mm zajmuje kokarda.
+ *
+ * Tyl trzyma sie tych samych granic mimo braku podkladu: ploter tnie go po
+ * tym samym ksztalcie, wiec tekst poza owalem zostalby odciety.
  */
 const MARGIN_MM = 10
 const TEXT_WIDTH_MM = WIDTH_MM - MARGIN_MM * 2
@@ -63,15 +65,18 @@ const INK = '#2f3437'
 const mm = (value: number) => Math.round((value / 25.4) * DPI)
 
 // Kroje z rejestru czcionek na serwerze (storage/fonts) - tylko takie
-// node-canvas zarejestruje przy druku. Krój spoza rejestru wygladalby dobrze
-// w podgladzie i cicho spadl na systemowy fallback na wydruku.
-const SCRIPT_FONT = 'Great Vibes'
-const SERIF_FONT = 'Cormorant Garamond'
+// node-canvas zarejestruje przy druku.
+//
+// Bodoni Moda SC jest kapitalikowy z natury, wiec wersaliki nie potrzebuja
+// zadnego `textTransform`. Alex Brush to kaligrafia ze wzoru. Oba maja
+// komplet polskich znakow (sprawdzone renderem glif po glifie).
+const DISPLAY_FONT = 'Bodoni Moda SC'
+const SCRIPT_FONT = 'Alex Brush'
 
 const FONTS = [
-  { family: SCRIPT_FONT, src: 'fonts/GreatVibes-Regular.ttf', weight: 400, style: 'normal' as const },
-  { family: SERIF_FONT, src: 'fonts/CormorantGaramond-Regular.ttf', weight: 400, style: 'normal' as const },
-  { family: SERIF_FONT, src: 'fonts/CormorantGaramond-Medium.ttf', weight: 500, style: 'normal' as const },
+  { family: DISPLAY_FONT, src: 'fonts/BodoniModaSC-Regular.ttf', weight: 400, style: 'normal' as const },
+  { family: DISPLAY_FONT, src: 'fonts/BodoniModaSC-Bold.ttf', weight: 700, style: 'normal' as const },
+  { family: SCRIPT_FONT, src: 'fonts/AlexBrush-Regular.ttf', weight: 400, style: 'normal' as const },
 ]
 
 const GUEST_FIELD_KEY = 'guest_name'
@@ -90,58 +95,90 @@ type FieldInput = {
 
 const FIELDS: FieldInput[] = [
   {
-    key: 'couple_names',
-    label: 'Para młoda',
+    key: 'age_number',
+    label: 'Liczba (przód)',
     type: 'text',
     scope: 'SHARED',
     required: true,
     sortOrder: 0,
-    placeholder: 'Aleksandra i Krzysztof',
-    helpText: 'Imiona pary młodej — kaligrafia u góry zaproszenia.',
-    maxLength: 40,
+    placeholder: '20',
+    helpText: 'Duża kaligrafia u góry przodu.',
+    maxLength: 3,
+  },
+  {
+    key: 'celebrant_genitive',
+    label: 'Imię solenizantki (dopełniacz)',
+    type: 'text',
+    scope: 'SHARED',
+    required: true,
+    sortOrder: 1,
+    placeholder: 'Kasi',
+    helpText: 'Wpisz w dopełniaczu — czyta się „urodziny Kasi”, nie „urodziny Kasia”.',
+    maxLength: 24,
+  },
+  {
+    key: 'front_date',
+    label: 'Data na przodzie',
+    type: 'text',
+    scope: 'SHARED',
+    required: true,
+    sortOrder: 2,
+    placeholder: 'SOBOTA · 20 LISTOPADA · 17:00',
+    helpText: 'Krótki wiersz u dołu przodu. Separator wstaw ręcznie, np. znakiem ·',
+    maxLength: 44,
   },
   {
     key: GUEST_FIELD_KEY,
-    label: 'Imiona gości',
+    label: 'Imię gościa (biernik)',
     type: 'text',
     // Jedyne pole per sztuka: panel wystawi tyle wpisow, ile zaproszen jest
     // w zamowieniu - to jest wlasnie lista gosci.
     scope: 'INDIVIDUAL',
     required: true,
-    sortOrder: 1,
-    placeholder: 'Państwo Anna i Jan Nowakowscy',
-    helpText: 'Osobny wpis dla każdego zaproszenia.',
-    maxLength: 60,
+    sortOrder: 3,
+    placeholder: 'Annę Kowalską',
+    helpText: 'Wpisz w bierniku — czyta się „zapraszam Annę Kowalską”.',
+    maxLength: 30,
   },
   {
-    key: 'event_date',
-    label: 'Data i godzina',
+    key: 'invite_body',
+    label: 'Treść zaproszenia',
     type: 'text',
     scope: 'SHARED',
     required: true,
-    sortOrder: 2,
-    placeholder: '15 sierpnia 2026, godzina 16:00',
+    sortOrder: 4,
+    placeholder: 'na przyjęcie z okazji moich dwudziestych urodzin, które odbędzie się dnia',
+    maxLength: 120,
+  },
+  {
+    key: 'event_datetime',
+    label: 'Data i godzina (tył)',
+    type: 'text',
+    scope: 'SHARED',
+    required: true,
+    sortOrder: 5,
+    placeholder: '20 LISTOPADA 2025 ROKU O GODZINIE 17:00',
     maxLength: 60,
   },
   {
     key: 'event_place',
-    label: 'Miejsce uroczystości',
+    label: 'Miejsce',
     type: 'text',
     scope: 'SHARED',
     required: true,
-    sortOrder: 3,
-    placeholder: 'Kościół pw. Świętego Krzyża w Warszawie',
-    maxLength: 90,
+    sortOrder: 6,
+    placeholder: 'w Restauracji Primma Vera w Warszawie.',
+    maxLength: 80,
   },
   {
-    key: 'rsvp_info',
-    label: 'Potwierdzenie obecności',
+    key: 'signature',
+    label: 'Podpis',
     type: 'text',
     scope: 'SHARED',
     required: false,
-    sortOrder: 4,
-    placeholder: 'Prosimy o potwierdzenie do 1 lipca',
-    maxLength: 80,
+    sortOrder: 7,
+    placeholder: 'Kasia',
+    maxLength: 24,
   },
 ]
 
@@ -158,7 +195,6 @@ type TextBoxInput = {
   fontWeight?: number
   lineHeight?: number
   letterSpacing?: number
-  textTransformUpper?: boolean
 }
 
 /** Ramka tekstu na pelna szerokosc kolumny; `x`/`y` to SRODEK ramki. */
@@ -217,110 +253,164 @@ const canvasConfig = {
   safeArea: mm(4),
   bleedMm: 0,
   safeAreaMm: 4,
-  // Przezroczyste, bo kartka laduje na WYDRUKOWANYM podkladzie z ozdobna
-  // ramka. Biale tlo zamalowaloby ja na calej powierzchni uzytku.
+  // Przezroczyste, bo przod laduje na WYDRUKOWANYM podkladzie z kokarda.
+  // Biale tlo zamalowaloby go na calej powierzchni uzytku.
   backgroundColor: 'transparent',
 }
 
-const PAGE_ID = 'page-1'
+const FRONT_PAGE_ID = 'page-1'
+const BACK_PAGE_ID = 'page-2'
 
 /**
- * Rozmiary pisma pochodza z pomiaru (registerFont + measureText na plikach
- * z rejestru), nie z oka. Fabric lamie tekst tylko po SPACJACH, wiec liczy
- * sie najdluzsze pojedyncze SLOWO w ramce 70 mm:
- *   - "Wiśniewska-Kowalczyk" w 18 pt Cormorant = 58,1 mm (17% zapasu),
- *   - "Aleksandra i Krzysztof" w 24 pt Great Vibes = 64,5 mm (8% zapasu).
- * Renderer nie ma auto-dopasowania - wpis dluzszy niz ramka zostanie odrzucony
- * przez walidacje odpowiedzi ("Linia jest za długa"), nie zmniejszony.
+ * PRZOD: liczba kaligrafia, slowo URODZINY, imie i wiersz z data.
  *
- * Pionowo tekst trzyma sie miedzy 18 a 118 mm kartki. Dolna granica czystego
- * wnetrza to 123,5 mm, a gorne 8 mm zajmuje kokarda - stad start dopiero od
- * 18 mm, z zapasem na tolerancje ciecia.
+ * Rozmiary z pomiaru (registerFont + measureText), ramka 70 mm:
+ *   - "20" w 60 pt Alex Brush = 25,9 mm,
+ *   - "URODZINY" w 18 pt Bodoni ze swiatlem 80 = 37,8 mm,
+ *   - "Aleksandry" (dlugie imie) w 38 pt Alex Brush = 57,9 mm,
+ *   - wiersz z data w 9 pt ze swiatlem 30 = 50,4 mm.
+ *
+ * Pionowo blok trzyma sie miedzy 40 a 105 mm - wyzej jest kokarda z podkladu,
+ * nizej falowana krawedz owalu.
  */
-function buildLayers() {
+function buildFrontLayers() {
   return [
     textbox({
-      id: 'naglowek',
+      id: 'age_number',
+      name: 'Liczba',
+      fieldKey: 'age_number',
+      text: '{{ age_number }}',
+      topMm: 40,
+      heightMm: 18,
+      zIndex: 0,
+      fontFamily: SCRIPT_FONT,
+      fontSize: 60,
+    }),
+    textbox({
+      id: 'urodziny_slowo',
+      name: 'Słowo „URODZINY”',
+      text: 'URODZINY',
+      topMm: 59,
+      heightMm: 10,
+      zIndex: 1,
+      fontFamily: DISPLAY_FONT,
+      fontSize: 18,
+      // Wersaliki bez swiatla zlewaja sie w blok; 80 tysiecznych firetu daje
+      // rozstrzelenie ze wzoru i nadal miesci sie w ramce.
+      letterSpacing: 80,
+    }),
+    textbox({
+      id: 'celebrant_genitive',
+      name: 'Imię solenizantki',
+      fieldKey: 'celebrant_genitive',
+      text: '{{ celebrant_genitive }}',
+      topMm: 69,
+      heightMm: 17,
+      zIndex: 2,
+      fontFamily: SCRIPT_FONT,
+      fontSize: 38,
+    }),
+    textbox({
+      id: 'front_date',
+      name: 'Data na przodzie',
+      fieldKey: 'front_date',
+      text: '{{ front_date }}',
+      topMm: 95,
+      heightMm: 9,
+      zIndex: 3,
+      fontFamily: DISPLAY_FONT,
+      fontSize: 9,
+      letterSpacing: 30,
+    }),
+  ]
+}
+
+/**
+ * TYL: zaproszenie imienne, szczegoly i podpis.
+ *
+ * Rozmiary z pomiaru, ramka 70 mm:
+ *   - "SERDECZNIE ZAPRASZAM" w 11 pt Bodoni bold ze swiatlem 40 = 55,3 mm,
+ *   - "Annę Kowalską" w 26 pt Alex Brush = 52,9 mm,
+ *   - wiersz z data w 8 pt bold ze swiatlem 20 = 66,7 mm.
+ *
+ * Ostatni jest na granicy, dlatego jego ramka ma wysokosc na DWA wiersze -
+ * dluzsza data zawinie sie, zamiast zostac odrzucona przez walidacje.
+ */
+function buildBackLayers() {
+  return [
+    textbox({
+      id: 'serdecznie_zapraszam',
       name: 'Nagłówek',
-      text: 'ZAPROSZENIE',
-      topMm: 18,
+      text: 'SERDECZNIE ZAPRASZAM',
+      topMm: 20,
       heightMm: 9,
       zIndex: 0,
-      fontFamily: SERIF_FONT,
+      fontFamily: DISPLAY_FONT,
       fontSize: 11,
-      // Wersaliki bez swiatla zlewaja sie w blok - 120 tysiecznych firetu
-      // rozstrzela je na tyle, zeby napis oddychal.
-      letterSpacing: 120,
-    }),
-    textbox({
-      id: 'couple_names',
-      name: 'Para młoda',
-      fieldKey: 'couple_names',
-      text: '{{ couple_names }}',
-      topMm: 29,
-      heightMm: 19,
-      zIndex: 1,
-      fontFamily: SCRIPT_FONT,
-      fontSize: 24,
-    }),
-    textbox({
-      id: 'zaproszenie_tresc',
-      name: 'Formuła zaproszenia',
-      text: 'mają zaszczyt zaprosić na uroczystość zaślubin',
-      topMm: 50,
-      heightMm: 8,
-      zIndex: 2,
-      fontFamily: SERIF_FONT,
-      fontSize: 9,
+      fontWeight: 700,
+      letterSpacing: 40,
     }),
     textbox({
       id: GUEST_FIELD_KEY,
-      name: 'Imiona gości',
+      name: 'Imię gościa',
       fieldKey: GUEST_FIELD_KEY,
       text: `{{ ${GUEST_FIELD_KEY} }}`,
-      topMm: 60,
-      heightMm: 22,
-      zIndex: 3,
-      fontFamily: SERIF_FONT,
-      fontSize: 18,
-      fontWeight: 500,
-      // 1,15 zamiast typowego 1,2: dwa wiersze dlugiego wpisu ("Państwo Anna
-      // i Jan Nowakowscy") mieszcza sie wtedy w 22 mm ramki.
-      lineHeight: 1.15,
+      topMm: 31,
+      heightMm: 16,
+      zIndex: 1,
+      fontFamily: SCRIPT_FONT,
+      fontSize: 26,
     }),
     textbox({
-      id: 'event_date',
+      id: 'invite_body',
+      name: 'Treść zaproszenia',
+      fieldKey: 'invite_body',
+      text: '{{ invite_body }}',
+      topMm: 49,
+      heightMm: 14,
+      zIndex: 2,
+      fontFamily: DISPLAY_FONT,
+      fontSize: 8,
+      lineHeight: 1.45,
+      letterSpacing: 20,
+    }),
+    textbox({
+      id: 'event_datetime',
       name: 'Data i godzina',
-      fieldKey: 'event_date',
-      text: '{{ event_date }}',
-      topMm: 85,
-      heightMm: 9,
-      zIndex: 4,
-      fontFamily: SERIF_FONT,
-      fontSize: 12,
-      fontWeight: 500,
+      fieldKey: 'event_datetime',
+      text: '{{ event_datetime }}',
+      topMm: 65,
+      heightMm: 11,
+      zIndex: 3,
+      fontFamily: DISPLAY_FONT,
+      fontSize: 8,
+      fontWeight: 700,
+      lineHeight: 1.45,
+      letterSpacing: 20,
     }),
     textbox({
       id: 'event_place',
-      name: 'Miejsce uroczystości',
+      name: 'Miejsce',
       fieldKey: 'event_place',
       text: '{{ event_place }}',
-      topMm: 95,
-      heightMm: 13,
-      zIndex: 5,
-      fontFamily: SERIF_FONT,
-      fontSize: 12,
+      topMm: 78,
+      heightMm: 12,
+      zIndex: 4,
+      fontFamily: DISPLAY_FONT,
+      fontSize: 8,
+      lineHeight: 1.45,
+      letterSpacing: 20,
     }),
     textbox({
-      id: 'rsvp_info',
-      name: 'Potwierdzenie obecności',
-      fieldKey: 'rsvp_info',
-      text: '{{ rsvp_info }}',
-      topMm: 110,
-      heightMm: 8,
-      zIndex: 6,
-      fontFamily: SERIF_FONT,
-      fontSize: 9,
+      id: 'signature',
+      name: 'Podpis',
+      fieldKey: 'signature',
+      text: '{{ signature }}',
+      topMm: 96,
+      heightMm: 15,
+      zIndex: 5,
+      fontFamily: SCRIPT_FONT,
+      fontSize: 30,
     }),
   ]
 }
@@ -329,12 +419,12 @@ function buildLayers() {
  * Gniazda na arkuszu A4 - srodki owali wydrukowanych na podkladzie.
  *
  * Owale zmierzone na podkladzie: 159,13 x 104,48 mm kazdy, srodki na
- * (100,86 / 75,01) i (100,86 / 195,03) mm. Kartka 130 x 90 wysrodkowana
- * w owalu daje wspolrzedne ponizej i miesci sie w polu wolnym od paserow
- * (17,38-192,62 mm w poziomie, 17,38-279,62 w pionie).
+ * (100,86 / 75,01) i (100,86 / 195,03) mm. Uzytek wysrodkowany w owalu daje
+ * wspolrzedne ponizej i miesci sie w polu wolnym od paserow (17,38-192,62 mm
+ * w poziomie, 17,38-279,62 w pionie).
  *
- * Te wspolrzedne to punkt wyjscia. Ostateczne ustawia sie w panelu, w oknie
- * "Arkusz", po probnym wydruku i probnym cieciu.
+ * Te same gniazda obsluguja arkusz przodow i arkusz tylow - dzieki temu ploter
+ * tnie oba tak samo.
  */
 const SLOT_X_MM = 35.86
 const SLOT_Y_TOP_MM = 30.01
@@ -346,12 +436,12 @@ const SLOT_Y_BOTTOM_MM = 150.03
  * Projekt jest pionowy (90 x 130), ramka na podkladzie lezy poziomo, wiec
  * uzytek wchodzi obrocony. 90 stopni, nie 270: przy tym kierunku gora kartki
  * trafia na PRAWA strone ramki, czyli tam, gdzie narysowana jest kokarda.
- * Obrot o 270 postawilby kartke do gory nogami wzgledem kokardy.
  */
 const SLOT_ROTATION = 90 as const
 
 export function buildLayout(sheetBackgroundUrl?: string) {
-  const layers = buildLayers()
+  const frontLayers = buildFrontLayers()
+  const backLayers = buildBackLayers()
 
   return {
     version: 2 as const,
@@ -359,8 +449,11 @@ export function buildLayout(sheetBackgroundUrl?: string) {
     // (withTemplatePages) i tego szuka kazdy starszy konsument.
     canvas: canvasConfig,
     fonts: FONTS,
-    layers,
-    pages: [{ id: PAGE_ID, name: 'Zaproszenie', canvas: canvasConfig, layers }],
+    layers: frontLayers,
+    pages: [
+      { id: FRONT_PAGE_ID, name: 'Przód', canvas: canvasConfig, layers: frontLayers },
+      { id: BACK_PAGE_ID, name: 'Tył', canvas: canvasConfig, layers: backLayers },
+    ],
     imposition: {
       enabled: true,
       sheet: { widthMm: 210, heightMm: 297 },
@@ -382,6 +475,9 @@ export function buildLayout(sheetBackgroundUrl?: string) {
         color: '#000000',
       },
       ...(sheetBackgroundUrl ? { backgroundUrl: sheetBackgroundUrl } : {}),
+      // Arkusz tylow jedzie na czystym papierze. Pusty wpis to swiadome
+      // "bez podkladu", nie brak konfiguracji.
+      pageBackgrounds: { [BACK_PAGE_ID]: '' },
     },
     // Mockup dodaje sie recznie w panelu - stad brak sekcji `mockups`.
     palette: ['#2f3437', '#6b7280', '#a8a29e', '#d6d3d1', '#f5f5f4'],
@@ -391,8 +487,8 @@ export function buildLayout(sheetBackgroundUrl?: string) {
 /**
  * Podklad arkusza w storage i rekord assetu - tylko gdy wskazano plik.
  *
- * Rozdziela pliki po `fileName`, wiec ponowne uruchomienie skryptu nie mnozy
- * kopii tego samego rysunku w katalogu szablonu.
+ * Istniejacy asset ma pierwszenstwo, wiec ponowne uruchomienie skryptu nie
+ * mnozy kopii tego samego rysunku w katalogu szablonu.
  */
 async function ensureSheetBackground(templateId: string) {
   const source = process.env.SHEET_BG_SOURCE
@@ -532,9 +628,10 @@ async function main() {
         name: template.name,
         formId: form.id,
         fields: FIELDS.map((field) => `${field.key} (${field.scope})`),
+        strony: layout.pages.map((page) => `${page.id} (${page.name}, ${page.layers.length} warstw)`),
         sheetBackground: sheetBackground?.filePath ?? 'brak (same pasery)',
-        arkusz: `${layout.imposition.sheet.widthMm} x ${layout.imposition.sheet.heightMm} mm`,
-        gniazda: layout.imposition.slots.map((slot) => `${slot.id}: ${slot.xMm}, ${slot.yMm} mm`),
+        arkuszeNaSztuke: layout.pages.length,
+        gniazda: layout.imposition.slots.map((slot) => `${slot.id}: ${slot.xMm}, ${slot.yMm} mm, obrót ${slot.rotation}`),
         profilDruku: 'zaproszenia-a4-ploter',
       },
       null,

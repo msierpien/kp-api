@@ -749,6 +749,9 @@ const sheetImpositionSchema = z.object({
   slots: z.array(impositionSlotSchema).default([]),
   marks: registrationMarksSchema.optional(),
   backgroundUrl: z.string().min(1).optional(),
+  // Podklad per strona. Pusty string jest DOZWOLONY i znaczy "ten arkusz bez
+  // podkladu" - stad brak min(1) na wartosci.
+  pageBackgrounds: z.record(z.string(), z.string()).optional(),
   // Kalibracja po probnym wydruku - moze byc ujemna, wiec bez min().
   slotOffsetXMm: z.number().optional(),
   slotOffsetYMm: z.number().optional(),

@@ -818,21 +818,31 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
       let renderHeightPx = printTarget.heightPx;
 
       if (imposition) {
-        const sheet = await renderImpositionSheetPng(
-          layout,
-          groupItemIndexes.map((index) => ({
-            answers: flattenCaseAnswers(answers, index),
-            layoutOverrides: caseItem.layoutOverrides || undefined,
-            itemIndex: index,
-          }))
-        );
-        itemRenders.push({
-          png: sheet.buffer,
-          widthPx: sheet.widthPx,
-          heightPx: sheet.heightPx,
-          dpi: sheet.dpi,
-          baseName: itemBaseName,
-        });
+        const sheetItems = groupItemIndexes.map((index) => ({
+          answers: flattenCaseAnswers(answers, index),
+          layoutOverrides: caseItem.layoutOverrides || undefined,
+          itemIndex: index,
+        }));
+        // Kazda strona jedzie na WLASNY arkusz: przod na wstazce, tyl na
+        // czystej kartce. Sklejanie ich na jeden arkusz nie ma sensu, bo
+        // gniazda sa juz zajete przez kolejne sztuki z zamowienia.
+        const itemPages = getTemplatePagesForAnswers(layout, flatAnswers);
+
+        for (let pageIndex = 0; pageIndex < itemPages.length; pageIndex += 1) {
+          const page = itemPages[pageIndex];
+          const sheet = await renderImpositionSheetPng(layout, sheetItems, { pageId: page.id });
+          itemRenders.push({
+            png: sheet.buffer,
+            widthPx: sheet.widthPx,
+            heightPx: sheet.heightPx,
+            dpi: sheet.dpi,
+            baseName:
+              itemPages.length > 1 ? `${itemBaseName}-str-${pageIndex + 1}` : itemBaseName,
+            ...(itemPages.length > 1
+              ? { pageId: page.id, pageNumber: pageIndex + 1, pageName: page.name }
+              : {}),
+          });
+        }
       } else if (printPagesSeparately) {
         // Wariant moze byc inny dla kazdej sztuki - odpowiedzi indywidualne
         // rozjezdzaja sie miedzy pozycjami, wiec strony bierzemy per sztuka.

@@ -12,6 +12,7 @@ import {
   SILHOUETTE_MARKS_DEFAULT,
   buildShapeGeometry,
   buildTextPathD,
+  getSheetBackgroundUrl,
   getSheetImposition,
   getSlotPositionMm,
   getTextPathAnchorOffset,
@@ -1206,7 +1207,7 @@ function drawRegistrationMarks(
 export async function renderImpositionSheetPng(
   layout: TemplateLayoutJson,
   items: Array<{ answers: Record<string, any>; layoutOverrides?: any; itemIndex: number }>,
-  options: { watermarkText?: string | null } = {}
+  options: { watermarkText?: string | null; pageId?: string } = {}
 ): Promise<{ buffer: Buffer; widthMm: number; heightMm: number; widthPx: number; heightPx: number; dpi: number }> {
   const { createCanvas, Image } = await import('canvas');
 
@@ -1226,11 +1227,13 @@ export async function renderImpositionSheetPng(
   ctx.fillRect(0, 0, sheetWidthPx, sheetHeightPx);
 
   // Podklad drukowany (ozdobna ramka) idzie pod uzytki, rozciagniety na caly
-  // arkusz - jego geometria jest juz zgrana z paserami.
-  if (imposition.backgroundUrl) {
-    const backgroundPath = resolveLayerImagePath(imposition.backgroundUrl);
+  // arkusz - jego geometria jest juz zgrana z paserami. Kazda strona moze miec
+  // wlasny: przod laduje na wstazce, tyl na czystej kartce.
+  const backgroundUrl = getSheetBackgroundUrl(imposition, options.pageId);
+  if (backgroundUrl) {
+    const backgroundPath = resolveLayerImagePath(backgroundUrl);
     if (!backgroundPath) {
-      console.error(`[Fabric] Odrzucony adres podkładu arkusza: ${imposition.backgroundUrl}`);
+      console.error(`[Fabric] Odrzucony adres podkładu arkusza: ${backgroundUrl}`);
     } else {
       try {
         const background = isSvgPath(backgroundPath)
@@ -1249,9 +1252,12 @@ export async function renderImpositionSheetPng(
     // Wariant moze byc inny dla kazdej sztuki - odpowiedzi indywidualne
     // rozjezdzaja sie miedzy pozycjami, wiec strony bierzemy per sztuka.
     const pages = getTemplatePagesForAnswers(layout, item.answers);
-    const page = slot.pageId ? pages.find((candidate) => candidate.id === slot.pageId) : pages[0];
+    // `options.pageId` wskazuje stronę tego ARKUSZA (przód albo tył); `pageId`
+    // gniazda jest silniejszy, bo opisuje wyjątek w obrębie jednego arkusza.
+    const wantedPageId = slot.pageId || options.pageId;
+    const page = wantedPageId ? pages.find((candidate) => candidate.id === wantedPageId) : pages[0];
     if (!page) {
-      console.error(`[Fabric] Gniazdo ${slot.id} wskazuje nieistniejącą stronę ${slot.pageId}`);
+      console.error(`[Fabric] Gniazdo ${slot.id} wskazuje nieistniejącą stronę ${wantedPageId}`);
       continue;
     }
 

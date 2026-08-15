@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { config } from '../../config';
 import type { CaseListItem, PaginatedResponse } from '../../types';
@@ -1566,5 +1567,44 @@ export async function resendPersonalizationEmail(id: string) {
     success: true,
     message: 'Email queued for sending',
     newToken: maskToken(newToken),
+  };
+}
+
+/**
+ * Zdejmuje ze sprawy zamrozony layout, zeby wzięła aktualny szablon.
+ *
+ * Snapshot powstaje przy zatwierdzeniu i jest zabezpieczeniem: klient
+ * zaakceptowal KONKRETNY projekt, a pozniejsza edycja szablonu nie ma prawa
+ * po cichu zmienic tego, co pojdzie do druku. Bywa jednak, ze poprawka
+ * szablonu jest wlasnie tym, czego sprawa potrzebuje - literowka w formule,
+ * zmieniony krój, poprawiony sklad. Bez tej operacji jedynym wyjsciem bylo
+ * zalozenie zamowienia od nowa.
+ *
+ * Swiadomie NIE kasuje juz wygenerowanych plikow: zostaja jako slad tego, co
+ * bylo, dopoki ktos nie wygeneruje paczki ponownie.
+ */
+export async function refreshCaseLayoutFromTemplate(id: string) {
+  const caseItem = await prisma.personalizationCase.findUnique({
+    where: { id },
+    select: { id: true, layoutSnapshot: true, template: { select: { code: true, updatedAt: true } } },
+  });
+  if (!caseItem) throw new Error('Case not found');
+
+  const hadSnapshot = caseItem.layoutSnapshot !== null;
+  if (hadSnapshot) {
+    await prisma.personalizationCase.update({
+      where: { id },
+      data: { layoutSnapshot: Prisma.DbNull, updatedAt: new Date() },
+    });
+  }
+
+  return {
+    id,
+    refreshed: hadSnapshot,
+    templateCode: caseItem.template.code,
+    templateUpdatedAt: caseItem.template.updatedAt,
+    message: hadSnapshot
+      ? 'Sprawa czyta teraz aktualny layout szablonu. Wygeneruj paczkę ponownie.'
+      : 'Sprawa i tak czytała aktualny layout — nie było czego odświeżać.',
   };
 }

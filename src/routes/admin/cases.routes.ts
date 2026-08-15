@@ -8,6 +8,7 @@ import {
   validateCaseAnswers,
   updateCaseStatus,
   addCaseNote,
+  refreshCaseLayoutFromTemplate,
   resendPersonalizationEmail,
   CasePackageValidationError,
 } from '../../services/admin/cases.service';
@@ -651,6 +652,48 @@ export async function casesRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           error: 'Internal Server Error',
           message: 'Nie udało się wysłać emaila',
+        });
+      }
+    }
+  );
+
+  // POST /admin/cases/:id/refresh-layout - zdejmij zamrozony layout
+  fastify.post<{ Params: CaseIdParams }>(
+    '/:id/refresh-layout',
+    {
+      schema: {
+        tags: ['cases'],
+        summary: 'Wczytaj do sprawy aktualny layout szablonu (zdejmij snapshot)',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          200: { type: 'object', additionalProperties: true },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: CaseIdParams }>, reply: FastifyReply) => {
+      const paramsValidation = caseIdParamsSchema.safeParse(request.params);
+      if (!paramsValidation.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: paramsValidation.error.errors[0].message,
+        });
+      }
+
+      try {
+        const result = await refreshCaseLayoutFromTemplate(paramsValidation.data.id);
+        return reply.send(result);
+      } catch (error: any) {
+        fastify.log.error(error);
+        if (error.message === 'Case not found') {
+          return reply.status(404).send({
+            error: 'Not Found',
+            message: 'Case o podanym ID nie istnieje',
+          });
+        }
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Nie udało się odświeżyć layoutu sprawy',
         });
       }
     }

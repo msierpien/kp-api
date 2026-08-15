@@ -25,7 +25,7 @@ import {
   SILHOUETTE_MARKS_DEFAULT,
   validateSheetImposition,
 } from '@msierpien/kp-template-core'
-import { buildLayout } from './create-zaproszenie-90x130-ploter-template'
+import { buildLayout } from './create-zaproszenie-130x90-ploter-template'
 // Atrapy sekretow: `config` waliduje env juz przy imporcie, a ten skrypt do
 // bazy ani do szyfrowania nie siega. Stad ustawienie przed dynamicznym
 // importem renderera nizej - statyczny import wywrocilby skrypt na maszynie
@@ -37,6 +37,13 @@ process.env.ENCRYPTION_KEY ||= 'render-check-encryption-key-32b!'
 
 const OUT_DIR = path.join(process.cwd(), 'tmp', 'imposition-check')
 const MM_PER_INCH = 25.4
+
+/**
+ * Podklad arkusza. Skrypt nie kopiuje go do storage - wgrywa go
+ * `create-zaproszenie-130x90-ploter-template.ts`. Brak pliku nie jest bledem:
+ * arkusz wyjdzie wtedy z samymi paserami i uzytkami.
+ */
+const SHEET_BACKGROUND = 'templates/ZAPROSZENIE_130X90_PLOTER/sheet_background/podklad-czarne.png'
 
 /**
  * Pomiar z pliku `czarna kartka.pdf` wyeksportowanego ze Silhouette Studio
@@ -125,7 +132,9 @@ async function main() {
   const { templateLayoutSchema } = await import('../schemas/admin.schema')
   const { renderImpositionSheetPng } = await import('../services/renderer/fabric-renderer.service')
 
-  const layout = buildLayout()
+  // Podklad z assetu szablonu - render-check ma sprawdzac dokladnie to, co
+  // pojdzie na drukarke, razem z ozdobna ramka pod uzytkami.
+  const layout = buildLayout(SHEET_BACKGROUND)
 
   // Ten sam schemat, ktory tnie zapis z panelu - pole spoza niego zniknieloby
   // po cichu przy pierwszym zapisie w edytorze.

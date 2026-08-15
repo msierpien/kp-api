@@ -1,5 +1,5 @@
 /**
- * Zaproszenie 90 x 130 mm drukowane po DWIE SZTUKI na arkuszu A4 i wycinane
+ * Zaproszenie 130 x 90 mm drukowane po DWIE SZTUKI na arkuszu A4 i wycinane
  * na ploterze Silhouette.
  *
  * Roznica wobec pozostalych szablonow jest w skladzie, nie w projekcie: blok
@@ -20,7 +20,7 @@
  *
  * Uruchamiany W KONTENERZE `personalization-api` (baza nie jest wystawiona
  * poza siec dockera):
- *   node dist/scripts/create-zaproszenie-90x130-ploter-template.js
+ *   node dist/scripts/create-zaproszenie-130x90-ploter-template.js
  *   SHEET_BG_SOURCE=/app/tmp/podklad-a4.png node dist/scripts/...
  */
 import fs from 'fs'
@@ -32,17 +32,24 @@ const prisma = new PrismaClient()
 /** Slug tenanta, do ktorego nalezy szablon (nadpisywalny przez TENANT_SLUG). */
 const TENANT_SLUG = 'kreatywne-papierki'
 
-const TEMPLATE_CODE = 'ZAPROSZENIE_90X130_PLOTER'
-const TEMPLATE_NAME = 'Zaproszenie 90 x 130 (ploter)'
+const TEMPLATE_CODE = 'ZAPROSZENIE_130X90_PLOTER'
+const TEMPLATE_NAME = 'Zaproszenie 130 x 90 (ploter)'
 const TEMPLATE_DESCRIPTION =
-  'Zaproszenie 90 x 130 mm drukowane po dwie sztuki na arkuszu A4 z paserami Print & Cut, wycinane na ploterze Silhouette.'
+  'Zaproszenie 130 x 90 mm drukowane po dwie sztuki na arkuszu A4 z paserami Print & Cut, wycinane na ploterze Silhouette.'
 
 const DPI = 300
-const WIDTH_MM = 90
-const HEIGHT_MM = 130
+const WIDTH_MM = 130
+const HEIGHT_MM = 90
 
-/** Margines boczny projektu - poza nim nie stawiamy tekstu. */
-const MARGIN_MM = 10
+/**
+ * Margines boczny projektu.
+ *
+ * Kartka lezy w drukowanym owalu z podkladu, a nie na czystym prostokacie.
+ * Przy 20 mm marginesu (ramka tekstu 90 mm) czyste wnetrze owalu siega
+ * pionowo od 2,8 do 87,0 mm kartki - zmierzone na podkladzie. Wezsza ramka
+ * nic juz nie zyskuje, szersza (100 mm) traci 2,5 mm na dole.
+ */
+const MARGIN_MM = 20
 const TEXT_WIDTH_MM = WIDTH_MM - MARGIN_MM * 2
 
 /** Grafitowy atrament - czern na papierze ozdobnym wyglada twardo. */
@@ -206,7 +213,9 @@ const canvasConfig = {
   safeArea: mm(4),
   bleedMm: 0,
   safeAreaMm: 4,
-  backgroundColor: '#ffffff',
+  // Przezroczyste, bo kartka laduje na WYDRUKOWANYM podkladzie z ozdobna
+  // ramka. Biale tlo zamalowaloby ja na calej powierzchni uzytku.
+  backgroundColor: 'transparent',
 }
 
 const PAGE_ID = 'page-1'
@@ -214,11 +223,14 @@ const PAGE_ID = 'page-1'
 /**
  * Rozmiary pisma pochodza z pomiaru (registerFont + measureText na plikach
  * z rejestru), nie z oka. Fabric lamie tekst tylko po SPACJACH, wiec liczy
- * sie najdluzsze pojedyncze SLOWO w ramce 70 mm:
- *   - "Wiśniewska-Kowalczyk" w 18 pt Cormorant = 58,0 mm (17% zapasu),
- *   - "Aleksandra i Krzysztof" w 24 pt Great Vibes = 64,5 mm (8% zapasu).
+ * sie najdluzsze pojedyncze SLOWO w ramce 90 mm:
+ *   - "Wiśniewska-Kowalczyk" w 20 pt Cormorant = 64,5 mm (28% zapasu),
+ *   - "Aleksandra i Krzysztof" w 28 pt Great Vibes = 75,2 mm (16% zapasu).
  * Renderer nie ma auto-dopasowania - wpis dluzszy niz ramka zostanie odrzucony
  * przez walidacje odpowiedzi ("Linia jest za długa"), nie zmniejszony.
+ *
+ * Pionowo wszystko musi zmiescic sie miedzy 2,8 a 87,0 mm kartki - tyle
+ * wynosi czyste wnetrze drukowanego owalu przy ramce 90 mm.
  */
 function buildLayers() {
   return [
@@ -226,8 +238,8 @@ function buildLayers() {
       id: 'naglowek',
       name: 'Nagłówek',
       text: 'ZAPROSZENIE',
-      topMm: 18,
-      heightMm: 8,
+      topMm: 12,
+      heightMm: 7,
       zIndex: 0,
       fontFamily: SERIF_FONT,
       fontSize: 11,
@@ -240,55 +252,47 @@ function buildLayers() {
       name: 'Para młoda',
       fieldKey: 'couple_names',
       text: '{{ couple_names }}',
-      topMm: 30,
-      heightMm: 18,
+      topMm: 20,
+      heightMm: 15,
       zIndex: 1,
       fontFamily: SCRIPT_FONT,
-      fontSize: 24,
+      fontSize: 28,
     }),
     textbox({
       id: 'zaproszenie_tresc',
       name: 'Formuła zaproszenia',
-      text: 'mają zaszczyt zaprosić',
-      topMm: 52,
-      heightMm: 7,
+      // Formula scalona w jeden wiersz - kartka 90 mm wysokosci nie uniesie
+      // dwoch osobnych, a rozbicie ich wpychalo "Nowakowscy" na wiersz nizej.
+      text: 'mają zaszczyt zaprosić na uroczystość zaślubin',
+      topMm: 36,
+      heightMm: 6,
       zIndex: 2,
       fontFamily: SERIF_FONT,
-      fontSize: 10,
+      fontSize: 9,
     }),
     textbox({
       id: GUEST_FIELD_KEY,
       name: 'Imiona gości',
       fieldKey: GUEST_FIELD_KEY,
       text: `{{ ${GUEST_FIELD_KEY} }}`,
-      topMm: 62,
-      heightMm: 22,
+      topMm: 43,
+      heightMm: 19,
       zIndex: 3,
       fontFamily: SERIF_FONT,
-      fontSize: 18,
+      fontSize: 20,
       fontWeight: 500,
       // 1,15 zamiast typowego 1,2: dwa wiersze dlugiego wpisu ("Państwo Anna
-      // i Jan Nowakowscy") mieszcza sie wtedy w 22 mm ramki.
+      // i Jan Nowakowscy") mieszcza sie wtedy w 17 mm ramki.
       lineHeight: 1.15,
-    }),
-    textbox({
-      id: 'zaproszenie_okazja',
-      name: 'Okazja',
-      text: 'na uroczystość zaślubin, która odbędzie się',
-      topMm: 88,
-      heightMm: 10,
-      zIndex: 4,
-      fontFamily: SERIF_FONT,
-      fontSize: 10,
     }),
     textbox({
       id: 'event_date',
       name: 'Data i godzina',
       fieldKey: 'event_date',
       text: '{{ event_date }}',
-      topMm: 100,
-      heightMm: 8,
-      zIndex: 5,
+      topMm: 64,
+      heightMm: 7,
+      zIndex: 4,
       fontFamily: SERIF_FONT,
       fontSize: 12,
       fontWeight: 500,
@@ -298,9 +302,9 @@ function buildLayers() {
       name: 'Miejsce uroczystości',
       fieldKey: 'event_place',
       text: '{{ event_place }}',
-      topMm: 109,
-      heightMm: 12,
-      zIndex: 6,
+      topMm: 71,
+      heightMm: 9,
+      zIndex: 5,
       fontFamily: SERIF_FONT,
       fontSize: 12,
     }),
@@ -309,9 +313,9 @@ function buildLayers() {
       name: 'Potwierdzenie obecności',
       fieldKey: 'rsvp_info',
       text: '{{ rsvp_info }}',
-      topMm: 121,
-      heightMm: 7,
-      zIndex: 7,
+      topMm: 80,
+      heightMm: 6,
+      zIndex: 6,
       fontFamily: SERIF_FONT,
       fontSize: 9,
     }),
@@ -319,19 +323,19 @@ function buildLayers() {
 }
 
 /**
- * Gniazda na arkuszu A4.
+ * Gniazda na arkuszu A4 - srodki owali wydrukowanych na podkladzie.
  *
- * Miedzy paserami (wstawka 15,88 mm) zostaje 262,24 mm wysokosci, a dwie
- * kartki 130 mm zajmuja 260 - caly zapas to 2,24 mm. Stad start od 18 mm,
- * a nie od 20: przy 20 mm dolna kartka konczylaby sie na 280 mm i wchodzila
- * w strefe dolnych paserow.
+ * Owale zmierzone na podkladzie: 159,13 x 104,48 mm kazdy, srodki na
+ * (100,86 / 75,01) i (100,86 / 195,03) mm. Kartka 130 x 90 wysrodkowana
+ * w owalu daje wspolrzedne ponizej i miesci sie w polu wolnym od paserow
+ * (17,38-192,62 mm w poziomie, 17,38-279,62 w pionie).
  *
  * Te wspolrzedne to punkt wyjscia. Ostateczne ustawia sie w panelu, w oknie
- * "Arkusz zbiorczy", po probnym wydruku i probnym cieciu.
+ * "Arkusz", po probnym wydruku i probnym cieciu.
  */
-const SLOT_X_MM = 18
-const SLOT_Y_TOP_MM = 18
-const SLOT_Y_BOTTOM_MM = 148
+const SLOT_X_MM = 35.86
+const SLOT_Y_TOP_MM = 30.01
+const SLOT_Y_BOTTOM_MM = 150.03
 
 export function buildLayout(sheetBackgroundUrl?: string) {
   const layers = buildLayers()

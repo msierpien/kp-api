@@ -1,6 +1,10 @@
 /**
- * Zaproszenie 130 x 90 mm drukowane po DWIE SZTUKI na arkuszu A4 i wycinane
+ * Zaproszenie 90 x 130 mm drukowane po DWIE SZTUKI na arkuszu A4 i wycinane
  * na ploterze Silhouette.
+ *
+ * Projekt jest PIONOWY, ale w gniazdo wchodzi obrocony o 90 stopni, bo ramki
+ * na podkladzie leza poziomo. Kokarda z podkladu wypada wtedy u GORY gotowej
+ * kartki - tak, jak ma wygladac produkt w reku klienta.
  *
  * Roznica wobec pozostalych szablonow jest w skladzie, nie w projekcie: blok
  * `imposition` sprawia, ze paczka do druku ma jeden plik na ARKUSZ, nie na
@@ -20,7 +24,7 @@
  *
  * Uruchamiany W KONTENERZE `personalization-api` (baza nie jest wystawiona
  * poza siec dockera):
- *   node dist/scripts/create-zaproszenie-130x90-ploter-template.js
+ *   node dist/scripts/create-zaproszenie-90x130-ploter-template.js
  *   SHEET_BG_SOURCE=/app/tmp/podklad-a4.png node dist/scripts/...
  */
 import fs from 'fs'
@@ -32,24 +36,24 @@ const prisma = new PrismaClient()
 /** Slug tenanta, do ktorego nalezy szablon (nadpisywalny przez TENANT_SLUG). */
 const TENANT_SLUG = 'kreatywne-papierki'
 
-const TEMPLATE_CODE = 'ZAPROSZENIE_130X90_PLOTER'
-const TEMPLATE_NAME = 'Zaproszenie 130 x 90 (ploter)'
+const TEMPLATE_CODE = 'ZAPROSZENIE_90X130_PLOTER'
+const TEMPLATE_NAME = 'Zaproszenie 90 x 130 (ploter)'
 const TEMPLATE_DESCRIPTION =
-  'Zaproszenie 130 x 90 mm drukowane po dwie sztuki na arkuszu A4 z paserami Print & Cut, wycinane na ploterze Silhouette.'
+  'Zaproszenie 90 x 130 mm z kokardą u góry, drukowane po dwie sztuki na arkuszu A4 z paserami Print & Cut, wycinane na ploterze Silhouette.'
 
 const DPI = 300
-const WIDTH_MM = 130
-const HEIGHT_MM = 90
+const WIDTH_MM = 90
+const HEIGHT_MM = 130
 
 /**
  * Margines boczny projektu.
  *
- * Kartka lezy w drukowanym owalu z podkladu, a nie na czystym prostokacie.
- * Przy 20 mm marginesu (ramka tekstu 90 mm) czyste wnetrze owalu siega
- * pionowo od 2,8 do 87,0 mm kartki - zmierzone na podkladzie. Wezsza ramka
- * nic juz nie zyskuje, szersza (100 mm) traci 2,5 mm na dole.
+ * Kartka lezy w drukowanym owalu, a nie na czystym prostokacie. Przy 10 mm
+ * marginesu (ramka tekstu 70 mm) czyste wnetrze owalu siega w ukladzie kartki
+ * od 8,0 do 123,5 mm - zmierzone na podkladzie, juz po uwzglednieniu obrotu
+ * gniazda. Pierwsze 8 mm zajmuje kokarda.
  */
-const MARGIN_MM = 20
+const MARGIN_MM = 10
 const TEXT_WIDTH_MM = WIDTH_MM - MARGIN_MM * 2
 
 /** Grafitowy atrament - czern na papierze ozdobnym wyglada twardo. */
@@ -223,14 +227,15 @@ const PAGE_ID = 'page-1'
 /**
  * Rozmiary pisma pochodza z pomiaru (registerFont + measureText na plikach
  * z rejestru), nie z oka. Fabric lamie tekst tylko po SPACJACH, wiec liczy
- * sie najdluzsze pojedyncze SLOWO w ramce 90 mm:
- *   - "Wiśniewska-Kowalczyk" w 20 pt Cormorant = 64,5 mm (28% zapasu),
- *   - "Aleksandra i Krzysztof" w 28 pt Great Vibes = 75,2 mm (16% zapasu).
+ * sie najdluzsze pojedyncze SLOWO w ramce 70 mm:
+ *   - "Wiśniewska-Kowalczyk" w 18 pt Cormorant = 58,1 mm (17% zapasu),
+ *   - "Aleksandra i Krzysztof" w 24 pt Great Vibes = 64,5 mm (8% zapasu).
  * Renderer nie ma auto-dopasowania - wpis dluzszy niz ramka zostanie odrzucony
  * przez walidacje odpowiedzi ("Linia jest za długa"), nie zmniejszony.
  *
- * Pionowo wszystko musi zmiescic sie miedzy 2,8 a 87,0 mm kartki - tyle
- * wynosi czyste wnetrze drukowanego owalu przy ramce 90 mm.
+ * Pionowo tekst trzyma sie miedzy 18 a 118 mm kartki. Dolna granica czystego
+ * wnetrza to 123,5 mm, a gorne 8 mm zajmuje kokarda - stad start dopiero od
+ * 18 mm, z zapasem na tolerancje ciecia.
  */
 function buildLayers() {
   return [
@@ -238,8 +243,8 @@ function buildLayers() {
       id: 'naglowek',
       name: 'Nagłówek',
       text: 'ZAPROSZENIE',
-      topMm: 12,
-      heightMm: 7,
+      topMm: 18,
+      heightMm: 9,
       zIndex: 0,
       fontFamily: SERIF_FONT,
       fontSize: 11,
@@ -252,20 +257,18 @@ function buildLayers() {
       name: 'Para młoda',
       fieldKey: 'couple_names',
       text: '{{ couple_names }}',
-      topMm: 20,
-      heightMm: 15,
+      topMm: 29,
+      heightMm: 19,
       zIndex: 1,
       fontFamily: SCRIPT_FONT,
-      fontSize: 28,
+      fontSize: 24,
     }),
     textbox({
       id: 'zaproszenie_tresc',
       name: 'Formuła zaproszenia',
-      // Formula scalona w jeden wiersz - kartka 90 mm wysokosci nie uniesie
-      // dwoch osobnych, a rozbicie ich wpychalo "Nowakowscy" na wiersz nizej.
       text: 'mają zaszczyt zaprosić na uroczystość zaślubin',
-      topMm: 36,
-      heightMm: 6,
+      topMm: 50,
+      heightMm: 8,
       zIndex: 2,
       fontFamily: SERIF_FONT,
       fontSize: 9,
@@ -275,14 +278,14 @@ function buildLayers() {
       name: 'Imiona gości',
       fieldKey: GUEST_FIELD_KEY,
       text: `{{ ${GUEST_FIELD_KEY} }}`,
-      topMm: 43,
-      heightMm: 19,
+      topMm: 60,
+      heightMm: 22,
       zIndex: 3,
       fontFamily: SERIF_FONT,
-      fontSize: 20,
+      fontSize: 18,
       fontWeight: 500,
       // 1,15 zamiast typowego 1,2: dwa wiersze dlugiego wpisu ("Państwo Anna
-      // i Jan Nowakowscy") mieszcza sie wtedy w 17 mm ramki.
+      // i Jan Nowakowscy") mieszcza sie wtedy w 22 mm ramki.
       lineHeight: 1.15,
     }),
     textbox({
@@ -290,8 +293,8 @@ function buildLayers() {
       name: 'Data i godzina',
       fieldKey: 'event_date',
       text: '{{ event_date }}',
-      topMm: 64,
-      heightMm: 7,
+      topMm: 85,
+      heightMm: 9,
       zIndex: 4,
       fontFamily: SERIF_FONT,
       fontSize: 12,
@@ -302,8 +305,8 @@ function buildLayers() {
       name: 'Miejsce uroczystości',
       fieldKey: 'event_place',
       text: '{{ event_place }}',
-      topMm: 71,
-      heightMm: 9,
+      topMm: 95,
+      heightMm: 13,
       zIndex: 5,
       fontFamily: SERIF_FONT,
       fontSize: 12,
@@ -313,8 +316,8 @@ function buildLayers() {
       name: 'Potwierdzenie obecności',
       fieldKey: 'rsvp_info',
       text: '{{ rsvp_info }}',
-      topMm: 80,
-      heightMm: 6,
+      topMm: 110,
+      heightMm: 8,
       zIndex: 6,
       fontFamily: SERIF_FONT,
       fontSize: 9,
@@ -337,6 +340,16 @@ const SLOT_X_MM = 35.86
 const SLOT_Y_TOP_MM = 30.01
 const SLOT_Y_BOTTOM_MM = 150.03
 
+/**
+ * Obrot uzytku w gniezdzie.
+ *
+ * Projekt jest pionowy (90 x 130), ramka na podkladzie lezy poziomo, wiec
+ * uzytek wchodzi obrocony. 90 stopni, nie 270: przy tym kierunku gora kartki
+ * trafia na PRAWA strone ramki, czyli tam, gdzie narysowana jest kokarda.
+ * Obrot o 270 postawilby kartke do gory nogami wzgledem kokardy.
+ */
+const SLOT_ROTATION = 90 as const
+
 export function buildLayout(sheetBackgroundUrl?: string) {
   const layers = buildLayers()
 
@@ -352,8 +365,8 @@ export function buildLayout(sheetBackgroundUrl?: string) {
       enabled: true,
       sheet: { widthMm: 210, heightMm: 297 },
       slots: [
-        { id: 'slot-1', xMm: SLOT_X_MM, yMm: SLOT_Y_TOP_MM, rotation: 0 as const },
-        { id: 'slot-2', xMm: SLOT_X_MM, yMm: SLOT_Y_BOTTOM_MM, rotation: 0 as const },
+        { id: 'slot-1', xMm: SLOT_X_MM, yMm: SLOT_Y_TOP_MM, rotation: SLOT_ROTATION },
+        { id: 'slot-2', xMm: SLOT_X_MM, yMm: SLOT_Y_BOTTOM_MM, rotation: SLOT_ROTATION },
       ],
       // Wartosci zmierzone na pliku ze Silhouette Studio (Print & Cut,
       // ustawienia domyslne). Nie zmieniac bez ponownego testu ciecia.

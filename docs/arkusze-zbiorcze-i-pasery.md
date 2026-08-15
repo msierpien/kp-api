@@ -27,8 +27,8 @@ z zamówienia**.
   "enabled": true,
   "sheet": { "widthMm": 210, "heightMm": 297 },
   "slots": [
-    { "id": "slot-1", "xMm": 35.86, "yMm": 30.01,  "rotation": 0 },
-    { "id": "slot-2", "xMm": 35.86, "yMm": 150.03, "rotation": 0 }
+    { "id": "slot-1", "xMm": 35.86, "yMm": 30.01,  "rotation": 90 },
+    { "id": "slot-2", "xMm": 35.86, "yMm": 150.03, "rotation": 90 }
   ],
   "marks": { "preset": "silhouette", "insetTopMm": 15.88, "armLengthMm": 10, "...": "..." },
   "backgroundUrl": "templates/KOD/sheet_background/podklad.png",
@@ -48,6 +48,9 @@ Rzeczy, które łatwo przeoczyć:
   zostaje z pustym miejscem, ale z kompletem paserów.
 - Sztuki idą w gniazda po kolei: `slots[0]` dostaje pierwszą sztukę arkusza.
   Liczba arkuszy to `ceil(qty / slots.length)`.
+- **Przy obrocie 90/270 `xMm`/`yMm` opisują prostokąt już po obrocie.** Projekt
+  pionowy 90 × 130 z `rotation: 90` zajmuje na arkuszu 130 × 90 mm i tyle
+  sprawdza walidacja.
 
 ## Pasery
 
@@ -84,13 +87,20 @@ biały, a przezroczysty PNG na wydruku zachowuje się różnie zależnie od RIP-
 ### Wpasowanie użytku w rysunek podkładu
 
 Gniazdo trzeba ustawić na środku miejsca przewidzianego w grafice, a nie „na
-oko". Przy podkładzie zaproszenia 130 × 90 wyszło to tak: ramki zmierzone na
+oko". Przy podkładzie zaproszenia wyszło to tak: ramki zmierzone na
 159,13 × 104,48 mm, środki na (100,86 / 75,01) i (100,86 / 195,03) mm, więc
-kartka 130 × 90 wyśrodkowana daje gniazda (35,86 / 30,01) i (35,86 / 150,03).
+użytek wyśrodkowany daje gniazda (35,86 / 30,01) i (35,86 / 150,03).
 
-Warto zmierzyć też **czyste wnętrze** rysunku, bo to ono ogranicza pole tekstu:
-przy ramce 90 mm szerokiej sięga ono od 2,8 do 87,0 mm wysokości kartki —
-niżej zaczyna się falowana linia.
+**Orientacja gotowego produktu decyduje o obrocie.** Ramki na podkładzie leżą
+poziomo, a kokarda jest przy ich prawej krawędzi. Zaproszenie ma być pionowe
+z kokardą u góry, więc projekt jest pionowy (90 × 130) i wchodzi w gniazdo
+z `rotation: 90` — przy tym kierunku góra kartki trafia na prawą stronę ramki,
+czyli pod kokardę. `rotation: 270` postawiłby kartkę do góry nogami.
+
+Warto zmierzyć też **czyste wnętrze** rysunku, bo to ono ogranicza pole tekstu.
+Mierzy się je w układzie kartki, czyli już po obrocie: dla ramki tekstu 70 mm
+czyste pole sięga od 8,0 do 123,5 mm wysokości kartki, a te pierwsze 8 mm
+zajmuje kokarda.
 
 ## Kalibracja po próbnym wydruku
 
@@ -126,7 +136,7 @@ w obszarze drukowalnym każdej drukarki.
 pnpm tsx src/scripts/imposition-render-check.ts
 ```
 
-Skrypt bierze layout z `create-zaproszenie-130x90-ploter-template.ts`,
+Skrypt bierze layout z `create-zaproszenie-90x130-ploter-template.ts`,
 przepuszcza go przez schemat Zod panelu, renderuje arkusz **tą samą ścieżką co
 wydruk**, a potem **mierzy pasery na gotowym rastrze** i porównuje z
 konfiguracją (tolerancja 0,2 mm). Sprawdza też arkusz niepełny i wymiar strony
@@ -141,12 +151,13 @@ roboczego i rozjeżdża się z A4 o ułamek milimetra (zmierzone: do 0,4 mm).
 - **Nowe pole formatu wymaga wpisu w `src/schemas/admin.schema.ts`.** `z.object`
   wycina nieznane klucze, więc pierwszy zapis z edytora skasowałby je po cichu.
 - **Ile się mieści na A4.** Przy domyślnych paserach zostaje 175,2 × 262,2 mm.
-  Dwie kartki 130 × 90 mieszczą się swobodnie, ale dwie 90 × 130 zajmują już
-  260 mm wysokości — cały zapas to wtedy 2,2 mm i start od 20 mm wpycha dolną
-  kartkę na paser. Panel ostrzega o tym (`IMPOSITION_SLOT_HITS_MARKS`).
+  Dwa użytki leżące poziomo (130 × 90 po obrocie) mieszczą się swobodnie, ale
+  dwa stojące pionowo zajmują 260 mm wysokości — cały zapas to wtedy 2,2 mm
+  i start od 20 mm wpycha dolny na paser. Panel ostrzega o tym
+  (`IMPOSITION_SLOT_HITS_MARKS`).
 - **Spad na arkuszu zbiorczym.** Ploter tnie po paserach z własną tolerancją,
   więc spad ma sens tylko wtedy, gdy użytki nie stykają się ze sobą — inaczej
-  spad jednego wchodzi na sąsiada. Szablon zaproszenia 130 × 90 ma `bleedMm: 0`.
+  spad jednego wchodzi na sąsiada. Szablon zaproszenia 90 × 130 ma `bleedMm: 0`.
 - **`PrintSettings.printOffsetXMm/YMm` działa dalej** i przesuwa cały arkusz
   razem z paserami. To kompensacja mechaniki drukarki i jest tu pożądana —
   kalibracja cięcia to osobna rzecz (`slotOffset*`).

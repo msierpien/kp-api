@@ -25,7 +25,7 @@ import {
   SILHOUETTE_MARKS_DEFAULT,
   validateSheetImposition,
 } from '@msierpien/kp-template-core'
-import { buildLayout } from './create-zaproszenie-130x90-ploter-template'
+import { buildLayout } from './create-zaproszenie-90x130-ploter-template'
 // Atrapy sekretow: `config` waliduje env juz przy imporcie, a ten skrypt do
 // bazy ani do szyfrowania nie siega. Stad ustawienie przed dynamicznym
 // importem renderera nizej - statyczny import wywrocilby skrypt na maszynie
@@ -40,10 +40,10 @@ const MM_PER_INCH = 25.4
 
 /**
  * Podklad arkusza. Skrypt nie kopiuje go do storage - wgrywa go
- * `create-zaproszenie-130x90-ploter-template.ts`. Brak pliku nie jest bledem:
+ * `create-zaproszenie-90x130-ploter-template.ts`. Brak pliku nie jest bledem:
  * arkusz wyjdzie wtedy z samymi paserami i uzytkami.
  */
-const SHEET_BACKGROUND = 'templates/ZAPROSZENIE_130X90_PLOTER/sheet_background/podklad-czarne.png'
+const SHEET_BACKGROUND = 'templates/ZAPROSZENIE_90X130_PLOTER/sheet_background/podklad-czarne.png'
 
 /**
  * Pomiar z pliku `czarna kartka.pdf` wyeksportowanego ze Silhouette Studio

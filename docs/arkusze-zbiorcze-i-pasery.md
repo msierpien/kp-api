@@ -146,6 +146,20 @@ Raportuje dodatkowo odchyłkę od pliku referencyjnego ze Silhouette Studio —
 informacyjnie, bo Silhouette liczy wstawkę od krawędzi swojego obszaru
 roboczego i rozjeżdża się z A4 o ułamek milimetra (zmierzone: do 0,4 mm).
 
+Sam projekt (czy tekst mieści się w rysunku podkładu) sprawdza się osobno, per
+szablon — wzorzec: `src/scripts/urodziny-18-render-check.ts`. Geometrii paserów
+te skrypty już nie powtarzają.
+
+## Szablony korzystające ze składu
+
+| kod | treść | skrypt |
+|---|---|---|
+| `ZAPROSZENIE_90X130_PLOTER` | zaproszenie ślubne | `create-zaproszenie-90x130-ploter-template.ts` |
+| `URODZINY_18_PLOTER` | urodziny (18/30/40 — liczebnik jest polem) | `create-urodziny-18-ploter-template.ts` |
+
+Oba to ten sam produkt fizyczny: ten sam podkład z kokardą, te same gniazda,
+te same pasery. Różnią się wyłącznie treścią i doborem krojów.
+
 ## Pułapki
 
 - **Nowe pole formatu wymaga wpisu w `src/schemas/admin.schema.ts`.** `z.object`

@@ -9,6 +9,10 @@ Wzorcowa para plików:
 - `src/scripts/create-winietka-botaniczna-template.ts` — zapis do bazy,
 - `src/scripts/winietka-botaniczna-render-check.ts` — podgląd bez bazy.
 
+Szablon drukowany po kilka sztuk na arkuszu i wycinany na ploterze wymaga
+dodatkowo bloku `imposition` i paserów — patrz
+[arkusze-zbiorcze-i-pasery.md](arkusze-zbiorcze-i-pasery.md).
+
 ---
 
 ## 0. Zanim dotkniesz kodu — zmierz grafikę

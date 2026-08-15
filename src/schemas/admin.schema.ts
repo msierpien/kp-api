@@ -714,6 +714,46 @@ const printLayoutSchema = z.object({
   mode: z.enum(['sheet', 'separate']).optional(),
 });
 
+/**
+ * Pasery Print & Cut. Domyslne wartosci odpowiadaja SILHOUETTE_MARKS_DEFAULT
+ * z kp-template-core - te same liczby po obu stronach, bo rozjazd oznacza
+ * wydruk, w ktory ploter nie trafi.
+ */
+const registrationMarksSchema = z.object({
+  preset: z.enum(['silhouette', 'none']).default('silhouette'),
+  insetTopMm: z.number().min(0).default(15.88),
+  insetRightMm: z.number().min(0).default(15.88),
+  insetBottomMm: z.number().min(0).default(15.88),
+  insetLeftMm: z.number().min(0).default(15.88),
+  armLengthMm: z.number().positive().default(10),
+  armLengthRightMm: z.number().positive().default(5),
+  thicknessMm: z.number().positive().default(0.5),
+  color: z.string().default('#000000'),
+});
+
+const impositionSlotSchema = z.object({
+  id: z.string().min(1),
+  xMm: z.number(),
+  yMm: z.number(),
+  rotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]),
+  pageId: z.string().min(1).optional(),
+});
+
+/** Sklad wielu SZTUK na jednym arkuszu (inne ziarno niz printLayoutSchema). */
+const sheetImpositionSchema = z.object({
+  enabled: z.boolean().default(false),
+  sheet: z.object({
+    widthMm: z.number().positive(),
+    heightMm: z.number().positive(),
+  }),
+  slots: z.array(impositionSlotSchema).default([]),
+  marks: registrationMarksSchema.optional(),
+  backgroundUrl: z.string().min(1).optional(),
+  // Kalibracja po probnym wydruku - moze byc ujemna, wiec bez min().
+  slotOffsetXMm: z.number().optional(),
+  slotOffsetYMm: z.number().optional(),
+});
+
 const mockupPointSchema = z.object({
   x: z.number(),
   y: z.number(),
@@ -753,6 +793,7 @@ export const templateLayoutSchema = z.object({
   variants: z.array(templateVariantSchema).optional(),
   variantFieldKey: z.string().optional(),
   print: printLayoutSchema.optional(),
+  imposition: sheetImpositionSchema.optional(),
   mockups: z.array(mockupConfigSchema).optional(),
   // Kolory proponowane klientowi; pilnujemy formatu hex, bo trafiaja wprost
   // do stylu tekstu i do wydruku.

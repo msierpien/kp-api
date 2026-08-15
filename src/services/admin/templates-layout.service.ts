@@ -11,7 +11,15 @@ import { imageExtensionForMimeType } from '../../lib/upload-validation';
 
 const STORAGE_DIR = path.join(process.cwd(), 'storage', 'templates');
 const MAX_ASSETS_PER_TEMPLATE = 50;
-const ALLOWED_TEMPLATE_ASSET_TYPES = new Set(['BACKGROUND', 'DECORATION', 'LOGO', 'CUT_LINE_SVG']);
+// SHEET_BACKGROUND - podklad calego arkusza do druku (ozdobna ramka pod
+// uzytkami), inny niz BACKGROUND, ktory jest tlem pojedynczej kartki.
+const ALLOWED_TEMPLATE_ASSET_TYPES = new Set([
+  'BACKGROUND',
+  'DECORATION',
+  'LOGO',
+  'CUT_LINE_SVG',
+  'SHEET_BACKGROUND',
+]);
 
 // ============================================
 // Layout CRUD

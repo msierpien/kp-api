@@ -736,7 +736,7 @@ model TemplateLayoutVersion {
 model TemplateAsset {
   id         String   @id @default(cuid())
   templateId String   @map("template_id")
-  assetType  String   @map("asset_type") // BACKGROUND, DECORATION, LOGO, CUT_LINE_SVG
+  assetType  String   @map("asset_type") // BACKGROUND, DECORATION, LOGO, CUT_LINE_SVG, SHEET_BACKGROUND
   fileName   String   @map("file_name")
   filePath   String   @map("file_path") // ścieżka relatywna w storage
   fileSize   Int      @map("file_size")

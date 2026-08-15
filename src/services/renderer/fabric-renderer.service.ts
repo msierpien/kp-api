@@ -9,11 +9,15 @@ import {
 } from '../../types/template-layout';
 import { isSvgPath, rasterizeSvgFile } from './svg-raster.service';
 import {
+  SILHOUETTE_MARKS_DEFAULT,
   buildShapeGeometry,
   buildTextPathD,
+  getSheetImposition,
+  getSlotPositionMm,
   getTextPathAnchorOffset,
   getTextPathArcLength,
   resolveTextPathStartOffset,
+  type RegistrationMarksConfig,
 } from '@msierpien/kp-template-core';
 import { drawImageInQuad, quadToPixels, type Quad } from '../../lib/mockup-warp';
 import { mergeLayoutWithOverrides } from '../../lib/layout-overrides';
@@ -770,6 +774,19 @@ const PRINT_RENDER_SCALE = Math.max(1, Math.min(4, Number(process.env.PRINT_REND
  */
 const PROOF_DPI = Math.max(72, Math.min(200, Number(process.env.PROOF_DPI) || 150));
 
+/**
+ * Czy projekt ma zostac przezroczysty zamiast dostac biale tlo.
+ *
+ * Potrzebne przy skladzie arkuszowym z podkladem: uzytek laduje na wydrukowanej
+ * ozdobnej ramce, wiec zamalowanie jego pola na bialo zakryloby ja w calosci.
+ * Poza tym przypadkiem tlo zostaje biale - papier tez jest bialy, a
+ * przezroczysty PNG na wydruku zachowuje sie roznie w zaleznosci od RIP-a.
+ */
+function isTransparentBackground(backgroundColor: unknown): boolean {
+  const value = String(backgroundColor ?? '').trim().toLowerCase();
+  return value === 'transparent' || value === 'rgba(0,0,0,0)' || value === 'none';
+}
+
 async function renderPageToPng(
   page: TemplatePage,
   answers: Record<string, any>,
@@ -794,7 +811,10 @@ async function renderPageToPng(
   const fabricCanvas = new StaticCanvas(undefined, {
     width: widthPx,
     height: heightPx,
-    backgroundColor: merged.canvas.backgroundColor || '#ffffff',
+    // `undefined`, nie 'transparent': fabric wpisalby ten napis jako kolor.
+    backgroundColor: isTransparentBackground(merged.canvas.backgroundColor)
+      ? undefined
+      : merged.canvas.backgroundColor || '#ffffff',
   });
   const nodeCanvas = fabricCanvas.getNodeCanvas();
 
@@ -1018,6 +1038,65 @@ export async function applyWatermarkToImage(
 }
 
 /**
+ * Render strony powiekszony o spad, BEZ obrotu.
+ *
+ * Wydzielone, bo tego samego bufora potrzebuja dwie sciezki: strona na wlasnym
+ * arkuszu (nizej) i uzytek w gniezdzie skladu arkuszowego. Obrot dokleja
+ * wolajacy, bo w kazdej z nich obraca sie co innego - tam arkusz, tu sam
+ * uzytek wzgledem paserow.
+ */
+async function renderPageWithBleedPng(
+  page: TemplatePage,
+  answers: Record<string, any>,
+  layoutOverrides?: any,
+  itemIndex?: number
+): Promise<{ buffer: Buffer; widthPx: number; heightPx: number; bleedMm: number; bleedPx: number; dpi: number }> {
+  const { createCanvas, Image } = await import('canvas');
+  const dpi = Number(page.canvas.dpi || 300);
+  const render = await renderPageToPng(page, answers, layoutOverrides, itemIndex, PRINT_RENDER_SCALE);
+
+  // Spad: pole rosnie o margines z kazdej strony, a brakujaca powierzchnie
+  // wypelniamy rozciagnietymi krawedziami projektu. Bez tego kartka po
+  // przycieciu z tolerancja miala biala nitke przy krawedzi.
+  const bleedMm = Math.max(0, Number(page.canvas.bleedMm) || 0);
+  // Spad liczymy w tej samej gestosci co render strony - inaczej ramka spadu
+  // nie zgadzalaby sie z obrazem i projekt wyszedlby przesuniety.
+  const bleedPx = Math.round((bleedMm / MM_PER_INCH) * dpi * PRINT_RENDER_SCALE);
+  const widthPx = render.widthPx + bleedPx * 2;
+  const heightPx = render.heightPx + bleedPx * 2;
+
+  const canvas = createCanvas(widthPx, heightPx);
+  const ctx = canvas.getContext('2d');
+  // Przezroczysty projekt zostawia pole nietkniete - inaczej zakrylby podklad
+  // arkusza, na ktory zostal polozony.
+  if (!isTransparentBackground(page.canvas.backgroundColor)) {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, widthPx, heightPx);
+  }
+
+  const img = new Image();
+  img.src = render.buffer;
+  ctx.save();
+  ctx.translate(widthPx / 2, heightPx / 2);
+  if (bleedPx > 0) {
+    drawBleedEdges(ctx, img, render.widthPx, render.heightPx, bleedPx);
+  }
+  ctx.drawImage(img, -render.widthPx / 2, -render.heightPx / 2, render.widthPx, render.heightPx);
+  ctx.restore();
+
+  return {
+    buffer: canvas.toBuffer('image/png'),
+    widthPx,
+    heightPx,
+    bleedMm,
+    bleedPx,
+    // Gestosc BUFORA, nie projektu: konsument liczy z niej mm, wiec musi znac
+    // faktyczna liczbe pikseli na cal.
+    dpi: dpi * PRINT_RENDER_SCALE,
+  };
+}
+
+/**
  * PNG jednej strony na wlasnym arkuszu, z obrotem ze skladu do druku.
  *
  * Obrot 90/270 zamienia wymiary arkusza - kartka 90x135 mm drukowana poziomo
@@ -1032,24 +1111,13 @@ export async function renderPrintPagePng(
   itemIndex?: number
 ): Promise<{ buffer: Buffer; widthMm: number; heightMm: number; widthPx: number; heightPx: number; dpi: number }> {
   const { createCanvas, Image } = await import('canvas');
-  const dpi = Number(page.canvas.dpi || layout.canvas.dpi || 300);
   const rotation = layout.print?.placements?.find((placement) => placement.pageId === page.id)?.rotation || 0;
   const swap = rotation === 90 || rotation === 270;
 
-  const render = await renderPageToPng(page, answers, layoutOverrides, itemIndex, PRINT_RENDER_SCALE);
+  const content = await renderPageWithBleedPng(page, answers, layoutOverrides, itemIndex);
 
-  // Spad: arkusz rosnie o margines z kazdej strony, a brakujace pole
-  // wypelniamy rozciagnietymi krawedziami projektu. Bez tego kartka po
-  // przycieciu z tolerancja miala biala nitke przy krawedzi.
-  const bleedMm = Math.max(0, Number(page.canvas.bleedMm) || 0);
-  // Spad liczymy w tej samej gestosci co render strony - inaczej ramka spadu
-  // nie zgadzalaby sie z obrazem i projekt wyszedlby przesuniety.
-  const bleedPx = Math.round((bleedMm / MM_PER_INCH) * dpi * PRINT_RENDER_SCALE);
-  const contentWidthPx = render.widthPx + bleedPx * 2;
-  const contentHeightPx = render.heightPx + bleedPx * 2;
-
-  const sheetWidthPx = swap ? contentHeightPx : contentWidthPx;
-  const sheetHeightPx = swap ? contentWidthPx : contentHeightPx;
+  const sheetWidthPx = swap ? content.heightPx : content.widthPx;
+  const sheetHeightPx = swap ? content.widthPx : content.heightPx;
 
   const sheet = createCanvas(sheetWidthPx, sheetHeightPx);
   const ctx = sheet.getContext('2d');
@@ -1057,31 +1125,168 @@ export async function renderPrintPagePng(
   ctx.fillRect(0, 0, sheetWidthPx, sheetHeightPx);
 
   const img = new Image();
-  img.src = render.buffer;
+  img.src = content.buffer;
   ctx.save();
   ctx.translate(sheetWidthPx / 2, sheetHeightPx / 2);
   if (rotation) ctx.rotate((rotation * Math.PI) / 180);
-
-  if (bleedPx > 0) {
-    drawBleedEdges(ctx, img, render.widthPx, render.heightPx, bleedPx);
-  }
-  ctx.drawImage(img, -render.widthPx / 2, -render.heightPx / 2, render.widthPx, render.heightPx);
+  ctx.drawImage(img, -content.widthPx / 2, -content.heightPx / 2, content.widthPx, content.heightPx);
   ctx.restore();
 
   drawWatermark(ctx, sheetWidthPx, sheetHeightPx, watermarkText);
 
   const dims = canvasMmDimensions(page.canvas);
-  const withBleedWidthMm = dims.widthMm + bleedMm * 2;
-  const withBleedHeightMm = dims.heightMm + bleedMm * 2;
+  const withBleedWidthMm = dims.widthMm + content.bleedMm * 2;
+  const withBleedHeightMm = dims.heightMm + content.bleedMm * 2;
   return {
     buffer: sheet.toBuffer('image/png'),
     widthMm: swap ? withBleedHeightMm : withBleedWidthMm,
     heightMm: swap ? withBleedWidthMm : withBleedHeightMm,
     widthPx: sheetWidthPx,
     heightPx: sheetHeightPx,
-    // Gestosc BUFORA, nie projektu: konsument liczy z niej mm, wiec musi znac
-    // faktyczna liczbe pikseli na cal.
-    dpi: dpi * PRINT_RENDER_SCALE,
+    dpi: content.dpi,
+  };
+}
+
+/**
+ * Rysuje pasery Print & Cut - znaczniki, po ktorych ploter ustawia ciecie.
+ *
+ * Kazdy rog to kat prosty otwarty do srodka arkusza. Ramiona poziome po
+ * prawej sa krotsze, bo tak rysuje je Silhouette Studio i na takich plikach
+ * ploter zostal wykalibrowany.
+ *
+ * Wolane na SAMYM KONCU skladania: paser zaslonięty uzytkiem albo podkladem
+ * jest dla czujnika nieodroznialny od braku pasera.
+ */
+function drawRegistrationMarks(
+  ctx: any,
+  sheetWidthPx: number,
+  sheetHeightPx: number,
+  marks: RegistrationMarksConfig,
+  dpi: number
+): void {
+  if (marks.preset === 'none') return;
+
+  const mm = (value: number) => (value / MM_PER_INCH) * dpi;
+  const thickness = mm(marks.thicknessMm);
+  const arm = mm(marks.armLengthMm);
+  const armRight = mm(marks.armLengthRightMm);
+
+  const left = mm(marks.insetLeftMm);
+  const top = mm(marks.insetTopMm);
+  const right = sheetWidthPx - mm(marks.insetRightMm);
+  const bottom = sheetHeightPx - mm(marks.insetBottomMm);
+
+  ctx.save();
+  ctx.fillStyle = marks.color || '#000000';
+
+  // Lewy gorny
+  ctx.fillRect(left, top, arm, thickness);
+  ctx.fillRect(left, top, thickness, arm);
+  // Prawy gorny
+  ctx.fillRect(right - armRight, top, armRight, thickness);
+  ctx.fillRect(right - thickness, top, thickness, arm);
+  // Lewy dolny
+  ctx.fillRect(left, bottom - thickness, arm, thickness);
+  ctx.fillRect(left, bottom - arm, thickness, arm);
+  // Prawy dolny
+  ctx.fillRect(right - armRight, bottom - thickness, armRight, thickness);
+  ctx.fillRect(right - thickness, bottom - arm, thickness, arm);
+
+  ctx.restore();
+}
+
+/**
+ * Arkusz zbiorczy: kilka SZTUK z zamowienia na jednym arkuszu, z paserami.
+ *
+ * Inne ziarno niz `composePrintSheet` - tam na arkusz ida strony jednego
+ * egzemplarza (przod i tyl winietki), tu kolejne sztuki. Gniazd moze byc
+ * wiecej niz sztuk: ostatni arkusz niepelnego zamowienia zostaje z pustym
+ * miejscem, ale z kompletem paserow, zeby ploter mial po czym ciac.
+ */
+export async function renderImpositionSheetPng(
+  layout: TemplateLayoutJson,
+  items: Array<{ answers: Record<string, any>; layoutOverrides?: any; itemIndex: number }>,
+  options: { watermarkText?: string | null } = {}
+): Promise<{ buffer: Buffer; widthMm: number; heightMm: number; widthPx: number; heightPx: number; dpi: number }> {
+  const { createCanvas, Image } = await import('canvas');
+
+  const imposition = getSheetImposition(layout);
+  if (!imposition) throw new Error('Layout nie ma włączonego składu arkuszowego');
+
+  // Arkusz i uzytki musza byc liczone w TEJ SAMEJ gestosci - inaczej uzytek
+  // wyrenderowany gesciej zostalby wklejony w skali 1:1 i wyszedl za duzy.
+  const dpi = Number(layout.canvas.dpi || 300) * PRINT_RENDER_SCALE;
+  const mmToPx = (value: number) => (value / MM_PER_INCH) * dpi;
+
+  const sheetWidthPx = Math.round(mmToPx(imposition.sheet.widthMm));
+  const sheetHeightPx = Math.round(mmToPx(imposition.sheet.heightMm));
+  const sheet = createCanvas(sheetWidthPx, sheetHeightPx);
+  const ctx = sheet.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, sheetWidthPx, sheetHeightPx);
+
+  // Podklad drukowany (ozdobna ramka) idzie pod uzytki, rozciagniety na caly
+  // arkusz - jego geometria jest juz zgrana z paserami.
+  if (imposition.backgroundUrl) {
+    const backgroundPath = resolveLayerImagePath(imposition.backgroundUrl);
+    if (!backgroundPath) {
+      console.error(`[Fabric] Odrzucony adres podkładu arkusza: ${imposition.backgroundUrl}`);
+    } else {
+      try {
+        const background = isSvgPath(backgroundPath)
+          ? await loadImage(await rasterizeSvgFile({ filePath: backgroundPath, widthPx: sheetWidthPx }))
+          : await loadImage(backgroundPath);
+        ctx.drawImage(background as any, 0, 0, sheetWidthPx, sheetHeightPx);
+      } catch (error) {
+        console.error(`[Fabric] Nie udało się wczytać podkładu ${backgroundPath}:`, error);
+      }
+    }
+  }
+
+  for (let index = 0; index < items.length && index < imposition.slots.length; index += 1) {
+    const item = items[index];
+    const slot = imposition.slots[index];
+    // Wariant moze byc inny dla kazdej sztuki - odpowiedzi indywidualne
+    // rozjezdzaja sie miedzy pozycjami, wiec strony bierzemy per sztuka.
+    const pages = getTemplatePagesForAnswers(layout, item.answers);
+    const page = slot.pageId ? pages.find((candidate) => candidate.id === slot.pageId) : pages[0];
+    if (!page) {
+      console.error(`[Fabric] Gniazdo ${slot.id} wskazuje nieistniejącą stronę ${slot.pageId}`);
+      continue;
+    }
+
+    const content = await renderPageWithBleedPng(page, item.answers, item.layoutOverrides, item.itemIndex);
+
+    const swap = slot.rotation === 90 || slot.rotation === 270;
+    const dims = canvasMmDimensions(page.canvas);
+    const netWidthMm = swap ? dims.heightMm : dims.widthMm;
+    const netHeightMm = swap ? dims.widthMm : dims.heightMm;
+    const { xMm, yMm } = getSlotPositionMm(slot, imposition);
+
+    // Wspolrzedne gniazda wskazuja linie ciecia, wiec obracamy i rysujemy
+    // wokol srodka formatu NETTO - spad wychodzi symetrycznie poza niego.
+    const centerX = mmToPx(xMm + netWidthMm / 2);
+    const centerY = mmToPx(yMm + netHeightMm / 2);
+
+    const img = new Image();
+    img.src = content.buffer;
+    ctx.save();
+    ctx.translate(centerX, centerY);
+    if (slot.rotation) ctx.rotate((slot.rotation * Math.PI) / 180);
+    ctx.drawImage(img, -content.widthPx / 2, -content.heightPx / 2, content.widthPx, content.heightPx);
+    ctx.restore();
+  }
+
+  drawWatermark(ctx, sheetWidthPx, sheetHeightPx, options.watermarkText);
+  drawRegistrationMarks(ctx, sheetWidthPx, sheetHeightPx, imposition.marks || SILHOUETTE_MARKS_DEFAULT, dpi);
+
+  return {
+    buffer: sheet.toBuffer('image/png'),
+    widthMm: imposition.sheet.widthMm,
+    heightMm: imposition.sheet.heightMm,
+    widthPx: sheetWidthPx,
+    heightPx: sheetHeightPx,
+    dpi,
   };
 }
 

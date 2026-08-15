@@ -22,6 +22,7 @@ import { createZipBuffer, type ZipEntry } from '../../lib/zip';
 import {
   getCanvasHeightPx as getLayoutCanvasHeightPx,
   getCanvasWidthPx as getLayoutCanvasWidthPx,
+  getSheetImposition,
   getTemplatePages,
   getTemplatePagesForAnswers,
   normalizeCanvasConfig,
@@ -31,6 +32,7 @@ import {
   type Layer,
 } from '../../types/template-layout';
 import {
+  renderImpositionSheetPng,
   renderPreview,
   renderPrintPagePng,
   renderPrintSheetPng,
@@ -62,6 +64,9 @@ interface ItemRender {
 
 interface RenderedPackageItem {
   itemIndex: number;
+  /** Ustawiane tylko przy skladzie arkuszowym: numer arkusza i sztuki na nim. */
+  sheetNumber?: number;
+  itemIndexes?: number[];
   /** Ustawiane tylko gdy strony ida na osobne arkusze. */
   pageId?: string;
   pageNumber?: number;
@@ -776,6 +781,9 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
     // Decyzja idzie po ukladzie podstawowym: warianty roznia sie trescia stron,
     // nie ich formatem.
     const printPagesSeparately = isMultiPage && shouldPrintPagesSeparately(layout);
+    // Sklad arkuszowy: kilka SZTUK na wspolnym arkuszu, razem z paserami dla
+    // plotera. Zmienia ziarno paczki - plikiem jest arkusz, nie sztuka.
+    const imposition = getSheetImposition(layout);
     const packageEntries: ZipEntry[] = [];
     const renderedItems: RenderedPackageItem[] = [];
     const packageBaseName = sanitizeFilePart(`${caseItem.order.orderReference}-${caseItem.template.code}`) || `case-${id}`;
@@ -783,17 +791,49 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
     const pkg = normalizePrintPackageOptions(options.packageOptions);
     const combinedPages: Array<{ png: Buffer; widthPx: number; heightPx: number; dpi: number }> = [];
 
-    for (let itemIndex = 0; itemIndex < qty; itemIndex += 1) {
-      await options.onProgress?.(20 + Math.round((itemIndex / qty) * 60));
+    // Sztuki pogrupowane w jednostki renderu. Bez skladu arkuszowego grupa to
+    // jedna sztuka, czyli dokladnie stare zachowanie; przy skladzie grupa to
+    // komplet gniazd jednego arkusza. Ostatnia grupa moze byc niepelna -
+    // arkusz idzie wtedy z pustym gniazdem, ale z kompletem paserow.
+    const groupSize = imposition ? imposition.slots.length : 1;
+    const itemGroups: number[][] = [];
+    for (let first = 0; first < qty; first += groupSize) {
+      itemGroups.push(
+        Array.from({ length: Math.min(groupSize, qty - first) }, (_, offset) => first + offset)
+      );
+    }
+
+    for (let groupIndex = 0; groupIndex < itemGroups.length; groupIndex += 1) {
+      await options.onProgress?.(20 + Math.round((groupIndex / itemGroups.length) * 60));
+      const groupItemIndexes = itemGroups[groupIndex];
+      const itemIndex = groupItemIndexes[0];
       const flatAnswers = flattenCaseAnswers(answers, itemIndex);
-      const itemBaseName = `${packageBaseName}-szt-${String(itemIndex + 1).padStart(2, '0')}`;
+      const itemBaseName = imposition
+        ? `${packageBaseName}-ark-${String(groupIndex + 1).padStart(2, '0')}`
+        : `${packageBaseName}-szt-${String(itemIndex + 1).padStart(2, '0')}`;
       const itemRenders: ItemRender[] = [];
       let pngBuffer: Buffer;
       let renderDpi = printTarget.dpi;
       let renderWidthPx = printTarget.widthPx;
       let renderHeightPx = printTarget.heightPx;
 
-      if (printPagesSeparately) {
+      if (imposition) {
+        const sheet = await renderImpositionSheetPng(
+          layout,
+          groupItemIndexes.map((index) => ({
+            answers: flattenCaseAnswers(answers, index),
+            layoutOverrides: caseItem.layoutOverrides || undefined,
+            itemIndex: index,
+          }))
+        );
+        itemRenders.push({
+          png: sheet.buffer,
+          widthPx: sheet.widthPx,
+          heightPx: sheet.heightPx,
+          dpi: sheet.dpi,
+          baseName: itemBaseName,
+        });
+      } else if (printPagesSeparately) {
         // Wariant moze byc inny dla kazdej sztuki - odpowiedzi indywidualne
         // rozjezdzaja sie miedzy pozycjami, wiec strony bierzemy per sztuka.
         const itemPages = getTemplatePagesForAnswers(layout, flatAnswers);
@@ -879,6 +919,16 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
           renderJobId: renderJob.id,
           itemIndex,
           itemNumber: itemIndex + 1,
+          // Przy skladzie arkuszowym plik obejmuje kilka sztuk, wiec sam
+          // `itemIndex` nie wystarcza do powiazania wydruku z pozycjami.
+          ...(imposition
+            ? {
+                sheetIndex: groupIndex,
+                sheetNumber: groupIndex + 1,
+                itemIndexes: groupItemIndexes,
+                slotCount: imposition.slots.length,
+              }
+            : {}),
           ...(render.pageId
             ? { pageId: render.pageId, pageNumber: render.pageNumber, pageName: render.pageName }
             : {}),
@@ -886,11 +936,14 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
           dpi: render.dpi,
           widthPx: render.widthPx,
           heightPx: render.heightPx,
-          bleedPx: isMultiPage ? 0 : printTarget.bleedPx,
-          bleedMm: isMultiPage ? 0 : printTarget.bleedMm,
+          // Przy skladzie arkuszowym spad jest wliczony w kazdy uzytek osobno,
+          // wiec arkusz jako calosc go nie ma.
+          bleedPx: isMultiPage || imposition ? 0 : printTarget.bleedPx,
+          bleedMm: isMultiPage || imposition ? 0 : printTarget.bleedMm,
         };
         const renderedItem: RenderedPackageItem = {
           itemIndex,
+          ...(imposition ? { sheetNumber: groupIndex + 1, itemIndexes: groupItemIndexes } : {}),
           ...(render.pageId ? { pageId: render.pageId, pageNumber: render.pageNumber } : {}),
         };
 
@@ -954,7 +1007,8 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
       }
     }
 
-    // Zbiorczy PDF: wszystkie sztuki jako kolejne strony jednego pliku.
+    // Zbiorczy PDF: kolejne jednostki renderu jako strony jednego pliku -
+    // sztuki, a przy skladzie arkuszowym gotowe arkusze.
     let combinedPdfInfo: { assetId: string; filePath: string; fileUrl: string; fileSize: number } | null = null;
     if (pkg.combinedPdf && combinedPages.length > 0) {
       const combinedBuffer = await pngsToPdfBuffer(combinedPages, pkg.offsetXMm, pkg.offsetYMm);
@@ -1015,6 +1069,20 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
           heightPx: printTarget.heightPx,
           bleedPx: printTarget.bleedPx,
           bleedMm: printTarget.bleedMm,
+          // Wymiary wyzej opisuja pojedyncza kartke. Przy skladzie arkuszowym
+          // plik ma rozmiar ARKUSZA, wiec bez tego bloku nie dalo by sie
+          // odroznic paczki 2-na-A4 od paczki pojedynczych kartek.
+          ...(imposition
+            ? {
+                imposition: {
+                  sheetWidthMm: imposition.sheet.widthMm,
+                  sheetHeightMm: imposition.sheet.heightMm,
+                  slotCount: imposition.slots.length,
+                  sheets: itemGroups.length,
+                  marksPreset: imposition.marks?.preset || 'silhouette',
+                },
+              }
+            : {}),
           packageOptions: {
             formats: [...pkg.formats],
             combinedPdf: pkg.combinedPdf,

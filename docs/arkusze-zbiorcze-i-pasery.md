@@ -102,6 +102,27 @@ Mierzy się je w układzie kartki, czyli już po obrocie: dla ramki tekstu 70 mm
 czyste pole sięga od 8,0 do 123,5 mm wysokości kartki, a te pierwsze 8 mm
 zajmuje kokarda.
 
+## Projekt dwustronny — arkusz na stronę
+
+Każda strona projektu jedzie na **własny arkusz**, po tyle sztuk, ile jest
+gniazd. Zaproszenie dwustronne w nakładzie 2 sztuk daje więc dwa arkusze A4:
+jeden z przodami, drugi z tyłami — a nie jeden arkusz z przodem i tyłem.
+
+Arkusze nie muszą wyglądać tak samo. `pageBackgrounds` mapuje `pageId` na
+podkład, a **pusty string oznacza „ten arkusz bez podkładu"**:
+
+```jsonc
+"backgroundUrl": "templates/KOD/sheet_background/wstazka.png",
+"pageBackgrounds": { "page-2": "" }
+```
+
+Przód ląduje wtedy na wydrukowanej wstążce, tył na czystym papierze. Gniazda
+i pasery zostają te same, więc ploter tnie oba arkusze identycznie — a to
+znaczy, że **tył musi mieścić się w tym samym obrysie co przód**, mimo że nic
+go tam nie rysuje.
+
+Pliki w paczce dostają wtedy sufiks strony: `…-ark-01-str-1`, `…-ark-01-str-2`.
+
 ## Kalibracja po próbnym wydruku
 
 1. Wygeneruj paczkę, wydrukuj jeden arkusz **bez skalowania**.
@@ -154,11 +175,15 @@ te skrypty już nie powtarzają.
 
 | kod | treść | skrypt |
 |---|---|---|
-| `ZAPROSZENIE_90X130_PLOTER` | zaproszenie ślubne | `create-zaproszenie-90x130-ploter-template.ts` |
-| `URODZINY_18_PLOTER` | urodziny (18/30/40 — liczebnik jest polem) | `create-urodziny-18-ploter-template.ts` |
+| `ZAPROSZENIE_90X130_PLOTER` | urodziny, **dwustronne** (przód na wstążce, tył czysty) | `create-zaproszenie-90x130-ploter-template.ts` |
+| `URODZINY_18_PLOTER` | urodziny, jednostronne (18/30/40 — liczebnik jest polem) | `create-urodziny-18-ploter-template.ts` |
 
 Oba to ten sam produkt fizyczny: ten sam podkład z kokardą, te same gniazda,
-te same pasery. Różnią się wyłącznie treścią i doborem krojów.
+te same pasery. Różnią się treścią, doborem krojów i liczbą stron.
+
+Zamówienie testowe do sprawdzenia całej ścieżki bez portalu klienta:
+`src/scripts/create-zamowienie-testowe-ploter.ts` (`RENDER=1` generuje od razu
+paczkę, `CLEANUP=1` sprząta).
 
 ## Pułapki
 

@@ -789,6 +789,14 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
     const packageBaseName = sanitizeFilePart(`${caseItem.order.orderReference}-${caseItem.template.code}`) || `case-${id}`;
 
     const pkg = normalizePrintPackageOptions(options.packageOptions);
+    // Globalna korekta pozycji kompensuje mechanike drukarki przy kartkach,
+    // ktore i tak sie przycina. Arkusz z paserami jej NIE dostaje: ploter
+    // mierzy pasery wzgledem krawedzi wciagnietego arkusza, wiec przesuniecie
+    // wydruku rozjezdza ciecie o dokladnie te wartosc. Kalibracje uzytkow
+    // wzgledem paserow ma wlasne pokretlo - `imposition.slotOffset*`.
+    const pdfOffsetXMm = imposition ? 0 : pkg.offsetXMm;
+    const pdfOffsetYMm = imposition ? 0 : pkg.offsetYMm;
+
     const combinedPages: Array<{ png: Buffer; widthPx: number; heightPx: number; dpi: number }> = [];
 
     // Sztuki pogrupowane w jednostki renderu. Bez skladu arkuszowego grupa to
@@ -987,8 +995,8 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
             render.widthPx,
             render.heightPx,
             render.dpi,
-            pkg.offsetXMm,
-            pkg.offsetYMm
+            pdfOffsetXMm,
+            pdfOffsetYMm
           );
           const savedPdf = await saveFile(pdfBuffer, {
             orderId: caseItem.orderId,
@@ -1021,7 +1029,7 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
     // sztuki, a przy skladzie arkuszowym gotowe arkusze.
     let combinedPdfInfo: { assetId: string; filePath: string; fileUrl: string; fileSize: number } | null = null;
     if (pkg.combinedPdf && combinedPages.length > 0) {
-      const combinedBuffer = await pngsToPdfBuffer(combinedPages, pkg.offsetXMm, pkg.offsetYMm);
+      const combinedBuffer = await pngsToPdfBuffer(combinedPages, pdfOffsetXMm, pdfOffsetYMm);
       const savedCombined = await saveFile(combinedBuffer, {
         orderId: caseItem.orderId,
         templateVersion: caseItem.templateVersionFrozen,

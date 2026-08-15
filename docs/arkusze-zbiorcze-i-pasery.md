@@ -207,6 +207,12 @@ paczkę, `CLEANUP=1` sprząta).
 - **Spad na arkuszu zbiorczym.** Ploter tnie po paserach z własną tolerancją,
   więc spad ma sens tylko wtedy, gdy użytki nie stykają się ze sobą — inaczej
   spad jednego wchodzi na sąsiada. Szablon zaproszenia 90 × 130 ma `bleedMm: 0`.
-- **`PrintSettings.printOffsetXMm/YMm` działa dalej** i przesuwa cały arkusz
-  razem z paserami. To kompensacja mechaniki drukarki i jest tu pożądana —
-  kalibracja cięcia to osobna rzecz (`slotOffset*`).
+- **`PrintSettings.printOffsetXMm/YMm` NIE jest stosowany do arkuszy z paserami.**
+  Ta globalna korekta kompensuje mechanikę drukarki przy kartkach, które i tak
+  się przycina. Tutaj byłaby szkodliwa: ploter mierzy pasery względem krawędzi
+  wciągniętego arkusza, więc przesunięcie wydruku rozjeżdża cięcie dokładnie
+  o tę wartość.
+
+  Wykryte na wydruku: przy ustawieniu `-3 / -3 mm` lewy paser wypadał na 12,9 mm
+  zamiast 15,88, a rozstawy zostawały poprawne — bo offset przesuwa, nie skaluje.
+  Kalibracja użytków względem paserów ma własne pokrętło: `slotOffset*`.

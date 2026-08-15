@@ -148,8 +148,18 @@ Kluczowe pola i powód, dla którego są takie, a nie inne:
 | `scale_to_fit` | `false` | każde skalowanie przez CUPS rozjeżdża pasery względem grafiki |
 | `tolerance_mm` | `1.0` | ciaśniej niż standardowe 1,5 — tu wymiar musi się zgadzać |
 
-Druk bezramkowy jest niepotrzebny: pasery leżą ~15,9 mm od krawędzi, czyli
-w obszarze drukowalnym każdej drukarki.
+**Nie przełączaj na druk bezramkowy.** Epson L8180 ma go jako `A4.NMgn`, ale
+realizuje przez powiększenie obrazu — `EPIJ_exmg/Expansion: 0 1 *2`, domyślnie
+maksymalne. Wydruk zostaje rozciągnięty poza krawędź papieru, więc pasery
+przesuwają się względem grafiki i ploter tnie obok wzoru. Ta sama pułapka co
+`scale_to_fit`, tylko od strony sterownika.
+
+Bezramkowy jest zresztą niepotrzebny. Obszar drukowalny zwykłego A4 na tej
+drukarce to (z PPD) `8.40 8.40 586.80 833.40`, czyli margines ~3 mm, a pasery
+leżą 15,88 mm od krawędzi — zostaje 13 mm zapasu.
+
+Profile `winietki-na-a4` i `zaproszenia-120x170` mają `"EPIJ_exmg": "2"`
+świadomie: tam kartki i tak się docina, a zadruk ma dojść do samej krawędzi.
 
 ## Weryfikacja bez bazy
 

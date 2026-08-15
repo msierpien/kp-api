@@ -21,6 +21,7 @@
  *   CLEANUP=1 node dist/scripts/create-zamowienie-testowe-ploter.js
  */
 import { PrismaClient } from '@prisma/client'
+import { generateAccessToken, getTokenExpiryDate } from '../lib/token'
 
 const prisma = new PrismaClient()
 
@@ -107,8 +108,16 @@ async function main() {
 
   const orderItem = order.items[0]
 
+  // Token linku klienta - bez niego panel nie pokaze "Linku do
+  // personalizacji", a sprawa testowa ma zachowywac sie jak prawdziwa.
+  const { token, hash, encrypted } = generateAccessToken()
+
   const caseItem = await prisma.personalizationCase.create({
     data: {
+      customerTokenHash: hash,
+      customerTokenEncrypted: encrypted,
+      tokenActive: true,
+      customerTokenExpiresAt: getTokenExpiryDate(),
       orderId: order.id,
       orderItemId: orderItem.id,
       templateId: template.id,
@@ -133,6 +142,7 @@ async function main() {
         szablon: `${template.code} (${template.name})`,
         sztuk: QUANTITY,
         panel: `/personalization/cases/${caseItem.id}`,
+        linkKlienta: `/personalizacja/${token}`,
       },
       null,
       2

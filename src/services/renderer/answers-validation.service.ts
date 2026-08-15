@@ -147,6 +147,8 @@ function describeLayerBox(layer: Layer | undefined, dpi: number) {
   return {
     width,
     maxLines,
+    // Tylko `textbox` zawija tekst; `text` i `text_path` sa jednoliniowe.
+    wraps: layer?.type === 'textbox',
     font: props ? {
       family: props.fontFamily || 'Inter',
       size: fontSize,

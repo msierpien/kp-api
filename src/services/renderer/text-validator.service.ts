@@ -41,6 +41,15 @@ interface FieldConfig {
    * pomiaru jest ta sama, wiec nie ma tu drugiej sciezki walidacji.
    */
   onArc?: boolean;
+  /**
+   * Ramka SAMA zawija tekst (warstwa `textbox`).
+   *
+   * Wtedy "linia za długa" jest falszywym alarmem - renderer zlamie wpis po
+   * spacjach i zmiesci go. Liczy sie co innego: czy po zawinieciu miesci sie
+   * w dozwolonej liczbie linii i czy zadne pojedyncze SLOWO nie jest szersze
+   * od ramki, bo takiego nie da sie zlamac.
+   */
+  wraps?: boolean;
   font?: {
     family?: string;
     size?: number;
@@ -153,6 +162,44 @@ async function measureTextWidth(
   // opentype.js getAdvanceWidth zwraca szerokość w jednostkach fontu
   // Trzeba przeskalować do pikseli: width * fontSize / unitsPerEm
   return { width: font.getAdvanceWidth(text, fontSize), measured: true };
+}
+
+/**
+ * Lamie tekst po SPACJACH do zadanej szerokosci - tak samo jak fabric przy
+ * renderowaniu ramki `textbox`.
+ *
+ * Slowo szersze od ramki zostaje w swojej linii i wyjdzie z pomiaru za
+ * szerokie; to jedyny przypadek, ktorego zawijanie nie ratuje, wiec ma
+ * dotrzec do klienta jako blad.
+ */
+async function wrapToWidth(
+  text: string,
+  maxWidth: number,
+  fontFamily: string,
+  fontSize: number,
+  fontWeight: number
+): Promise<string[]> {
+  const lines: string[] = [];
+
+  for (const paragraph of text.split('\n')) {
+    let current = '';
+
+    for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+      const candidate = current ? `${current} ${word}` : word;
+      const { width } = await measureTextWidth(candidate, fontFamily, fontSize, fontWeight);
+
+      if (width <= maxWidth || !current) {
+        current = candidate;
+        continue;
+      }
+      lines.push(current);
+      current = word;
+    }
+
+    lines.push(current);
+  }
+
+  return lines;
 }
 
 /**
@@ -285,7 +332,13 @@ async function validateField(
     const fontFamily = fieldConfig.font?.family || 'Inter';
     const fontWeight = fieldConfig.font?.weight || 400;
 
-    const lines = normalizedValue.split('\n');
+    // Ramka zawijajaca lamie tekst po spacjach dokladnie tak, jak zrobi to
+    // renderer - inaczej walidacja odrzucalaby wpisy, ktore drukuja sie
+    // poprawnie. Do sprawdzenia zostaje wtedy najdluzsze SLOWO (nie da sie go
+    // zlamac) i liczba linii po zawinieciu.
+    const lines = fieldConfig.wraps
+      ? await wrapToWidth(normalizedValue, maxWidth, fontFamily, fontSize, fontWeight)
+      : normalizedValue.split('\n');
 
     for (let i = 0; i < lines.length; i++) {
       const { width: lineWidth, measured } = await measureTextWidth(
@@ -304,9 +357,13 @@ async function validateField(
             ? measured
               ? `Napis "${fieldConfig.label}" nie mieści się na łuku`
               : `Napis "${fieldConfig.label}" może nie zmieścić się na łuku (brak kroju w rejestrze — pomiar przybliżony)`
-            : measured
-              ? `Linia ${i + 1} w polu "${fieldConfig.label}" jest za długa`
-              : `Linia ${i + 1} w polu "${fieldConfig.label}" może być za długa (brak kroju w rejestrze — pomiar przybliżony)`,
+            : fieldConfig.wraps
+              ? measured
+                ? `Słowo w polu "${fieldConfig.label}" jest szersze niż ramka i nie da się go złamać`
+                : `Słowo w polu "${fieldConfig.label}" może być szersze niż ramka (brak kroju w rejestrze — pomiar przybliżony)`
+              : measured
+                ? `Linia ${i + 1} w polu "${fieldConfig.label}" jest za długa`
+                : `Linia ${i + 1} w polu "${fieldConfig.label}" może być za długa (brak kroju w rejestrze — pomiar przybliżony)`,
           severity: measured ? 'error' : 'warning',
           details: {
             actualWidth: Math.round(lineWidth),

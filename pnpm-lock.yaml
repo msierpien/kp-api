@@ -42,8 +42,8 @@ importers:
         specifier: ^5.0.0
         version: 5.2.6
       '@msierpien/kp-template-core':
-        specifier: ^0.9.0
-        version: 0.9.0(zod@3.25.76)
+        specifier: ^0.10.0
+        version: 0.10.0(zod@3.25.76)
       '@prisma/client':
         specifier: ^5.8.1
         version: 5.22.0(prisma@5.22.0)
@@ -765,8 +765,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@msierpien/kp-template-core@0.9.0':
-    resolution: {integrity: sha512-T6WGrrVa7BoGixH3i4bRUoKw/YL0ySE9mD56y8VYh5wu/JpeP9WLhw2o6hdNDuvijLDRRcDNUmElRLG6GLlVaA==, tarball: https://npm.pkg.github.com/download/@msierpien/kp-template-core/0.9.0/0491d0c565877641984ce481889c7061103ef05f}
+  '@msierpien/kp-template-core@0.10.0':
+    resolution: {integrity: sha512-nju4E9gH9GIBOhz9UZUeDNilNnWsQ/6wPz7Buyf+hY1A6sLx3eHxfSyfFkiAY/0LozIpWoV8eIw4vSrxGBZmqw==, tarball: https://npm.pkg.github.com/download/@msierpien/kp-template-core/0.10.0/333d56a38d3dd3e7b8a0b5cea9e880561fab954b}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       zod: ^3.24.0
@@ -3767,7 +3767,7 @@ snapshots:
   '@msgpackr-extract/msgpackr-extract-win32-x64@3.0.3':
     optional: true
 
-  '@msierpien/kp-template-core@0.9.0(zod@3.25.76)':
+  '@msierpien/kp-template-core@0.10.0(zod@3.25.76)':
     dependencies:
       zod: 3.25.76
 

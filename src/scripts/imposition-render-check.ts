@@ -43,7 +43,7 @@ const MM_PER_INCH = 25.4
  * `create-zaproszenie-90x130-ploter-template.ts`. Brak pliku nie jest bledem:
  * arkusz wyjdzie wtedy z samymi paserami i uzytkami.
  */
-const SHEET_BACKGROUND = 'templates/ZAPROSZENIE_90X130_PLOTER/sheet_background/podklad-czarne.png'
+const SHEET_BACKGROUND = 'templates/ZAPROSZENIE_90X130_PLOTER/sheet_background/podklad-kokardki.svg'
 
 /**
  * Pomiar z pliku `czarna kartka.pdf` wyeksportowanego ze Silhouette Studio

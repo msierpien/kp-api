@@ -114,3 +114,51 @@ export function applySvgTint(svg: string, color: string): string {
   if (!/^#[0-9a-f]{3,8}$/i.test(color)) return svg;
   return svg.replace(/currentColor/gi, color);
 }
+
+/**
+ * Sciezki noza z eksportu Silhouette Studio - do wyrzucenia z GRAFIKI.
+ *
+ * Silhouette zapisuje linie ciecia jako zwykle `path` z obrysem w umownym
+ * kolorze i BEZ wypelnienia (`fill="none"`). Dla plotera to instrukcja, dla
+ * drukarki zwykla kreska - wgrany bez czyszczenia podklad wychodzi z ramka
+ * obrysowana na niebiesko albo czerwono.
+ *
+ * Rozpoznajemy je po samej strukturze (obrys bez wypelnienia), nie po
+ * konkretnym kolorze: paleta warstw w Silhouette jest dowolna i nastepny
+ * eksport moze uzyc innej.
+ */
+const CUT_PATH = /<path[^>]*fill\s*=\s*"none"[^>]*stroke\s*=\s*"(?!none)[^"]+"[^>]*\/?>/gi;
+const CUT_PATH_REVERSED = /<path[^>]*stroke\s*=\s*"(?!none)[^"]+"[^>]*fill\s*=\s*"none"[^>]*\/?>/gi;
+
+/** Ile sciezek noza zawiera plik - bez modyfikowania go. */
+export function countCutPaths(svg: string): number {
+  return (svg.match(CUT_PATH)?.length ?? 0) + (svg.match(CUT_PATH_REVERSED)?.length ?? 0);
+}
+
+/**
+ * Zdejmuje z SVG sciezki noza i - opcjonalnie - przygotowuje go pod
+ * przebarwianie, zamieniajac twarde wypelnienia na `currentColor`.
+ *
+ * Zamiana dotyczy WYLACZNIE wypelnien, nie obrysow: obrys, ktory przetrwal
+ * czyszczenie, jest czescia rysunku (np. cienka kreska ozdobna) i ma
+ * zachowac swoj kolor, dopoki projektant nie zdecyduje inaczej.
+ */
+export function prepareSvgArtwork(
+  svg: string,
+  options: { tintable?: boolean } = {}
+): { svg: string; removedCutPaths: number; tintableFills: number } {
+  const removedCutPaths = countCutPaths(svg);
+  let output = svg.replace(CUT_PATH, '').replace(CUT_PATH_REVERSED, '');
+
+  let tintableFills = 0;
+  if (options.tintable) {
+    output = output.replace(/\bfill\s*=\s*"(#[0-9a-f]{3,8})"/gi, (match, color: string) => {
+      // Biel zostaje biela: bywa swiadomym przykryciem, a nie kolorem rysunku.
+      if (/^#f{3}$|^#f{6}$|^#f{8}$/i.test(color)) return match;
+      tintableFills += 1;
+      return 'fill="currentColor"';
+    });
+  }
+
+  return { svg: output, removedCutPaths, tintableFills };
+}

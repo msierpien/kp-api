@@ -801,6 +801,9 @@ export const templateLayoutSchema = z.object({
   // Kolory proponowane klientowi; pilnujemy formatu hex, bo trafiaja wprost
   // do stylu tekstu i do wydruku.
   palette: z.array(z.string().regex(/^#[0-9a-fA-F]{6}$/)).max(24).optional(),
+  // Kolor wiodacy motywu - podstawiany pod `currentColor` w warstwach
+  // i w podkladzie wektorowym arkusza.
+  primaryColor: z.string().regex(/^#[0-9a-fA-F]{3,8}$/).optional(),
 });
 
 export const templateAssetParamsSchema = z.object({

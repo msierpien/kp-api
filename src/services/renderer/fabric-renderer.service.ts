@@ -10,6 +10,7 @@ import {
 import { isSvgPath, rasterizeSvgFile } from './svg-raster.service';
 import {
   SILHOUETTE_MARKS_DEFAULT,
+  applyPrimaryColor,
   buildShapeGeometry,
   buildTextPathD,
   getSheetBackgroundUrl,
@@ -17,6 +18,7 @@ import {
   getSlotPositionMm,
   getTextPathAnchorOffset,
   getTextPathArcLength,
+  resolvePrimaryColor,
   resolveTextPathStartOffset,
   type RegistrationMarksConfig,
 } from '@msierpien/kp-template-core';
@@ -266,6 +268,27 @@ function resolveBackgroundColor(props: Record<string, unknown>): string {
 /**
  * Konwertuje Layer na obiekt Fabric.js
  */
+
+/**
+ * Podstawia kolor wiodacy projektu pod `currentColor` w warstwie.
+ *
+ * Dotyczy wypelnienia i obrysu, bo jedno pokretlo ma malowac i tekst,
+ * i kreske figury. Warstwa z wlasnym kolorem przechodzi nietknieta -
+ * kolor wiodacy jest wyborem projektanta dla WSKAZANYCH warstw, a nie
+ * globalnym przemalowaniem.
+ */
+function withPrimaryColor(layer: Layer, primaryColor: string | null): Layer {
+  if (!primaryColor) return layer;
+  const props = layer.properties as unknown as Record<string, unknown> | undefined;
+  if (!props) return layer;
+
+  const fill = applyPrimaryColor(props.fill as string | undefined, primaryColor);
+  const stroke = applyPrimaryColor(props.stroke as string | undefined, primaryColor);
+  if (fill === props.fill && stroke === props.stroke) return layer;
+
+  return { ...layer, properties: { ...props, fill, stroke } } as Layer;
+}
+
 async function layerToFabricObject(
   layer: Layer,
   answers: Record<string, any>,
@@ -608,7 +631,7 @@ export async function renderPreview(
   for (const layer of sortedLayers) {
     try {
       const fabricObj = await layerToFabricObject(
-        layer,
+        withPrimaryColor(layer, resolvePrimaryColor(layout as any, data.layoutOverrides)),
         data.answers,
         finalScale,
         dpi
@@ -793,15 +816,22 @@ async function renderPageToPng(
   answers: Record<string, any>,
   layoutOverrides: any,
   itemIndex?: number,
-  scale: number = 1
+  scale: number = 1,
+  // Strona nie zna calego layoutu (dostaje canvas i warstwy), a kolor wiodacy
+  // siedzi na jego szczycie - musi tu dojechac osobno, inaczej tekst zostaje
+  // czarny mimo przemalowanego podkladu.
+  primaryColorFromLayout?: string | null
 ): Promise<{ buffer: Buffer; widthPx: number; heightPx: number }> {
   const pageLayout: TemplateLayoutJson = {
     version: 2,
     canvas: page.canvas,
     fonts: [],
     layers: page.layers,
+    ...(primaryColorFromLayout ? { primaryColor: primaryColorFromLayout } : {}),
   };
   const merged = mergeLayoutWithOverrides(pageLayout, layoutOverrides, itemIndex, page.id);
+  // Kolor wiodacy: wybor klienta wygrywa z ustawieniem szablonu.
+  const primaryColor = resolvePrimaryColor(merged as any, layoutOverrides);
   await loadLayoutFonts(merged);
 
   const { widthPx: basePx, heightPx: baseHeightPx } = canvasPxDimensions(merged.canvas);
@@ -825,7 +855,7 @@ async function renderPageToPng(
 
   for (const layer of sortedLayers) {
     try {
-      const obj = await layerToFabricObject(layer, answers, scale, dpi);
+      const obj = await layerToFabricObject(withPrimaryColor(layer, primaryColor), answers, scale, dpi);
       if (obj) fabricCanvas.add(obj);
     } catch (error) {
       console.error(`[Fabric] Failed to render layer ${layer.id} on page ${page.id}:`, error);
@@ -1050,11 +1080,12 @@ async function renderPageWithBleedPng(
   page: TemplatePage,
   answers: Record<string, any>,
   layoutOverrides?: any,
-  itemIndex?: number
+  itemIndex?: number,
+  primaryColor?: string | null
 ): Promise<{ buffer: Buffer; widthPx: number; heightPx: number; bleedMm: number; bleedPx: number; dpi: number }> {
   const { createCanvas, Image } = await import('canvas');
   const dpi = Number(page.canvas.dpi || 300);
-  const render = await renderPageToPng(page, answers, layoutOverrides, itemIndex, PRINT_RENDER_SCALE);
+  const render = await renderPageToPng(page, answers, layoutOverrides, itemIndex, PRINT_RENDER_SCALE, primaryColor ?? null);
 
   // Spad: pole rosnie o margines z kazdej strony, a brakujaca powierzchnie
   // wypelniamy rozciagnietymi krawedziami projektu. Bez tego kartka po
@@ -1115,7 +1146,13 @@ export async function renderPrintPagePng(
   const rotation = layout.print?.placements?.find((placement) => placement.pageId === page.id)?.rotation || 0;
   const swap = rotation === 90 || rotation === 270;
 
-  const content = await renderPageWithBleedPng(page, answers, layoutOverrides, itemIndex);
+  const content = await renderPageWithBleedPng(
+    page,
+    answers,
+    layoutOverrides,
+    itemIndex,
+    resolvePrimaryColor(layout, layoutOverrides)
+  );
 
   const sheetWidthPx = swap ? content.heightPx : content.widthPx;
   const sheetHeightPx = swap ? content.widthPx : content.heightPx;
@@ -1219,6 +1256,10 @@ export async function renderImpositionSheetPng(
   const dpi = Number(layout.canvas.dpi || 300) * PRINT_RENDER_SCALE;
   const mmToPx = (value: number) => (value / MM_PER_INCH) * dpi;
 
+  // Kolor wiodacy arkusza bierzemy z pierwszej sztuki: podklad jest wspolny
+  // dla calego arkusza, wiec nie moze mieć dwoch barw naraz.
+  const sheetPrimaryColor = resolvePrimaryColor(layout, items[0]?.layoutOverrides);
+
   const sheetWidthPx = Math.round(mmToPx(imposition.sheet.widthMm));
   const sheetHeightPx = Math.round(mmToPx(imposition.sheet.heightMm));
   const sheet = createCanvas(sheetWidthPx, sheetHeightPx);
@@ -1236,8 +1277,17 @@ export async function renderImpositionSheetPng(
       console.error(`[Fabric] Odrzucony adres podkładu arkusza: ${backgroundUrl}`);
     } else {
       try {
+        // Podklad wektorowy bierze kolor wiodacy - tak sama zmiana, ktora
+        // przemalowuje tekst, przemalowuje tez kokarde na arkuszu. Raster
+        // (PNG/JPG) zostaje w swoich barwach, bo nie ma czego podmienic.
         const background = isSvgPath(backgroundPath)
-          ? await loadImage(await rasterizeSvgFile({ filePath: backgroundPath, widthPx: sheetWidthPx }))
+          ? await loadImage(
+              await rasterizeSvgFile({
+                filePath: backgroundPath,
+                widthPx: sheetWidthPx,
+                tint: sheetPrimaryColor,
+              })
+            )
           : await loadImage(backgroundPath);
         ctx.drawImage(background as any, 0, 0, sheetWidthPx, sheetHeightPx);
       } catch (error) {
@@ -1261,7 +1311,13 @@ export async function renderImpositionSheetPng(
       continue;
     }
 
-    const content = await renderPageWithBleedPng(page, item.answers, item.layoutOverrides, item.itemIndex);
+    const content = await renderPageWithBleedPng(
+      page,
+      item.answers,
+      item.layoutOverrides,
+      item.itemIndex,
+      resolvePrimaryColor(layout, item.layoutOverrides)
+    );
 
     const swap = slot.rotation === 90 || slot.rotation === 270;
     const dims = canvasMmDimensions(page.canvas);
@@ -1321,7 +1377,7 @@ async function composePrintSheet(
   for (const page of pages) {
     rendered.set(
       page.id,
-      await renderPageToPng(page, answers, layoutOverrides, itemIndex, PRINT_RENDER_SCALE)
+      await renderPageToPng(page, answers, layoutOverrides, itemIndex, PRINT_RENDER_SCALE, layout.primaryColor)
     );
   }
 

@@ -29,6 +29,7 @@
 import fs from 'fs'
 import path from 'path'
 import { Prisma, PrismaClient } from '@prisma/client'
+import { CURRENT_COLOR } from '@msierpien/kp-template-core'
 
 const prisma = new PrismaClient()
 
@@ -58,8 +59,13 @@ const HEIGHT_MM = 130
 const MARGIN_MM = 10
 const TEXT_WIDTH_MM = WIDTH_MM - MARGIN_MM * 2
 
-/** Grafitowy atrament - czern na papierze ozdobnym wyglada twardo. */
-const INK = '#2f3437'
+/**
+ * Domyslny kolor wiodacy - grafit, bo czern na papierze ozdobnym wyglada
+ * twardo. Warstwy nie uzywaja go wprost: siegaja po `currentColor`, wiec
+ * zmiana tej jednej wartosci (albo wybor klienta) przemalowuje tekst
+ * RAZEM z kokarda z podkladu.
+ */
+const PRIMARY_COLOR = '#2f3437'
 
 /** Milimetry na piksele projektu. Format zyje w mm, renderer w px. */
 const mm = (value: number) => Math.round((value / 25.4) * DPI)
@@ -221,7 +227,7 @@ function textbox(input: TextBoxInput) {
       fontUnit: 'pt' as const,
       fontWeight: input.fontWeight ?? 400,
       fontStyle: 'normal' as const,
-      fill: INK,
+      fill: CURRENT_COLOR,
       textAlign: 'center' as const,
       verticalAlign: 'middle' as const,
       lineHeight: input.lineHeight ?? 1.2,
@@ -479,6 +485,7 @@ export function buildLayout(sheetBackgroundUrl?: string) {
       // "bez podkladu", nie brak konfiguracji.
       pageBackgrounds: { [BACK_PAGE_ID]: '' },
     },
+    primaryColor: PRIMARY_COLOR,
     // Mockup dodaje sie recznie w panelu - stad brak sekcji `mockups`.
     palette: ['#2f3437', '#6b7280', '#a8a29e', '#d6d3d1', '#f5f5f4'],
   }
@@ -502,8 +509,8 @@ async function ensureSheetBackground(templateId: string) {
     throw new Error(`Brak pliku podkładu: ${source} (SHEET_BG_SOURCE)`)
   }
   const extension = path.extname(source).toLowerCase()
-  if (!['.png', '.jpg', '.jpeg'].includes(extension)) {
-    throw new Error(`Podkład musi być PNG lub JPG - renderer nie czyta ${extension}`)
+  if (!['.png', '.jpg', '.jpeg', '.svg'].includes(extension)) {
+    throw new Error(`Podkład musi być SVG, PNG lub JPG - renderer nie czyta ${extension}`)
   }
 
   const buffer = fs.readFileSync(source)
@@ -520,7 +527,8 @@ async function ensureSheetBackground(templateId: string) {
       fileName,
       filePath: path.join(dirRelative, fileName),
       fileSize: buffer.length,
-      mimeType: extension === '.png' ? 'image/png' : 'image/jpeg',
+      mimeType:
+        extension === '.svg' ? 'image/svg+xml' : extension === '.png' ? 'image/png' : 'image/jpeg',
       metadata: { originalName: path.basename(source) },
       sortOrder: 0,
     },

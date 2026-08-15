@@ -752,9 +752,13 @@ const sheetImpositionSchema = z.object({
   // Podklad per strona. Pusty string jest DOZWOLONY i znaczy "ten arkusz bez
   // podkladu" - stad brak min(1) na wartosci.
   pageBackgrounds: z.record(z.string(), z.string()).optional(),
-  // Kalibracja po probnym wydruku - moze byc ujemna, wiec bez min().
+  // Kalibracje moga byc ujemne, wiec bez min().
+  // slotOffset* - uzytki wzgledem paserow (po probnym CIECIU).
   slotOffsetXMm: z.number().optional(),
   slotOffsetYMm: z.number().optional(),
+  // sheetOffset* - caly arkusz razem z paserami (po probnym WYDRUKU).
+  sheetOffsetXMm: z.number().optional(),
+  sheetOffsetYMm: z.number().optional(),
 });
 
 const mockupPointSchema = z.object({

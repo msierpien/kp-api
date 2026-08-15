@@ -123,17 +123,29 @@ go tam nie rysuje.
 
 Pliki w paczce dostają wtedy sufiks strony: `…-ark-01-str-1`, `…-ark-01-str-2`.
 
-## Kalibracja po próbnym wydruku
+## Dwie kalibracje — nie mylić ich
+
+| pokrętło | co przesuwa | kiedy ustawiać |
+|---|---|---|
+| **Kalibracja użytków** (`slotOffset*`) | użytki **względem paserów** | po próbnym **cięciu**, gdy nóż mija się z grafiką |
+| **Kalibracja arkusza** (`sheetOffset*`) | cały arkusz **razem z paserami** | po próbnym **wydruku**, gdy robota siedzi krzywo na kartce |
+
+Przesunięcie całego arkusza nie psuje cięcia — pasery jadą razem z grafiką,
+a ploter kalibruje się do tego, co znajdzie. Ale przy większych wartościach
+pasery mogą wyjść poza obszar, w którym urządzenie ich szuka, więc trzymaj
+je blisko zera.
+
+Przebieg:
 
 1. Wygeneruj paczkę, wydrukuj jeden arkusz **bez skalowania**.
-2. Wczytaj do Silhouette Studio, sprawdź czy czujnik znajduje wszystkie cztery
+2. Zmierz, gdzie wypadły pasery względem krawędzi kartki. Rozbieżność → wpisz
+   ją w **Kalibrację arkusza**.
+3. Wczytaj do Silhouette Studio, sprawdź czy czujnik znajduje wszystkie cztery
    pasery, potnij próbnie.
-3. Zmierz, o ile cięcie mija się z grafiką.
-4. W panelu → edytor szablonu → **Arkusz** wpisz różnicę w „Kalibracja użytków"
-   (krok 0,1 mm) i wygeneruj paczkę ponownie.
+4. Jeśli nóż mija się z grafiką → wpisz różnicę w **Kalibrację użytków**.
 
 Pozycje pojedynczych gniazd (`X`/`Y`) zmienia się tam, gdzie użytki mają być
-rozstawione inaczej; `slotOffset` służy do przesunięcia **wszystkich naraz**.
+rozstawione inaczej; oba `offset` służą do przesunięcia **wszystkich naraz**.
 
 ## Druk
 
@@ -207,12 +219,11 @@ paczkę, `CLEANUP=1` sprząta).
 - **Spad na arkuszu zbiorczym.** Ploter tnie po paserach z własną tolerancją,
   więc spad ma sens tylko wtedy, gdy użytki nie stykają się ze sobą — inaczej
   spad jednego wchodzi na sąsiada. Szablon zaproszenia 90 × 130 ma `bleedMm: 0`.
-- **`PrintSettings.printOffsetXMm/YMm` NIE jest stosowany do arkuszy z paserami.**
-  Ta globalna korekta kompensuje mechanikę drukarki przy kartkach, które i tak
-  się przycina. Tutaj byłaby szkodliwa: ploter mierzy pasery względem krawędzi
-  wciągniętego arkusza, więc przesunięcie wydruku rozjeżdża cięcie dokładnie
-  o tę wartość.
+- **`PrintSettings.printOffsetXMm/YMm` NIE jest stosowany do arkuszy z paserami** —
+  arkusz ma własną korektę w szablonie (`sheetOffset*`). Globalna kompensuje
+  podajnik dla kartek, które i tak się przycina, i nie musi pasować do arkusza
+  jadącego z innego podajnika.
 
-  Wykryte na wydruku: przy ustawieniu `-3 / -3 mm` lewy paser wypadał na 12,9 mm
-  zamiast 15,88, a rozstawy zostawały poprawne — bo offset przesuwa, nie skaluje.
-  Kalibracja użytków względem paserów ma własne pokrętło: `slotOffset*`.
+  Wykryte na wydruku: przy globalnym `-3 / -3 mm` lewy paser wypadał na 12,9 mm
+  zamiast 15,88, przy poprawnych rozstawach (178,2 i 265,2) — offset przesuwa,
+  nie skaluje.

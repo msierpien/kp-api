@@ -789,13 +789,13 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
     const packageBaseName = sanitizeFilePart(`${caseItem.order.orderReference}-${caseItem.template.code}`) || `case-${id}`;
 
     const pkg = normalizePrintPackageOptions(options.packageOptions);
-    // Globalna korekta pozycji kompensuje mechanike drukarki przy kartkach,
-    // ktore i tak sie przycina. Arkusz z paserami jej NIE dostaje: ploter
-    // mierzy pasery wzgledem krawedzi wciagnietego arkusza, wiec przesuniecie
-    // wydruku rozjezdza ciecie o dokladnie te wartosc. Kalibracje uzytkow
-    // wzgledem paserow ma wlasne pokretlo - `imposition.slotOffset*`.
-    const pdfOffsetXMm = imposition ? 0 : pkg.offsetXMm;
-    const pdfOffsetYMm = imposition ? 0 : pkg.offsetYMm;
+    // Globalna korekta z ustawien druku kompensuje mechanike podajnika przy
+    // kartkach, ktore i tak sie przycina. Arkusz z paserami ma WLASNA, w
+    // szablonie: kompensacja dobra dla docinanych kartek nie musi pasowac do
+    // arkusza jadacego z innego podajnika, a przesuniete pasery moga wyjsc
+    // poza obszar, w ktorym ploter ich szuka.
+    const pdfOffsetXMm = imposition ? imposition.sheetOffsetXMm || 0 : pkg.offsetXMm;
+    const pdfOffsetYMm = imposition ? imposition.sheetOffsetYMm || 0 : pkg.offsetYMm;
 
     const combinedPages: Array<{ png: Buffer; widthPx: number; heightPx: number; dpi: number }> = [];
 

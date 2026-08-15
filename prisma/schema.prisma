@@ -41,6 +41,7 @@ model Tenant {
   printAgents           PrintAgent[]
   printJobs             PrintJob[]
   decorationAssets      DecorationAsset[]
+  decorationCategories  DecorationCategory[]
   aiPromptTemplates     AiPromptTemplate[]
   aiUsageLogs           AiUsageLog[]
   caseHelpRequests      CaseHelpRequest[]
@@ -1121,7 +1122,9 @@ model AiSettings {
 model DecorationAsset {
   id        String   @id @default(cuid())
   tenantId  String   @map("tenant_id")
-  /// SLUBNE | KWIATOWE | LINIE | MONOGRAMY
+  /// Slug kategorii - patrz DecorationCategory.slug. Celowo bez klucza obcego:
+  /// kategoria to etykieta porzadkujaca, a nie wlasciciel pliku, i skasowanie
+  /// grupy nie moze pociagnac za soba ozdobnikow.
   category  String
   name      String
   /// Sciezka relatywna w storage.
@@ -1138,6 +1141,26 @@ model DecorationAsset {
 
   @@index([tenantId, category])
   @@map("decoration_assets")
+}
+
+/// Grupa ozdobnikow w bibliotece sprzedawcy - filtr nad ta sama biblioteka,
+/// widoczny tak samo w panelu i w portalu klienta.
+///
+/// `slug` jest kluczem zapisywanym w DecorationAsset.category, wiec zmiana
+/// samej NAZWY nie rusza plikow. Cztery pierwsze grupy (SLUBNE, KWIATOWE,
+/// LINIE, MONOGRAMY) wsiewa migracja, bo wczesniej byly zaszyte w kodzie.
+model DecorationCategory {
+  id        String   @id @default(cuid())
+  tenantId  String   @map("tenant_id")
+  slug      String
+  name      String
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, slug])
+  @@map("decoration_categories")
 }
 
 model PrintSettings {

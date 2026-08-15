@@ -1,7 +1,17 @@
+// Musi byc pierwszy: serwis ozdobnikow ciagnie config, ktory waliduje env.
+import './helpers/test-env';
+
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { applySvgTint, sanitizeSvg, svgSupportsTint, SvgSanitizeError } from '../src/lib/svg-sanitizer';
+import {
+  applySvgTint,
+  prepareSvgArtwork,
+  sanitizeSvg,
+  svgSupportsTint,
+  SvgSanitizeError,
+} from '../src/lib/svg-sanitizer';
+import { slugifyCategory } from '../src/services/admin/decorations.service';
 
 const wrap = (inner: string) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">${inner}</svg>`;
 
@@ -62,4 +72,28 @@ test('przebarwienie dziala tylko dla svg z currentColor i poprawnego hexa', () =
   assert.equal(applySvgTint(tintable, 'red; x'), tintable);
 
   assert.equal(svgSupportsTint(wrap('<path fill="#000" d="M0 0"/>')), false);
+});
+
+test('ozdobnik z twardym wypelnieniem daje sie przygotowac do przebarwiania', () => {
+  // Sedno sprawy: typowy eksport ma `fill="#000000"`, wiec sam upload
+  // (sanitize + svgSupportsTint) uznawal go za nieprzebarwialny na zawsze.
+  const raw = wrap('<path fill="#000000" d="M0 0"/><path fill="#FFFFFF" d="M1 1"/>');
+  assert.equal(svgSupportsTint(sanitizeSvg(raw)), false);
+
+  const prepared = prepareSvgArtwork(sanitizeSvg(raw), { tintable: true });
+  assert.equal(svgSupportsTint(prepared.svg), true);
+  assert.equal(prepared.tintableFills, 1, 'biel zostaje biela');
+  assert.ok(prepared.svg.includes('fill="#FFFFFF"'));
+
+  // Bez flagi plik przechodzi jak dotad - wielokolorowy ozdobnik nie traci barw.
+  assert.equal(svgSupportsTint(prepareSvgArtwork(sanitizeSvg(raw)).svg), false);
+});
+
+test('slug kategorii jest bezogonkowy i stabilny', () => {
+  // Slug siedzi w decoration_assets.category, wiec musi byc przewidywalny -
+  // i taki sam jak SLUBNE z pierwszej, zaszytej w kodzie wersji.
+  assert.equal(slugifyCategory('Ślubne'), 'SLUBNE');
+  assert.equal(slugifyCategory('  boho & rustykalne  '), 'BOHO_RUSTYKALNE');
+  assert.equal(slugifyCategory('Zażółć gęślą'), 'ZAZOLC_GESLA');
+  assert.equal(slugifyCategory('!!!'), '');
 });

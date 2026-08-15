@@ -284,9 +284,15 @@ function withPrimaryColor(layer: Layer, primaryColor: string | null): Layer {
 
   const fill = applyPrimaryColor(props.fill as string | undefined, primaryColor);
   const stroke = applyPrimaryColor(props.stroke as string | undefined, primaryColor);
-  if (fill === props.fill && stroke === props.stroke) return layer;
+  // Ozdobnik (SVG) trzyma kolor w `tint` - patrz withResolvedPrimaryColor
+  // w pakiecie. Ta sciezka renderuje POJEDYNCZA strone z mini-layoutu, wiec
+  // pakietowa wersja tu nie dojezdza i podmiane trzeba powtorzyc.
+  const tint = applyPrimaryColor(props.tint as string | undefined, primaryColor);
+  if (fill === props.fill && stroke === props.stroke && tint === props.tint) return layer;
 
-  return { ...layer, properties: { ...props, fill, stroke } } as Layer;
+  // Przez `unknown`: `properties` jest tu workowatym Record-em, a `Layer`
+  // to unia, w ktorej nie kazdy wariant zna wszystkie trzy kolory.
+  return { ...layer, properties: { ...props, fill, stroke, tint } } as unknown as Layer;
 }
 
 async function layerToFabricObject(

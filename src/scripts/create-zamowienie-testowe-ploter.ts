@@ -2,10 +2,14 @@
  * Zamowienie TESTOWE na dwa dwustronne zaproszenia z ploterem - end to end.
  *
  * Zaklada zamowienie, pozycje na 2 sztuki i sprawe personalizacji z gotowymi
- * odpowiedziami, a potem generuje paczke do druku ta sama sciezka, ktora
- * obsluguje prawdziwe zamowienia. Dzieki temu widac nie tylko render, ale
- * i to, co realnie wyladuje w ZIP-ie: ile arkuszy, jakie nazwy plikow,
- * jakie metadane.
+ * odpowiedziami - gotowa do wygenerowania paczki jednym kliknieciem w panelu.
+ *
+ * Paczki NIE generuje sam. Probowalem: `generateCasePrintPackage` wolany
+ * z CLI zapisuje pliki i assety, po czym proces zawisa przed transakcja
+ * koncowa (sprawa zostaje bez `READY_FOR_PRINT`). Serwis jest pisany pod
+ * kontekst zadania HTTP - middleware tenanta i polaczenia kolejki zyja tam
+ * inaczej niz w jednorazowym skrypcie. Generowanie z panelu przechodzi
+ * prawdziwa sciezka i to ona jest wiarygodnym testem.
  *
  * Sprawa dostaje `status: SUBMITTED` i komplet odpowiedzi, wiec nie trzeba
  * przechodzic portalu klienta.
@@ -16,6 +20,8 @@
  * Uruchamiany W KONTENERZE `personalization-api`:
  *   node dist/scripts/create-zamowienie-testowe-ploter.js
  *   TEMPLATE_CODE=URODZINY_18_PLOTER node dist/scripts/...
+ *
+ * Potem: panel -> sprawa -> "Generuj paczkę".
  *
  * Sprzatanie po testach:
  *   CLEANUP=1 node dist/scripts/create-zamowienie-testowe-ploter.js
@@ -149,22 +155,6 @@ async function main() {
     )
   )
 
-  if (process.env.RENDER === '1') {
-    const { generateCasePrintPackage } = await import('../services/admin/cases.service')
-    const result: any = await generateCasePrintPackage(caseItem.id)
-    console.log(
-      JSON.stringify(
-        {
-          paczka: {
-            plikow: result?.files?.length ?? result?.renderedItems?.length ?? null,
-            zip: result?.packageFilePath ?? result?.zip?.filePath ?? null,
-          },
-        },
-        null,
-        2
-      )
-    )
-  }
 }
 
 main()

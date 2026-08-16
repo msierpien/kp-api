@@ -52,6 +52,7 @@ export const TENANT_MODELS = new Set([
   'CustomerReturnRequest',
   'ReturnShippingPayment',
   'DecorationAsset',
+  'DecorationCategory',
   'CaseHelpRequest',
 ]);
 

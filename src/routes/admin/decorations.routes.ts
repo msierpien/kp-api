@@ -15,6 +15,11 @@ import {
   type DecorationBulkAction,
 } from '../../services/admin/decorations.service';
 import { RATE_LIMITS } from '../../lib/rate-limits';
+import { getTenantContext, getTenantId } from '../../lib/tenant-context';
+import {
+  AiDescribeUnavailableError,
+  describeDecorations,
+} from '../../services/ai/decoration-describe.service';
 
 /** Multipart oddaje pola tekstowe jako obiekty z `value`. */
 function fieldValue(fields: Record<string, { value?: unknown } | undefined>, key: string): string | undefined {
@@ -96,6 +101,69 @@ export async function decorationsRoutes(fastify: FastifyInstance) {
       } catch (error: any) {
         fastify.log.error(error);
         return reply.status(400).send({ error: 'Bad Request', message: error?.message });
+      }
+    }
+  );
+
+  // POST /admin/decorations/describe - propozycje tagow z wygladu grafiki
+  fastify.post<{ Body: { ids?: string[] } }>(
+    '/describe',
+    {
+      config: { rateLimit: RATE_LIMITS.adminUpload },
+      schema: {
+        tags: ['decorations'],
+        summary: 'Zaproponuj tagi, kategorię i nazwę na podstawie wyglądu',
+        body: {
+          type: 'object',
+          required: ['ids'],
+          properties: { ids: { type: 'array', items: { type: 'string' } } },
+        },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              suggestions: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            },
+          },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Body: { ids?: string[] } }>, reply: FastifyReply) => {
+      const ids = request.body?.ids;
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return reply.status(400).send({ error: 'Bad Request', message: 'Brak zaznaczenia' });
+      }
+
+      // Kazdy plik to osobne wywolanie modelu, wiec paczka ma sufit - inaczej
+      // jedno klikniecie potrafiloby zjesc dzienny budzet sprzedawcy.
+      if (ids.length > 25) {
+        return reply.status(400).send({
+          error: 'Bad Request',
+          message: 'Maksymalnie 25 ozdobników naraz — każdy to osobne zapytanie do modelu',
+        });
+      }
+
+      const context = getTenantContext();
+      const tenantId = getTenantId() || context?.tenantId;
+      if (!tenantId) {
+        return reply.status(403).send({ error: 'Forbidden', message: 'Brak kontekstu firmy' });
+      }
+
+      try {
+        const result = await describeDecorations({
+          tenantId,
+          userId: context?.userId ?? null,
+          ids,
+        });
+        return reply.send(result);
+      } catch (error: any) {
+        fastify.log.error(error);
+        const status = error instanceof AiDescribeUnavailableError ? 400 : 400;
+        return reply.status(status).send({
+          error: 'Bad Request',
+          message: error?.message || 'Nie udało się opisać grafik',
+        });
       }
     }
   );
@@ -228,6 +296,7 @@ export async function decorationsRoutes(fastify: FastifyInstance) {
       const rawName = fieldValue(fields, 'name');
       const rawTintable = fieldValue(fields, 'tintable');
       const rawTags = fieldValue(fields, 'tags');
+      const rawDetect = fieldValue(fields, 'detectFromFileName');
 
       if (!(await isDecorationCategory(rawCategory))) {
         return reply.status(400).send({
@@ -245,6 +314,7 @@ export async function decorationsRoutes(fastify: FastifyInstance) {
           category: rawCategory as string,
           name: rawName,
           tags: rawTags ? rawTags.split(',') : undefined,
+          detectFromFileName: rawDetect === 'true',
           tintable: rawTintable === 'true',
         });
         return reply.status(201).send({ decoration });

@@ -9,6 +9,7 @@ import { buildStorageUrl } from '../storage/local-storage.service';
 import { prepareSvgArtwork, sanitizeSvg, svgSupportsTint } from '../../lib/svg-sanitizer';
 import { assertAllowedImageUpload } from '../../lib/upload-validation';
 import { formatTagLabel, normalizeTags } from '../../lib/template-tags';
+import { suggestFromFileName } from '../../lib/decoration-naming';
 
 /**
  * Kategorie startowe - te same, ktore do 2026-08-16 byly zaszyte w kodzie.
@@ -303,6 +304,8 @@ export async function uploadDecoration(options: {
   name?: string;
   /** Etykiety do szukania - normalizowane tak samo jak przy szablonach. */
   tags?: string[];
+  /** Doczytac tagi z nazwy pliku (i kategorie, jesli nazwa ja wskazuje). */
+  detectFromFileName?: boolean;
   /**
    * Przygotowac plik do przebarwiania: twarde wypelnienia zamieniamy na
    * `currentColor`. Bez tego typowy eksport (`fill="#000000"`) trafia do
@@ -353,6 +356,19 @@ export async function uploadDecoration(options: {
     return { ...toView(duplicate), duplicate: true as const };
   }
 
+  // Tagi z nazwy pliku dokladamy do tych podanych recznie - paczka wgrywana
+  // hurtem i tak nie ma opisu, a „kokardka-slubna.svg” niesie go za darmo.
+  // To PROPOZYCJA: sprzedawca zdejmie nietrafione zaznaczeniem i „Zdejmij”.
+  const fromName = options.detectFromFileName
+    ? suggestFromFileName(fileName, {
+        tags: (await listTags({ tenantId, includeInactive: true })).map((item) => item.tag),
+        categories: (await listCategories({ tenantId })).map((item) => ({
+          slug: item.slug,
+          name: item.name,
+        })),
+      })
+    : { tags: [], matchedKnown: [] as string[] };
+
   const baseName = path.basename(fileName, path.extname(fileName));
   const safeName = baseName.replace(/[^a-zA-Z0-9_\-ąćęłńóśźżĄĆĘŁŃÓŚŹŻ ]/g, '_').slice(0, 60);
   const storedName = `${nanoid(10)}.${extension}`;
@@ -373,13 +389,16 @@ export async function uploadDecoration(options: {
   const row = await prisma.decorationAsset.create({
     data: {
       tenantId,
-      category,
+      // Nazwa wskazujaca istniejaca grupe wygrywa z domyslna z formularza:
+      // „slubne-kokardka.svg” wrzucone hurtem do „Kwiatowe” to prawie na pewno
+      // pomylka w wyborze kategorii, a nie w nazwie pliku.
+      category: fromName.category ?? category,
       name: options.name?.trim() || safeName || 'Ozdobnik',
       filePath: relativePath,
       mimeType: finalMime,
       fileSize: payload.length,
       tintable,
-      tags: normalizeTags(options.tags),
+      tags: normalizeTags([...(options.tags ?? []), ...fromName.tags]),
       contentHash,
       sortOrder: (last?.sortOrder ?? -1) + 1,
     },

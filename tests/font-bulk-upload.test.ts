@@ -56,13 +56,20 @@ function multipartBody(files: { field: string; fileName: string; content: Buffer
   return { boundary, payload: Buffer.concat(chunks) };
 }
 
-async function buildServer() {
+/**
+ * Serwer z limitami multipart DOKLADNIE jak produkcyjny src/index.ts.
+ *
+ * Globalne `files: 1` jest tu istotne: gdyby limit per-request go nie
+ * nadpisywal, busboy po cichu urwalby paczke po pierwszym pliku - odpowiedz
+ * bylaby wtedy udanym 201 na jeden font, a reszta znikalaby bez sladu.
+ */
+async function buildServer(limits: Record<string, number> = { fileSize: 10 * 1024 * 1024, files: 1 }) {
   const Fastify = (await import('fastify')).default;
   const multipart = (await import('@fastify/multipart')).default;
   const { fontsRoutes } = await import('../src/routes/admin/fonts.routes');
 
   const app = Fastify();
-  await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } });
+  await app.register(multipart, { limits });
   await app.register(fontsRoutes, { prefix: '/admin/fonts' });
   await app.ready();
   return app;
@@ -204,4 +211,115 @@ test('nierozczytany plik nie udaje kompletu polskich znakow', async () => {
   assert.equal(broken!.polishSupport.complete, false, 'nierozczytany plik nie moze udawac kompletu PL');
 
   await fsp.rm(brokenPath, { force: true });
+});
+
+test('50 krojow w jednym zadaniu przechodzi w calosci', async () => {
+  const app = await buildServer();
+  const source = REAL_FONTS.get('Poppins-Bold.ttf')!;
+
+  // Tyle, ile realnie wgrywa sie przy zakupie paczki krojow. Nadmiar nie moze
+  // zniknac po cichu: busboy przy przekroczeniu `files` URYWA strumien bez
+  // bledu, wiec brak asercji na liczbe zapisanych plikow nie wykrylby regresji.
+  const files = Array.from({ length: 50 }, (_, index) => ({
+    field: 'file',
+    fileName: `Paczka${String(index).padStart(2, '0')}.ttf`,
+    content: source,
+  }));
+
+  const { boundary, payload } = multipartBody(files);
+  const response = await app.inject({
+    method: 'POST',
+    url: '/admin/fonts',
+    headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    payload,
+  });
+
+  assert.equal(response.statusCode, 201);
+  const body = response.json();
+  assert.equal(body.fonts.length, 50, `zapisano ${body.fonts.length} z 50`);
+  assert.deepEqual(body.errors, []);
+
+  await app.close();
+});
+
+test('przekroczenie limitu plikow daje czytelny komunikat, nie gole 413', async () => {
+  const app = await buildServer();
+  const source = REAL_FONTS.get('Poppins-Bold.ttf')!;
+
+  const files = Array.from({ length: 70 }, (_, index) => ({
+    field: 'file',
+    fileName: `Nadmiar${String(index).padStart(2, '0')}.ttf`,
+    content: source,
+  }));
+
+  const { boundary, payload } = multipartBody(files);
+  const response = await app.inject({
+    method: 'POST',
+    url: '/admin/fonts',
+    headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    payload,
+  });
+
+  assert.equal(response.statusCode, 413);
+  const body = response.json();
+  assert.match(body.message, /limit 60/);
+  // Pliki, ktore zdazyly przejsc, musza byc wymienione - panel odswieza po nich
+  // liste, a uzytkownik wie, ile paczki jeszcze zostalo.
+  assert.ok(body.fonts.length > 0, 'czesciowo zapisane pliki musza byc w odpowiedzi');
+
+  await app.close();
+});
+
+test('ten sam plik wgrany drugi raz nadpisuje i jest oznaczony jako replaced', async () => {
+  const app = await buildServer();
+  const source = REAL_FONTS.get('AlexBrush-Regular.ttf')!;
+
+  const send = async (fileName: string) => {
+    const { boundary, payload } = multipartBody([{ field: 'file', fileName, content: source }]);
+    return app.inject({
+      method: 'POST',
+      url: '/admin/fonts',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload,
+    });
+  };
+
+  const first = await send('Duplikat.ttf');
+  assert.equal(first.json().fonts[0].replaced, false, 'pierwsze wgranie nie jest nadpisaniem');
+
+  const second = await send('Duplikat.ttf');
+  assert.equal(second.json().fonts[0].replaced, true, 'drugie wgranie nadpisuje poprzedni plik');
+
+  // Nadpisanie nie moze mnozyc pozycji w rejestrze.
+  const { listFonts, clearFontsListCache } = await import('../src/services/admin/fonts.service');
+  clearFontsListCache();
+  const matching = (await listFonts()).filter((font) => font.fileName === 'Duplikat.ttf');
+  assert.equal(matching.length, 1, 'rejestr trzyma jedna pozycje, nie dwie');
+
+  await app.close();
+});
+
+test('nazwa sprowadzona sanityzacja do istniejacej tez liczy sie jako nadpisanie', async () => {
+  const app = await buildServer();
+  const source = REAL_FONTS.get('Poppins-Bold.ttf')!;
+
+  const send = async (fileName: string) => {
+    const { boundary, payload } = multipartBody([{ field: 'file', fileName, content: source }]);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/admin/fonts',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload,
+    });
+    return response.json().fonts[0];
+  };
+
+  // Spacja i kropka lecza sie w "_", wiec oba pliki celuja w Moj_Krój.ttf.
+  const first = await send('Moj Krój.ttf');
+  assert.equal(first.replaced, false);
+  const second = await send('Moj.Krój.ttf');
+  assert.equal(second.fileName, first.fileName, 'sanityzacja daje te sama nazwe pliku');
+  assert.equal(second.replaced, true, 'kolizja po sanityzacji to nadpisanie');
+
+  await app.close();
 });

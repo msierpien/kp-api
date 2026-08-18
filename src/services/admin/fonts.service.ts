@@ -264,7 +264,7 @@ export function pickFontVariant(variants: FontItem[], weight: number, style: 'no
 export async function uploadFont(
   fileBuffer: Buffer,
   originalFileName: string
-): Promise<FontItem> {
+): Promise<FontItem & { replaced: boolean }> {
   await ensureFontsDir();
 
   const ext = path.extname(originalFileName).toLowerCase();
@@ -276,6 +276,18 @@ export async function uploadFont(
   const safeBaseName = baseName.replace(/[^a-zA-Z0-9_\-ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/g, '_');
   const fileName = `${safeBaseName}${ext}`;
   const fullPath = path.join(FONTS_DIR, fileName);
+
+  // Ta sama nazwa NADPISUJE poprzedni plik - to jest sposob na podmiane kroju
+  // na nowsza wersje, ale musi byc widoczne. Przy wgrywaniu paczki
+  // kilkudziesieciu plikow ciche nadpisanie znaczy, ze projektant nie wie,
+  // ktore szablony wlasnie dostaly inny rysunek liter.
+  // Uwaga: sanityzacja sprowadza rozne nazwy do jednej ("Font Name" i
+  // "Font.Name" daja oba "Font_Name"), wiec kolizja nie wymaga identycznej
+  // nazwy zrodlowej.
+  const replaced = await fs
+    .access(fullPath)
+    .then(() => true)
+    .catch(() => false);
 
   await fs.writeFile(fullPath, fileBuffer);
   clearFontsListCache();
@@ -295,6 +307,7 @@ export async function uploadFont(
     printable: PRINTABLE_FONT_FORMATS.includes(format),
     ...metadata,
     polishSupport,
+    replaced,
   };
 }
 

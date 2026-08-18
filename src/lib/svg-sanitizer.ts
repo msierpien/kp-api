@@ -136,12 +136,180 @@ export function countCutPaths(svg: string): number {
 }
 
 /**
+ * Elementy rysujace, ktorym wolno DOLOZYC brakujace wypelnienie.
+ *
+ * Eksport z Illustratora czy Figmy czesto nie zapisuje `fill` w ogole -
+ * ksztalt dziedziczy wtedy domyslna czern SVG. Regex od `fill="#hex"` takiego
+ * pliku nie widzi, wiec ozdobnik wchodzil do biblioteki „przygotowany”,
+ * a na wydruku i tak wychodzil czarny.
+ */
+const TINTABLE_SHAPES = new Set(['path', 'circle', 'rect', 'ellipse', 'polygon', 'polyline']);
+
+/**
+ * Poddrzewa, w ktorych `fill` nie jest kolorem rysunku, tylko sterowaniem:
+ * w masce decyduje o przezroczystosci, w sciezce obcinajacej jest ignorowany.
+ * Podmiana zrobilaby tam wiecej szkody niz pozytku.
+ */
+const FILL_SHIELDED = new Set(['clippath', 'mask']);
+
+/** Czy ten kolor wolno oddac pod `currentColor`. */
+function isTintableColor(value: string): boolean {
+  const color = value.trim().toLowerCase();
+  if (color === 'black') return true;
+  if (!/^#[0-9a-f]{3,8}$/.test(color)) return false;
+  // Biel zostaje biela: bywa swiadomym przykryciem, a nie kolorem rysunku.
+  return !/^#(f{3,4}|f{6}|f{8})$/.test(color);
+}
+
+/**
+ * Kolory z blokow `<style>` - druga typowa forma eksportu (`.cls-1{fill:#231f20}`).
+ *
+ * Zwraca takze dwa zbiory klas: te, ktorych wypelnienie wlasnie oddalismy pod
+ * `currentColor`, i te, ktore w ogole deklaruja `fill` - bo elementowi z taka
+ * klasa nie wolno juz dokladac atrybutu (regula z arkusza i tak by go pobila,
+ * a przy `fill:none` zrobilaby z niewidzialnego ksztaltu widoczna plame).
+ */
+function tintStyleBlocks(svg: string): {
+  svg: string;
+  tintedClasses: Set<string>;
+  classesWithFill: Set<string>;
+} {
+  const tintedClasses = new Set<string>();
+  const classesWithFill = new Set<string>();
+
+  const output = svg.replace(/<style\b[^>]*>([\s\S]*?)<\/style>/gi, (block, css: string) => {
+    const nextCss = css.replace(/([^{}]*)\{([^{}]*)\}/g, (rule, selector: string, body: string) => {
+      if (!/\bfill\s*:/i.test(body)) return rule;
+
+      const classes = [...selector.matchAll(/\.([\w-]+)/g)].map((match) => match[1]);
+      for (const name of classes) classesWithFill.add(name);
+
+      let changed = false;
+      const nextBody = body.replace(/\bfill\s*:\s*([^;}]+)/gi, (declaration, color: string) => {
+        if (!isTintableColor(color)) return declaration;
+        changed = true;
+        return 'fill:currentColor';
+      });
+
+      if (!changed) return rule;
+      for (const name of classes) tintedClasses.add(name);
+      return `${selector}{${nextBody}}`;
+    });
+
+    return nextCss === css ? block : block.replace(css, () => nextCss);
+  });
+
+  return { svg: output, tintedClasses, classesWithFill };
+}
+
+const OPEN_TAG = /<\s*(\/?)([a-zA-Z][\w.:-]*)((?:"[^"]*"|'[^']*'|[^>])*)>/g;
+
+/**
+ * Przejscie po drzewie: zamiana twardych wypelnien na `currentColor` i
+ * dolozenie ich tam, gdzie koloru nie ma wcale.
+ *
+ * Chodzimy po tagach zamiast strzelac samym regexem, bo `fill` sie dziedziczy:
+ * ksztalt w `<g fill="none">` jest niewidoczny i dolozenie mu wypelnienia
+ * wywalilo by na wydruk cos, czego projektant nigdy nie rysowal.
+ */
+function tintElements(
+  svg: string,
+  classes: { tintedClasses: Set<string>; classesWithFill: Set<string> }
+): { svg: string; tinted: number } {
+  const stack: Array<{ name: string; fill: boolean; shielded: boolean }> = [];
+  let out = '';
+  let last = 0;
+  let tinted = 0;
+
+  OPEN_TAG.lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = OPEN_TAG.exec(svg)) !== null) {
+    const [full, closing, rawName, rawAttrs] = match;
+    const name = rawName.toLowerCase();
+
+    if (closing) {
+      const open = stack.map((entry) => entry.name).lastIndexOf(name);
+      if (open >= 0) stack.length = open;
+      continue;
+    }
+
+    // Tresc arkusza to CSS, nie znaczniki - `>` w selektorze rozjechalby skaner.
+    if (name === 'style') {
+      const end = svg.toLowerCase().indexOf('</style', OPEN_TAG.lastIndex);
+      if (end >= 0) OPEN_TAG.lastIndex = end;
+      continue;
+    }
+
+    const shielded = stack.some((entry) => entry.shielded) || FILL_SHIELDED.has(name);
+    const inheritsFill = stack.some((entry) => entry.fill);
+    const selfClosing = /\/\s*$/.test(rawAttrs);
+
+    const styleValue = rawAttrs.match(/\bstyle\s*=\s*(["'])([\s\S]*?)\1/i)?.[2] ?? '';
+    const classValue = rawAttrs.match(/\bclass\s*=\s*(["'])([\s\S]*?)\1/i)?.[2] ?? '';
+    const classNames = classValue.split(/\s+/).filter(Boolean);
+
+    const hasFillAttr = /\bfill\s*=/i.test(rawAttrs);
+    const hasStyleFill = /\bfill\s*:/i.test(styleValue);
+    const hasClassFill = classNames.some((cls) => classes.classesWithFill.has(cls));
+    const definesFill = hasFillAttr || hasStyleFill || hasClassFill;
+
+    let attrs = rawAttrs;
+    let touched = classNames.some((cls) => classes.tintedClasses.has(cls));
+
+    if (!shielded) {
+      attrs = attrs.replace(/\bfill\s*=\s*(["'])([\s\S]*?)\1/gi, (declaration, quote, color: string) => {
+        if (!isTintableColor(color)) return declaration;
+        touched = true;
+        return `fill=${quote}currentColor${quote}`;
+      });
+
+      attrs = attrs.replace(/\bstyle\s*=\s*(["'])([\s\S]*?)\1/gi, (declaration, quote, value: string) => {
+        const next = value.replace(/\bfill\s*:\s*([^;]+)/gi, (fill, color: string) => {
+          if (!isTintableColor(color)) return fill;
+          touched = true;
+          return 'fill:currentColor';
+        });
+        return next === value ? declaration : `style=${quote}${next}${quote}`;
+      });
+
+      // Ksztalt bez zadnego zrodla koloru - to wlasnie ta domyslna czern.
+      if (!definesFill && !inheritsFill && TINTABLE_SHAPES.has(name)) {
+        attrs = ` fill="currentColor"${attrs}`;
+        touched = true;
+      }
+    }
+
+    if (touched) tinted += 1;
+
+    if (attrs !== rawAttrs) {
+      out += svg.slice(last, match.index) + `<${rawName}${attrs}>`;
+      last = match.index + full.length;
+    }
+
+    if (!selfClosing) {
+      stack.push({
+        name,
+        fill: definesFill || attrs !== rawAttrs,
+        shielded: FILL_SHIELDED.has(name),
+      });
+    }
+  }
+
+  return { svg: out + svg.slice(last), tinted };
+}
+
+/**
  * Zdejmuje z SVG sciezki noza i - opcjonalnie - przygotowuje go pod
  * przebarwianie, zamieniajac twarde wypelnienia na `currentColor`.
  *
  * Zamiana dotyczy WYLACZNIE wypelnien, nie obrysow: obrys, ktory przetrwal
  * czyszczenie, jest czescia rysunku (np. cienka kreska ozdobna) i ma
  * zachowac swoj kolor, dopoki projektant nie zdecyduje inaczej.
+ *
+ * `tintableFills` liczy ELEMENTY, ktore po przejsciu naprawde ida za kolorem
+ * warstwy - nie deklaracje w pliku. Zero znaczy wiec „nic sie nie zmienilo”,
+ * a nie „udalo sie”; panel ma o czym uczciwie powiedziec.
  */
 export function prepareSvgArtwork(
   svg: string,
@@ -152,13 +320,51 @@ export function prepareSvgArtwork(
 
   let tintableFills = 0;
   if (options.tintable) {
-    output = output.replace(/\bfill\s*=\s*"(#[0-9a-f]{3,8})"/gi, (match, color: string) => {
-      // Biel zostaje biela: bywa swiadomym przykryciem, a nie kolorem rysunku.
-      if (/^#f{3}$|^#f{6}$|^#f{8}$/i.test(color)) return match;
-      tintableFills += 1;
-      return 'fill="currentColor"';
-    });
+    const styled = tintStyleBlocks(output);
+    const elements = tintElements(styled.svg, styled);
+    output = elements.svg;
+    tintableFills = elements.tinted;
   }
 
   return { svg: output, removedCutPaths, tintableFills };
+}
+
+/**
+ * Plik ciecia: te same sciezki noza, ktore `prepareSvgArtwork` zdejmuje
+ * z podkladu - tylko zamiast do kosza ida do osobnego SVG.
+ *
+ * Po co: kontur wycinanego ksztaltu istnieje WYLACZNIE w grafice. Owalu
+ * z falowana krawedzia nie da sie odtworzyc z danych szablonu, ktory zna
+ * jedynie prostokat uzytku. Jedno zrodlo (plik z Silhouette) daje wiec
+ * i wydruk, i sciezke ciecia - bez ryzyka, ze ktos podmieni jedno, a drugie
+ * zostanie stare.
+ *
+ * Sciezki zachowuja wspolrzedne oryginalu, wiec zaimportowane do Silhouette
+ * Studio na arkuszu tego samego rozmiaru trafiaja tam, gdzie ma ciac nóż.
+ * Paserow NIE dokladamy: Studio rysuje wlasne przy wlaczeniu Print & Cut,
+ * a dwa komplety znakow to gotowa pomylka.
+ *
+ * Zwraca `null`, gdy plik nie ma zadnej sciezki noza - lepiej nie dawac
+ * przycisku niz dawac pusty plik.
+ */
+export function extractCutPathsSvg(svg: string): string | null {
+  const cuts = [...(svg.match(CUT_PATH) || []), ...(svg.match(CUT_PATH_REVERSED) || [])];
+  if (cuts.length === 0) return null;
+
+  // Naglowek oryginalu niesie rozmiar i viewBox - bez nich import wyladowalby
+  // w losowej skali.
+  const openTag = svg.match(/<svg[^>]*>/i)?.[0] ?? '<svg xmlns="http://www.w3.org/2000/svg">';
+
+  // Sciezki bywaja zapisane w <defs> i wolane przez <use>; kopiujemy je
+  // wprost, wiec odwolania po id nie sa potrzebne - i lepiej je zdjac, zeby
+  // nie kolidowaly z niczym po imporcie.
+  const body = cuts.map((path) => path.replace(/\sid="[^"]*"/i, '')).join('\n  ');
+
+  return `<?xml version="1.0" encoding="utf-8"?>
+${openTag}
+  <!-- Sciezki ciecia wyodrebnione z grafiki szablonu. Import do Silhouette
+       Studio na arkuszu tego samego rozmiaru; pasery wlacz w Studio. -->
+  ${body}
+</svg>
+`;
 }

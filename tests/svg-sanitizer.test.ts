@@ -89,6 +89,74 @@ test('ozdobnik z twardym wypelnieniem daje sie przygotowac do przebarwiania', ()
   assert.equal(svgSupportsTint(prepareSvgArtwork(sanitizeSvg(raw)).svg), false);
 });
 
+test('ozdobnik bez atrybutu fill dostaje wypelnienie pod kolor', () => {
+  // Eksport z Illustratora/Figmy: same sciezki, kolor bierze sie z domyslnej
+  // czerni SVG. Do tej pory taki plik przechodzil przygotowanie bez zmiany,
+  // a warstwa z `tint` drukowala sie na czarno.
+  const raw = wrap('<path d="M0 0"/><circle cx="1" cy="1" r="1"/>');
+
+  const prepared = prepareSvgArtwork(sanitizeSvg(raw), { tintable: true });
+  assert.equal(svgSupportsTint(prepared.svg), true);
+  assert.equal(prepared.tintableFills, 2);
+  assert.ok(prepared.svg.includes('<path fill="currentColor" d="M0 0"/>'));
+  assert.ok(prepared.svg.includes('<circle fill="currentColor" cx="1"'));
+});
+
+test('obrys bez wypelnienia zostaje nietkniety', () => {
+  // `fill="none"` + `stroke` znaczy: kolor niesie kreska. Dolozenie wypelnienia
+  // zalaloby ksztalt, ktory mial byc pusty.
+  const raw = wrap('<rect fill="none" stroke="#112233" x="0" y="0" width="4" height="4"/>');
+
+  const prepared = prepareSvgArtwork(sanitizeSvg(raw), { tintable: true });
+  assert.ok(prepared.svg.includes('fill="none"'));
+  assert.ok(prepared.svg.includes('stroke="#112233"'), 'obrys zachowuje swoj kolor');
+  assert.equal(prepared.tintableFills, 0);
+});
+
+test('ksztalt w grupie bez wypelnienia nie dostaje koloru', () => {
+  // `fill` sie dziedziczy - dziecko `<g fill="none">` jest niewidoczne
+  // celowo i ma takie zostac.
+  const raw = wrap('<g fill="none" stroke="#0a0a0a"><path d="M0 0"/></g>');
+
+  const prepared = prepareSvgArtwork(sanitizeSvg(raw), { tintable: true });
+  assert.equal(svgSupportsTint(prepared.svg), false);
+  assert.equal(prepared.tintableFills, 0);
+});
+
+test('kolor z bloku <style> idzie pod currentColor', () => {
+  // Druga typowa forma eksportu: kolory siedza w arkuszu, a element ma sama klase.
+  const raw = wrap(
+    '<style>.cls-1{fill:#231f20;}.cls-2{fill:none;stroke:#123456;}</style>' +
+      '<path class="cls-1" d="M0 0"/><path class="cls-2" d="M1 1"/>'
+  );
+
+  const prepared = prepareSvgArtwork(sanitizeSvg(raw), { tintable: true });
+  assert.ok(prepared.svg.includes('.cls-1{fill:currentColor;}'));
+  assert.ok(prepared.svg.includes('fill:none'), 'klasa bez wypelnienia zostaje bez wypelnienia');
+  assert.ok(
+    !/<path class="cls-2" fill=|fill="currentColor" class="cls-2"/.test(prepared.svg),
+    'element z klasa nie dostaje atrybutu, ktory arkusz i tak by pobil'
+  );
+  assert.equal(prepared.tintableFills, 1, 'liczymy elementy, nie deklaracje');
+});
+
+test('maski i sciezki obcinajace zostaja bez zmian', () => {
+  const raw = wrap('<defs><clipPath id="c"><path d="M0 0"/></clipPath></defs><path d="M1 1"/>');
+
+  const prepared = prepareSvgArtwork(sanitizeSvg(raw), { tintable: true });
+  assert.ok(prepared.svg.includes('<clipPath id="c"><path d="M0 0"/></clipPath>'));
+  assert.equal(prepared.tintableFills, 1);
+});
+
+test('plik bez czego przebarwiac raportuje zero', () => {
+  // Komunikat w panelu ma nie chwalic sie sukcesem przy zerowej zmianie.
+  const prepared = prepareSvgArtwork(sanitizeSvg(wrap('<path fill="#ffffff" d="M0 0"/>')), {
+    tintable: true,
+  });
+  assert.equal(prepared.tintableFills, 0);
+  assert.equal(svgSupportsTint(prepared.svg), false);
+});
+
 test('slug kategorii jest bezogonkowy i stabilny', () => {
   // Slug siedzi w decoration_assets.category, wiec musi byc przewidywalny -
   // i taki sam jak SLUBNE z pierwszej, zaszytej w kodzie wersji.

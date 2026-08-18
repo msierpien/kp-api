@@ -33,7 +33,7 @@ import {
 import { RATE_LIMITS } from '../../lib/rate-limits';
 import { assertCaseWritable, assertTokenUsable } from '../../lib/case-access';
 import { parseLayoutOverrides } from '../../schemas/personalization.schema';
-import { listCategories, listDecorations } from '../../services/admin/decorations.service';
+import { listCategories, listDecorations, listTags } from '../../services/admin/decorations.service';
 import { SvgSanitizeError, sanitizeSvg, svgSupportsTint } from '../../lib/svg-sanitizer';
 import {
   canonicalizeTemplateForms,
@@ -1369,6 +1369,7 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
             properties: {
               decorations: { type: 'array', items: { type: 'object', additionalProperties: true } },
               categories: { type: 'array', items: { type: 'object', additionalProperties: true } },
+              tags: { type: 'array', items: { type: 'object', additionalProperties: true } },
             },
           },
           403: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
@@ -1402,16 +1403,18 @@ export async function personalizationRoutes(fastify: FastifyInstance) {
           personalizationCase.order?.shop?.tenantId ||
           personalizationCase.orderItem?.order?.shop?.tenantId;
 
-        if (!tenantId) return reply.send({ decorations: [], categories: [] });
+        if (!tenantId) return reply.send({ decorations: [], categories: [], tags: [] });
 
-        // Kategorie ida razem z lista: portal filtruje nimi biblioteke, a od
-        // 2026-08-16 sprzedawca moze je nazwac i uszeregowac po swojemu.
-        const [decorations, categories] = await Promise.all([
+        // Kategorie i tagi ida razem z lista: portal filtruje nimi biblioteke,
+        // a sprzedawca nazywa je po swojemu. Tagi licza sie tylko z ozdobnikow
+        // wlaczonych - klient nie moze dostac filtra prowadzacego donikad.
+        const [decorations, categories, tags] = await Promise.all([
           listDecorations({ tenantId }),
           listCategories({ tenantId }),
+          listTags({ tenantId }),
         ]);
 
-        return reply.send({ decorations, categories });
+        return reply.send({ decorations, categories, tags });
       } catch (error) {
         return failWithReference(request, reply, error, 'Nie udało się pobrać ozdobników');
       }

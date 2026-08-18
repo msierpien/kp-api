@@ -1,15 +1,18 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
+  bulkUpdateDecorations,
   createCategory,
   deleteCategory,
   deleteDecoration,
   isDecorationCategory,
   listCategories,
   listDecorations,
+  listTags,
   retintDecoration,
   updateCategory,
   updateDecoration,
   uploadDecoration,
+  type DecorationBulkAction,
 } from '../../services/admin/decorations.service';
 import { RATE_LIMITS } from '../../lib/rate-limits';
 
@@ -38,6 +41,7 @@ export async function decorationsRoutes(fastify: FastifyInstance) {
             properties: {
               decorations: { type: 'array', items: { type: 'object', additionalProperties: true } },
               categories: { type: 'array', items: { type: 'object', additionalProperties: true } },
+              tags: { type: 'array', items: { type: 'object', additionalProperties: true } },
             },
           },
         },
@@ -47,11 +51,52 @@ export async function decorationsRoutes(fastify: FastifyInstance) {
       request: FastifyRequest<{ Querystring: { includeInactive?: boolean } }>,
       reply: FastifyReply
     ) => {
-      const [decorations, categories] = await Promise.all([
-        listDecorations({ includeInactive: request.query.includeInactive === true }),
+      const includeInactive = request.query.includeInactive === true;
+      const [decorations, categories, tags] = await Promise.all([
+        listDecorations({ includeInactive }),
         listCategories({ ensureDefaults: true }),
+        listTags({ includeInactive }),
       ]);
-      return reply.send({ decorations, categories });
+      return reply.send({ decorations, categories, tags });
+    }
+  );
+
+  // POST /admin/decorations/bulk - operacja na zaznaczeniu
+  fastify.post<{ Body: { ids?: string[]; action?: DecorationBulkAction } }>(
+    '/bulk',
+    {
+      schema: {
+        tags: ['decorations'],
+        summary: 'Zmiana kategorii, tagów, widoczności albo usunięcie zaznaczenia',
+        body: {
+          type: 'object',
+          required: ['ids', 'action'],
+          properties: {
+            ids: { type: 'array', items: { type: 'string' } },
+            action: { type: 'object', additionalProperties: true },
+          },
+        },
+        response: {
+          200: { type: 'object', properties: { affected: { type: 'integer' } } },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
+    async (
+      request: FastifyRequest<{ Body: { ids?: string[]; action?: DecorationBulkAction } }>,
+      reply: FastifyReply
+    ) => {
+      const { ids, action } = request.body || {};
+      if (!Array.isArray(ids) || !action?.type) {
+        return reply.status(400).send({ error: 'Bad Request', message: 'Brak zaznaczenia albo akcji' });
+      }
+
+      try {
+        return reply.send(await bulkUpdateDecorations(ids, action));
+      } catch (error: any) {
+        fastify.log.error(error);
+        return reply.status(400).send({ error: 'Bad Request', message: error?.message });
+      }
     }
   );
 
@@ -182,6 +227,7 @@ export async function decorationsRoutes(fastify: FastifyInstance) {
       const rawCategory = fieldValue(fields, 'category');
       const rawName = fieldValue(fields, 'name');
       const rawTintable = fieldValue(fields, 'tintable');
+      const rawTags = fieldValue(fields, 'tags');
 
       if (!(await isDecorationCategory(rawCategory))) {
         return reply.status(400).send({
@@ -198,6 +244,7 @@ export async function decorationsRoutes(fastify: FastifyInstance) {
           mimeType: data.mimetype,
           category: rawCategory as string,
           name: rawName,
+          tags: rawTags ? rawTags.split(',') : undefined,
           tintable: rawTintable === 'true',
         });
         return reply.status(201).send({ decoration });
@@ -214,7 +261,7 @@ export async function decorationsRoutes(fastify: FastifyInstance) {
   // PATCH /admin/decorations/:id - nazwa, kategoria, kolejnosc, widocznosc
   fastify.patch<{
     Params: { id: string };
-    Body: { name?: string; category?: string; sortOrder?: number; isActive?: boolean };
+    Body: { name?: string; category?: string; sortOrder?: number; isActive?: boolean; tags?: string[] };
   }>(
     '/:id',
     {
@@ -229,6 +276,7 @@ export async function decorationsRoutes(fastify: FastifyInstance) {
             category: { type: 'string' },
             sortOrder: { type: 'integer' },
             isActive: { type: 'boolean' },
+            tags: { type: 'array', items: { type: 'string' } },
           },
         },
         response: {
@@ -240,7 +288,7 @@ export async function decorationsRoutes(fastify: FastifyInstance) {
     async (
       request: FastifyRequest<{
         Params: { id: string };
-        Body: { name?: string; category?: string; sortOrder?: number; isActive?: boolean };
+        Body: { name?: string; category?: string; sortOrder?: number; isActive?: boolean; tags?: string[] };
       }>,
       reply: FastifyReply
     ) => {

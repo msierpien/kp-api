@@ -7,6 +7,7 @@ import { getTenantContext, getTenantId } from '../../lib/tenant-context';
 import { buildStorageUrl } from '../storage/local-storage.service';
 import { prepareSvgArtwork, sanitizeSvg, svgSupportsTint } from '../../lib/svg-sanitizer';
 import { assertAllowedImageUpload } from '../../lib/upload-validation';
+import { formatTagLabel, normalizeTags } from '../../lib/template-tags';
 
 /**
  * Kategorie startowe - te same, ktore do 2026-08-16 byly zaszyte w kodzie.
@@ -44,8 +45,17 @@ export interface DecorationView {
   fileSize: number;
   /** SVG z `currentColor` da sie przebarwic na kolor z palety projektu. */
   tintable: boolean;
+  /** Etykiety do szukania - znormalizowane, patrz lib/template-tags.ts. */
+  tags: string[];
   isActive: boolean;
   sortOrder: number;
+}
+
+/** Tag z liczba ozdobnikow - zasila podpowiedzi i chipy filtrujace. */
+export interface DecorationTagView {
+  tag: string;
+  label: string;
+  count: number;
 }
 
 /** Wynik przygotowania SVG - panel raportuje z tego, co realnie zrobil. */
@@ -90,6 +100,7 @@ function toView(row: {
   mimeType: string;
   fileSize: number;
   tintable: boolean;
+  tags: string[];
   isActive: boolean;
   sortOrder: number;
 }): DecorationView {
@@ -102,6 +113,7 @@ function toView(row: {
     mimeType: row.mimeType,
     fileSize: row.fileSize,
     tintable: row.tintable,
+    tags: row.tags ?? [],
     isActive: row.isActive,
     sortOrder: row.sortOrder,
   };
@@ -280,6 +292,8 @@ export async function uploadDecoration(options: {
   mimeType: string;
   category: string;
   name?: string;
+  /** Etykiety do szukania - normalizowane tak samo jak przy szablonach. */
+  tags?: string[];
   /**
    * Przygotowac plik do przebarwiania: twarde wypelnienia zamieniamy na
    * `currentColor`. Bez tego typowy eksport (`fill="#000000"`) trafia do
@@ -344,6 +358,7 @@ export async function uploadDecoration(options: {
       mimeType: finalMime,
       fileSize: payload.length,
       tintable,
+      tags: normalizeTags(options.tags),
       sortOrder: (last?.sortOrder ?? -1) + 1,
     },
   });
@@ -354,7 +369,7 @@ export async function uploadDecoration(options: {
 /** Metadane ozdobnika: nazwa, przynaleznosc do grupy, kolejnosc, widocznosc. */
 export async function updateDecoration(
   id: string,
-  patch: { name?: string; category?: string; sortOrder?: number; isActive?: boolean }
+  patch: { name?: string; category?: string; sortOrder?: number; isActive?: boolean; tags?: string[] }
 ): Promise<DecorationView> {
   const tenantId = requireTenantId();
 
@@ -375,10 +390,133 @@ export async function updateDecoration(
       ...(patch.category !== undefined ? { category: patch.category } : {}),
       ...(patch.sortOrder !== undefined ? { sortOrder: patch.sortOrder } : {}),
       ...(patch.isActive !== undefined ? { isActive: patch.isActive } : {}),
+      ...(patch.tags !== undefined ? { tags: normalizeTags(patch.tags) } : {}),
     },
   });
 
   return toView(updated);
+}
+
+/**
+ * Tagi uzywane w bibliotece wraz z liczba ozdobnikow.
+ *
+ * Zasila i podpowiedzi przy opisywaniu pliku, i chipy filtrujace nad lista -
+ * ten sam uklad co przy szablonach. Sortowanie po liczbie uzyc, nie
+ * alfabetycznie: czesciej siega sie po „roza” niz po tag wpisany raz.
+ *
+ * Portal klienta wola to z `tenantId` ze sprawy i widzi TYLKO tagi
+ * ozdobnikow wlaczonych - inaczej podpowiadalby filtry prowadzace donikad.
+ */
+export async function listTags(
+  options: { tenantId?: string; includeInactive?: boolean } = {}
+): Promise<DecorationTagView[]> {
+  const tenantId = options.tenantId || requireTenantId();
+
+  const rows = await prisma.decorationAsset.findMany({
+    where: { tenantId, ...(options.includeInactive ? {} : { isActive: true }) },
+    select: { tags: true },
+  });
+
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    for (const tag of row.tags ?? []) {
+      counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+  }
+
+  return [...counts.entries()]
+    .map(([tag, count]) => ({ tag, label: formatTagLabel(tag), count }))
+    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag, 'pl'));
+}
+
+/** Co zrobic z zaznaczeniem - jedno zadanie zamiast N osobnych. */
+export type DecorationBulkAction =
+  | { type: 'category'; category: string }
+  | { type: 'addTags'; tags: string[] }
+  | { type: 'removeTags'; tags: string[] }
+  | { type: 'visibility'; isActive: boolean }
+  | { type: 'delete' };
+
+/**
+ * Operacja na wielu ozdobnikach naraz.
+ *
+ * Jedno zadanie, nie N: panel i tak przechodzi przez limit szybkosci, a przy
+ * pieciudziesieciu zaznaczonych plikach seria osobnych wywolan rwalaby sie
+ * w polowie. Przy okazji zmiana jest atomowa - albo caly zestaw, albo nic.
+ *
+ * Zwraca liczbe ruszonych rekordow; `ids` spoza tenanta odpadaja po cichu,
+ * bo `where` zawsze niesie `tenantId`.
+ */
+export async function bulkUpdateDecorations(
+  ids: string[],
+  action: DecorationBulkAction
+): Promise<{ affected: number }> {
+  const tenantId = requireTenantId();
+  const unique = [...new Set(ids.filter((id) => typeof id === 'string' && id))];
+  if (unique.length === 0) return { affected: 0 };
+
+  const where = { id: { in: unique }, tenantId };
+
+  if (action.type === 'category') {
+    if (!(await isDecorationCategory(action.category))) {
+      throw new Error('Nieprawidłowa kategoria');
+    }
+    const result = await prisma.decorationAsset.updateMany({
+      where,
+      data: { category: action.category },
+    });
+    return { affected: result.count };
+  }
+
+  if (action.type === 'visibility') {
+    const result = await prisma.decorationAsset.updateMany({
+      where,
+      data: { isActive: action.isActive },
+    });
+    return { affected: result.count };
+  }
+
+  if (action.type === 'delete') {
+    // Pliki kasujemy best-effort PO usunieciu wpisow - brak pliku na dysku
+    // nie moze zablokowac porzadkow w bibliotece.
+    const rows = await prisma.decorationAsset.findMany({ where, select: { id: true, filePath: true } });
+    const result = await prisma.decorationAsset.deleteMany({ where });
+
+    await Promise.all(
+      rows.map(async (row) => {
+        try {
+          await fs.unlink(path.join(config.storage.path, row.filePath));
+        } catch {
+          /* plik mogl juz zniknac */
+        }
+      })
+    );
+
+    return { affected: result.count };
+  }
+
+  // Tagi trzeba zlaczyc per rekord (kazdy ma wlasny zestaw), wiec tu
+  // `updateMany` nie wystarczy - ale caly zestaw idzie jedna transakcja.
+  const tags = normalizeTags(action.tags);
+  if (tags.length === 0) return { affected: 0 };
+
+  const rows = await prisma.decorationAsset.findMany({ where, select: { id: true, tags: true } });
+
+  const updates = rows.map((row) => {
+    const current = new Set(row.tags ?? []);
+    if (action.type === 'addTags') {
+      for (const tag of tags) current.add(tag);
+    } else {
+      for (const tag of tags) current.delete(tag);
+    }
+    return prisma.decorationAsset.update({
+      where: { id: row.id },
+      data: { tags: [...current].sort() },
+    });
+  });
+
+  await prisma.$transaction(updates);
+  return { affected: updates.length };
 }
 
 /**

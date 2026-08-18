@@ -1133,6 +1133,10 @@ model DecorationAsset {
   fileSize  Int      @map("file_size")
   /// SVG z `currentColor` da sie przebarwic na kolor z palety projektu.
   tintable  Boolean  @default(false)
+  /// Etykiety do szukania: kategoria bywa za gruba, bo ta sama kokardka
+  /// pasuje i do slubnych, i do urodzinowych. Zapis znormalizowany
+  /// (male litery, bez ogonkow) - patrz lib/template-tags.ts.
+  tags      String[] @default([])
   isActive  Boolean  @default(true) @map("is_active")
   sortOrder Int      @default(0) @map("sort_order")
   createdAt DateTime @default(now()) @map("created_at")
@@ -1140,6 +1144,7 @@ model DecorationAsset {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, category])
+  @@index([tags], type: Gin)
   @@map("decoration_assets")
 }
 

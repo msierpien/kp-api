@@ -1596,3 +1596,60 @@ export async function renderPrintPdf(data: TemplateData): Promise<Buffer> {
 }
 
 export { RenderOptions, TemplateData, WatermarkConfig };
+
+/**
+ * Miniatura szablonu do biblioteki w panelu.
+ *
+ * Renderujemy tym samym kodem co wydruk (`renderPageToPng`) - karta ma
+ * pokazywac projekt, a nie osobna atrape, ktora z czasem rozjedzie sie
+ * z prawdziwym layoutem. Bierzemy pierwsza strone wariantu podstawowego,
+ * bo to ona jest "okladka" szablonu.
+ *
+ * Wynik to JPEG na bialym tle: miniatura ma wazyc kilkadziesiat kB, a karta
+ * i tak stoi na bialym, wiec kanal alpha nic tu nie wnosi.
+ */
+export async function renderTemplateThumbnailJpeg(
+  layout: TemplateLayoutJson,
+  answers: Record<string, any> = {},
+  options: { widthPx?: number; quality?: number } = {}
+): Promise<{ buffer: Buffer; widthPx: number; heightPx: number }> {
+  // `getTemplatePages`, a nie wersja po odpowiedziach: format trzyma w `pages`
+  // lustro WARIANTU PODSTAWOWEGO wlasnie dla takich konsumentow jak lista
+  // szablonow. Miniatura ma pokazywac uklad bazowy, a nie ten, ktory wypadl
+  // z przykladowych wartosci pol.
+  const page = getTemplatePages(layout)[0];
+  if (!page) {
+    throw new Error('Szablon nie ma strony, z ktorej mozna zrobic miniature');
+  }
+
+  const targetWidth = Math.max(200, Math.min(1600, Math.round(options.widthPx || 720)));
+  const { widthPx: nativeWidth } = canvasPxDimensions(page.canvas);
+  // Nigdy nie skalujemy w gore - z winietki 1240 px robimy 720 px, ale
+  // maleńkiego projektu nie rozdymamy do rozmytej miniatury.
+  const scale = Math.min(1, targetWidth / Math.max(1, nativeWidth));
+
+  const render = await renderPageToPng(
+    page,
+    answers,
+    undefined,
+    undefined,
+    scale,
+    resolvePrimaryColor(layout as any, undefined)
+  );
+
+  const { createCanvas, Image } = await import('canvas');
+  const canvas = createCanvas(render.widthPx, render.heightPx);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, render.widthPx, render.heightPx);
+
+  const img = new Image();
+  img.src = render.buffer;
+  ctx.drawImage(img, 0, 0, render.widthPx, render.heightPx);
+
+  return {
+    buffer: canvas.toBuffer('image/jpeg', { quality: options.quality ?? 0.82 }),
+    widthPx: render.widthPx,
+    heightPx: render.heightPx,
+  };
+}

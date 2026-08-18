@@ -37,6 +37,7 @@ import {
   MAX_TEMPLATE_ASSET_BYTES,
   assertAllowedImageUpload,
 } from '../../lib/upload-validation';
+import { regenerateTemplateThumbnail } from '../../services/admin/template-thumbnail.service';
 import { ConflictError, NotFoundError } from '../../lib/errors';
 import { RATE_LIMITS } from '../../lib/rate-limits';
 
@@ -67,6 +68,10 @@ const templateItemResponseSchema = {
     fieldCount: { type: 'number' },
     individualFieldCount: { type: 'number' },
     productCount: { type: 'number' },
+    // Liczba aktywnych mapowan na produkty w sklepach. Bez zadeklarowania
+    // pola fast-json-stringify wycina je z odpowiedzi, a karta w bibliotece
+    // pokazuje wtedy "brak produktow" nawet przy podpietym produkcie.
+    mappingCount: { type: 'number' },
     createdAt: { type: 'string' },
   },
   required: ['id', 'name', 'code', 'version', 'isActive', 'createdAt'],
@@ -439,6 +444,48 @@ export async function templatesRoutes(fastify: FastifyInstance) {
         }
         fastify.log.error(error);
         return reply.status(400).send({ error: 'Duplicate Failed', message: error.message });
+      }
+    }
+  );
+
+  // POST /admin/templates/:id/thumbnail - odswiez miniature w bibliotece
+  fastify.post<{ Params: TemplateIdParams }>(
+    '/:id/thumbnail',
+    {
+      config: {
+        // Render kosztuje CPU, wiec ten sam limit co uploady - klikanie
+        // „odswiez” w kolko nie ma zajezdzic serwera.
+        rateLimit: RATE_LIMITS.adminUpload,
+      },
+      schema: {
+        tags: ['templates'],
+        summary: 'Wygeneruj miniaturę szablonu z aktualnego layoutu',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: {
+          200: {
+            type: 'object',
+            properties: { thumbnailUrl: { type: ['string', 'null'] } },
+          },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+          404: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
+    async (request: FastifyRequest<{ Params: TemplateIdParams }>, reply: FastifyReply) => {
+      const paramsParsed = templateIdParamsSchema.safeParse(request.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send({ error: 'Validation Error', message: paramsParsed.error.errors[0].message });
+      }
+
+      try {
+        const thumbnailUrl = await regenerateTemplateThumbnail(paramsParsed.data.id);
+        return reply.send({ thumbnailUrl });
+      } catch (error: any) {
+        if (error instanceof NotFoundError) {
+          return reply.status(error.statusCode).send({ error: error.error, message: error.message });
+        }
+        fastify.log.error(error);
+        return reply.status(400).send({ error: 'Thumbnail Failed', message: error.message });
       }
     }
   );

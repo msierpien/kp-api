@@ -6,6 +6,7 @@ import { buildDeletedFieldKeySet, buildFieldRenameMap, migrateLayoutFieldKeys, r
 import { assertTemplateVersion, templateVersionToken } from './template-version';
 import { ConflictError, NotFoundError } from '../../lib/errors';
 import { formatTagLabel, normalizeTags } from '../../lib/template-tags';
+import { deleteTemplateThumbnail, scheduleTemplateThumbnail } from './template-thumbnail.service';
 
 export async function listTemplates() {
   const templates = await prisma.personalizationTemplate.findMany({
@@ -206,7 +207,7 @@ export async function duplicateTemplate(templateId: string, input: { code: strin
     throw new ConflictError(`Szablon o kodzie "${input.code}" już istnieje`);
   }
 
-  return prisma.personalizationTemplate.create({
+  const duplicate = await prisma.personalizationTemplate.create({
     data: {
       code: input.code,
       name: input.name,
@@ -217,7 +218,10 @@ export async function duplicateTemplate(templateId: string, input: { code: strin
       editorType: source.editorType,
       isActive: source.isActive,
       layoutJson: (source.layoutJson ?? undefined) as any,
-      thumbnailUrl: source.thumbnailUrl,
+      // Kopia dostaje wlasna miniature (nizej, w tle) - dziedziczenie sciezki
+      // po oryginale wiazaloby dwa szablony z jednym plikiem, a ten znika przy
+      // kolejnym zapisie projektu oryginalu.
+      thumbnailUrl: null,
       forms: {
         create: source.forms.map((form) => ({
           name: form.name,
@@ -255,6 +259,10 @@ export async function duplicateTemplate(templateId: string, input: { code: strin
       createdAt: true,
     },
   });
+
+  scheduleTemplateThumbnail(duplicate.id);
+
+  return duplicate;
 }
 
 export async function createTemplate(input: CreateTemplateInput) {
@@ -341,6 +349,11 @@ export async function deleteTemplate(templateId: string) {
     throw new Error(`Nie można usunąć szablonu. Jest używany przez ${usageCount} produktów personalizowanych.`);
   }
 
+  const template = await prisma.personalizationTemplate.findUnique({
+    where: { id: templateId },
+    select: { thumbnailUrl: true },
+  });
+
   // Delete forms and fields first (cascade)
   await prisma.$transaction(async (tx) => {
     await tx.formField.deleteMany({
@@ -353,6 +366,8 @@ export async function deleteTemplate(templateId: string) {
       where: { id: templateId },
     });
   });
+
+  await deleteTemplateThumbnail(template?.thumbnailUrl);
 
   return { success: true };
 }

@@ -8,6 +8,7 @@ import { assertTemplateVersion, templateVersionToken } from './template-version'
 import fs from 'fs/promises';
 import path from 'path';
 import { imageExtensionForMimeType } from '../../lib/upload-validation';
+import { scheduleTemplateThumbnail } from './template-thumbnail.service';
 
 const STORAGE_DIR = path.join(process.cwd(), 'storage', 'templates');
 const MAX_ASSETS_PER_TEMPLATE = 50;
@@ -128,6 +129,9 @@ export async function restoreTemplateLayoutVersion(templateId: string, versionId
     select: { layoutJson: true, updatedAt: true },
   });
 
+  // Przywrocony projekt to inny obrazek - miniatura musi za nim pojsc.
+  scheduleTemplateThumbnail(templateId);
+
   return {
     layout: updated.layoutJson as unknown as TemplateLayoutJson,
     version: templateVersionToken(updated.updatedAt),
@@ -178,6 +182,9 @@ export async function updateTemplateLayout(
     },
     select: { layoutJson: true, updatedAt: true },
   });
+
+  // Miniatura do biblioteki - w tle, zeby zapis projektu nie czekal na render.
+  scheduleTemplateThumbnail(templateId);
 
   return {
     layout: updated.layoutJson as unknown as TemplateLayoutJson,

@@ -14,6 +14,17 @@ const FONTS_LIST_CACHE_TTL_MS = Number(process.env.FONTS_LIST_CACHE_TTL_MS ?? 5 
  */
 export const PRINTABLE_FONT_FORMATS = ['ttf', 'otf'];
 
+/** Polskie znaki diakrytyczne - komplet obu wielkosci. */
+const POLISH_CHARS = ['ą', 'ć', 'ę', 'ł', 'ń', 'ó', 'ś', 'ź', 'ż', 'Ą', 'Ć', 'Ę', 'Ł', 'Ń', 'Ó', 'Ś', 'Ź', 'Ż'];
+
+export interface PolishSupportInfo {
+  /** Czy plik dal sie otworzyc i sprawdzic - false np. dla TTC/DFont. */
+  checked: boolean;
+  complete: boolean;
+  /** Brakujace znaki (puste, gdy checked=false - nie znaczy to kompletu). */
+  missing: string[];
+}
+
 export interface FontItem {
   id: string;       // fileName without extension (safe name)
   family: string;   // Display name (original name without extension)
@@ -36,6 +47,8 @@ export interface FontItem {
   variantLabel: string;
   /** Krój zmienny - plik niesie os wagi, nie pojedyncza wartosc. */
   variable: boolean;
+  /** Pokrycie polskich znakow diakrytycznych - patrz checkPolishSupport. */
+  polishSupport: PolishSupportInfo;
 }
 
 /** Metadane odczytane z pliku; brak = plik nie do rozczytania. */
@@ -86,6 +99,29 @@ async function readFontMetadata(fullPath: string, format: string): Promise<FontM
   } catch (error) {
     console.warn(`[Fonts] Nie udalo sie odczytac metadanych z ${path.basename(fullPath)}:`, error);
     return null;
+  }
+}
+
+/**
+ * Sprawdza, czy plik ma glify dla wszystkich polskich znakow diakrytycznych.
+ *
+ * Dziala na wszystkich formatach (fontkit otwiera tez woff/woff2), w
+ * odroznieniu od readFontMetadata, ktora ogranicza sie do TTF/OTF - to
+ * ograniczenie dotyczy tylko wyboru pliku do druku, a znajomosc polskich
+ * znakow jest przydatna rowniez dla fontow tylko-podgladowych.
+ */
+async function checkPolishSupport(fullPath: string): Promise<PolishSupportInfo> {
+  try {
+    const font: any = await fontkit.open(fullPath);
+    if (!font || font.type === 'TTC' || font.type === 'DFont' || typeof font.hasGlyphForCodePoint !== 'function') {
+      return { checked: false, complete: false, missing: [] };
+    }
+
+    const missing = POLISH_CHARS.filter((char) => !font.hasGlyphForCodePoint(char.codePointAt(0)));
+    return { checked: true, complete: missing.length === 0, missing };
+  } catch (error) {
+    console.warn(`[Fonts] Nie udalo sie sprawdzic polskich znakow w ${path.basename(fullPath)}:`, error);
+    return { checked: false, complete: false, missing: [] };
   }
 }
 
@@ -147,6 +183,7 @@ export async function listFonts(): Promise<FontItem[]> {
     const family = baseName.replace(/_/g, ' ');
     const format = ext.replace('.', '');
     const metadata = (await readFontMetadata(fullPath, format)) ?? fallbackMetadata(family);
+    const polishSupport = await checkPolishSupport(fullPath);
 
     return {
       id: baseName,
@@ -157,6 +194,7 @@ export async function listFonts(): Promise<FontItem[]> {
       format,
       printable: PRINTABLE_FONT_FORMATS.includes(format),
       ...metadata,
+      polishSupport,
     };
   }));
 
@@ -245,6 +283,7 @@ export async function uploadFont(
   const family = safeBaseName.replace(/_/g, ' ');
   const format = ext.replace('.', '');
   const metadata = (await readFontMetadata(fullPath, format)) ?? fallbackMetadata(family);
+  const polishSupport = await checkPolishSupport(fullPath);
 
   return {
     id: safeBaseName,
@@ -255,6 +294,7 @@ export async function uploadFont(
     format,
     printable: PRINTABLE_FONT_FORMATS.includes(format),
     ...metadata,
+    polishSupport,
   };
 }
 

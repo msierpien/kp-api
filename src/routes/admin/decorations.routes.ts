@@ -160,7 +160,7 @@ export async function decorationsRoutes(fastify: FastifyInstance) {
   fastify.post(
     '/',
     {
-      config: { rateLimit: RATE_LIMITS.adminUpload },
+      config: { rateLimit: RATE_LIMITS.decorationUpload },
       schema: {
         tags: ['decorations'],
         summary: 'Wgraj ozdobnik (SVG/PNG/JPG/WebP)',

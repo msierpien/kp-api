@@ -36,6 +36,19 @@ export const RATE_LIMITS = {
     timeWindow: '1 minute',
     groupId: 'admin-upload',
   },
+  /**
+   * Wgrywanie ozdobnikow - osobno od reszty panelu, bo to JEDYNY upload
+   * robiony paczkami (sprzedawca wrzuca cala biblioteke naraz).
+   *
+   * Wyzszy prog jest tu bezpieczny, bo ozdobnik ma twardy limit 2 MB,
+   * podczas gdy tlo szablonu albo czcionka moga miec 10 MB - stad nie
+   * podnosimy wspolnego `adminUpload`.
+   */
+  decorationUpload: {
+    max: 50,
+    timeWindow: '1 minute',
+    groupId: 'decoration-upload',
+  },
   publicPreviewUpload: {
     max: 10,
     timeWindow: '1 minute',

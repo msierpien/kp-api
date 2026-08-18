@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import { nanoid } from 'nanoid';
@@ -90,6 +91,14 @@ export function slugifyCategory(name: string): string {
     .replace(/[^A-Z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
     .slice(0, 40);
+}
+
+/**
+ * Odcisk tresci pliku. Liczony z tego, co REALNIE laduje na dysku - dzieki
+ * temu skrypt przeliczajacy stare pliki dostaje te same wartosci co upload.
+ */
+export function contentHashOf(payload: Buffer): string {
+  return crypto.createHash('sha256').update(payload).digest('hex');
 }
 
 function toView(row: {
@@ -300,7 +309,7 @@ export async function uploadDecoration(options: {
    * biblioteki jako nieprzebarwialny i nikt juz tego nie odkreci.
    */
   tintable?: boolean;
-}): Promise<DecorationView & { artwork?: SvgArtworkReport }> {
+}): Promise<DecorationView & { artwork?: SvgArtworkReport; duplicate?: true }> {
   const tenantId = requireTenantId();
   const { buffer, fileName, mimeType, category } = options;
 
@@ -332,6 +341,18 @@ export async function uploadDecoration(options: {
     throw new Error('Plik jest za duży (maksymalnie 2 MB)');
   }
 
+  // Ta sama grafika juz w bibliotece? Nie dokladamy drugiej kopii - przerwane
+  // w polowie wgrywanie paczki wznawia sie wtedy przez ponowne zaznaczenie
+  // wszystkich plikow, a wchodzi tylko brakujaca reszta.
+  const contentHash = contentHashOf(payload);
+  const duplicate = await prisma.decorationAsset.findFirst({
+    where: { tenantId, contentHash },
+  });
+
+  if (duplicate) {
+    return { ...toView(duplicate), duplicate: true as const };
+  }
+
   const baseName = path.basename(fileName, path.extname(fileName));
   const safeName = baseName.replace(/[^a-zA-Z0-9_\-ąćęłńóśźżĄĆĘŁŃÓŚŹŻ ]/g, '_').slice(0, 60);
   const storedName = `${nanoid(10)}.${extension}`;
@@ -359,6 +380,7 @@ export async function uploadDecoration(options: {
       fileSize: payload.length,
       tintable,
       tags: normalizeTags(options.tags),
+      contentHash,
       sortOrder: (last?.sortOrder ?? -1) + 1,
     },
   });
@@ -548,6 +570,8 @@ export async function retintDecoration(
     data: {
       tintable: svgSupportsTint(prepared.svg),
       fileSize: Buffer.byteLength(prepared.svg, 'utf-8'),
+      // Tresc pliku wlasnie sie zmienila, wiec stary odcisk juz jej nie opisuje.
+      contentHash: contentHashOf(Buffer.from(prepared.svg, 'utf-8')),
     },
   });
 

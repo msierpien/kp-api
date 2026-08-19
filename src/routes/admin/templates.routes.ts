@@ -24,6 +24,7 @@ import {
   deleteTemplate
 } from '../../services/admin/templates.service';
 import {
+  checkTemplateLayout,
   getTemplateLayout,
   updateTemplateLayout,
   listTemplateLayoutVersions,
@@ -130,12 +131,26 @@ const templateAssetResponseSchema = {
 /** Znacznik wersji szablonu wczytanej przez panel - patrz template-version.ts. */
 type TemplateVersionQuery = { expectedVersion?: string };
 
+type TemplateLayoutQuery = TemplateVersionQuery & { draft?: string };
+
 const templateVersionQuerySchema = {
   type: 'object',
   properties: {
     expectedVersion: {
       type: 'string',
       description: 'Znacznik wersji z GET; zapis odrzucany (409), gdy szablon zmienil sie w miedzyczasie',
+    },
+  },
+} as const;
+
+const templateLayoutQuerySchema = {
+  type: 'object',
+  properties: {
+    ...templateVersionQuerySchema.properties,
+    draft: {
+      type: 'string',
+      description:
+        'draft=1 dla autozapisu: bez wpisu w historii wersji i bez odswiezania miniatury. Walidacja i blokada wersji bez zmian.',
     },
   },
 } as const;
@@ -552,15 +567,65 @@ export async function templatesRoutes(fastify: FastifyInstance) {
     }
   );
 
+  // POST /admin/templates/:id/layout/check - ostrzezenia bez zapisu
+  //
+  // Edytor pokazuje licznik "Sprawdz szablon" na biezaco, a nie dopiero po
+  // zapisie. Reguly zostaja jedne - te same, ktorych uzywa zapis.
+  fastify.post<{ Params: TemplateIdParams; Body: TemplateLayoutInput }>(
+    '/:id/layout/check',
+    {
+      schema: {
+        tags: ['templates'],
+        summary: 'Sprawdz layout bez zapisywania',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        body: { type: 'object', description: 'Layout do sprawdzenia' },
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              warnings: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            },
+          },
+          400: { type: 'object', properties: { error: { type: 'string' }, message: { type: 'string' } } },
+        },
+      },
+    },
+    async (
+      request: FastifyRequest<{ Params: TemplateIdParams; Body: TemplateLayoutInput }>,
+      reply: FastifyReply
+    ) => {
+      const paramsParsed = templateIdParamsSchema.safeParse(request.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send({ error: 'Validation Error', message: paramsParsed.error.errors[0].message });
+      }
+
+      const bodyParsed = templateLayoutSchema.safeParse(request.body);
+      if (!bodyParsed.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: 'Nieprawidłowa struktura layoutu',
+          details: bodyParsed.error.errors,
+        });
+      }
+
+      try {
+        return reply.send(await checkTemplateLayout(paramsParsed.data.id, bodyParsed.data));
+      } catch (error: any) {
+        fastify.log.error(error);
+        return reply.status(400).send({ error: 'Bad Request', message: error.message });
+      }
+    }
+  );
+
   // PUT /admin/templates/:id/layout
-  fastify.put<{ Params: TemplateIdParams; Body: TemplateLayoutInput; Querystring: TemplateVersionQuery }>(
+  fastify.put<{ Params: TemplateIdParams; Body: TemplateLayoutInput; Querystring: TemplateLayoutQuery }>(
     '/:id/layout',
     {
       schema: {
         tags: ['templates'],
         summary: 'Zapisz wizualny layout szablonu (Fabric.js JSON)',
         params: { type: 'object', properties: { id: { type: 'string' } } },
-        querystring: templateVersionQuerySchema,
+        querystring: templateLayoutQuerySchema,
         body: { type: 'object', description: 'Konfiguracja layoutu Fabric.js z warstwami i fontami' },
         response: {
           200: templateLayoutResponseSchema,
@@ -569,7 +634,7 @@ export async function templatesRoutes(fastify: FastifyInstance) {
       },
     },
     async (
-      request: FastifyRequest<{ Params: TemplateIdParams; Body: TemplateLayoutInput; Querystring: TemplateVersionQuery }>,
+      request: FastifyRequest<{ Params: TemplateIdParams; Body: TemplateLayoutInput; Querystring: TemplateLayoutQuery }>,
       reply: FastifyReply
     ) => {
       const paramsParsed = templateIdParamsSchema.safeParse(request.params);
@@ -588,7 +653,8 @@ export async function templatesRoutes(fastify: FastifyInstance) {
         const result = await updateTemplateLayout(
           paramsParsed.data.id,
           bodyParsed.data,
-          request.query?.expectedVersion
+          request.query?.expectedVersion,
+          { draft: request.query?.draft === '1' }
         );
         return reply.send(result);
       } catch (error: any) {

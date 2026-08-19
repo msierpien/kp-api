@@ -138,11 +138,62 @@ export async function restoreTemplateLayoutVersion(templateId: string, versionId
   };
 }
 
+/**
+ * Sprawdzenie layoutu BEZ zapisu - zasila licznik "Sprawdz szablon" w edytorze.
+ *
+ * Te same reguly, co przy zapisie: jedno zrodlo prawdy zamiast lustra regul po
+ * stronie panelu, ktore rozjezdza sie przy pierwszej zmianie formatu.
+ */
+export async function checkTemplateLayout(
+  templateId: string,
+  layoutJson: TemplateLayoutInput
+): Promise<{ warnings: TemplateLayoutWarning[] }> {
+  const template = await prisma.personalizationTemplate.findUnique({
+    where: { id: templateId },
+    select: {
+      id: true,
+      forms: {
+        select: {
+          fields: {
+            select: { key: true },
+          },
+        },
+      },
+    },
+  });
+
+  if (!template) {
+    throw new Error('Szablon nie znaleziony');
+  }
+
+  const normalizedLayout = {
+    ...layoutJson,
+    canvas: normalizeCanvasConfig(layoutJson.canvas as any),
+  } as TemplateLayoutInput;
+
+  return { warnings: validateTemplateLayout(normalizedLayout, template.forms) };
+}
+
+/**
+ * Zapis layoutu.
+ *
+ * `draft` to autozapis z edytora: ten sam zapis i ta sama blokada wersji, ale
+ * BEZ wpisu w historii i BEZ odswiezania miniatury. Bez tego rozroznienia
+ * autozapis co kilka sekund skasowalby cala sensowna historie (limit
+ * LAYOUT_HISTORY_LIMIT wpisow) w dwie minuty i przy kazdym zapisie odpalal
+ * pelny render miniatury.
+ */
 export async function updateTemplateLayout(
   templateId: string,
   layoutJson: TemplateLayoutInput,
-  expectedVersion?: string
-): Promise<{ layout: TemplateLayoutJson; warnings: TemplateLayoutWarning[]; version: string }> {
+  expectedVersion?: string,
+  options: { draft?: boolean } = {}
+): Promise<{
+  layout: TemplateLayoutJson;
+  warnings: TemplateLayoutWarning[];
+  version: string;
+  draft?: boolean;
+}> {
   const template = await prisma.personalizationTemplate.findUnique({
     where: { id: templateId },
     select: {
@@ -173,7 +224,9 @@ export async function updateTemplateLayout(
 
   const warnings = validateTemplateLayout(normalizedLayout, template.forms);
 
-  await snapshotLayout(templateId, previousLayout);
+  if (!options.draft) {
+    await snapshotLayout(templateId, previousLayout);
+  }
 
   const updated = await prisma.personalizationTemplate.update({
     where: { id: templateId },
@@ -184,12 +237,17 @@ export async function updateTemplateLayout(
   });
 
   // Miniatura do biblioteki - w tle, zeby zapis projektu nie czekal na render.
-  scheduleTemplateThumbnail(templateId);
+  if (!options.draft) {
+    scheduleTemplateThumbnail(templateId);
+  }
 
   return {
     layout: updated.layoutJson as unknown as TemplateLayoutJson,
     warnings,
     version: templateVersionToken(updated.updatedAt),
+    // Panel po tym poznaje, ze API rozumie autozapis - stara wersja nie odesle
+    // tego pola i edytor zostanie przy zapisie recznym.
+    ...(options.draft ? { draft: true as const } : {}),
   };
 }
 

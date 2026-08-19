@@ -3,6 +3,7 @@ import prisma from '../../lib/prisma';
 import { config as appConfig } from '../../config';
 import { decrypt } from '../../lib/encryption';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
+import { assertOrderOperationalStatus } from '../../lib/order-statuses';
 import { generateAccessToken, getTokenExpiryDate, maskToken } from '../../lib/token';
 import { emailService } from '../email/email.service';
 import { createShopEmailService } from './email-settings.service';
@@ -51,6 +52,35 @@ export enum AutomationActionType {
   WEBHOOK = 'WEBHOOK',
   CONFIRM_ORDER_WZ_AFTER_INVOICE = 'CONFIRM_ORDER_WZ_AFTER_INVOICE',
   ISSUE_INVOICE_AFTER_SHIPMENT = 'ISSUE_INVOICE_AFTER_SHIPMENT',
+  CHANGE_ORDER_STATUS = 'CHANGE_ORDER_STATUS',
+}
+
+/**
+ * Wyzwalacze operujace na ZAMOWIENIU, nie na sprawie personalizacji.
+ * `context.caseId` jest tam identyfikatorem zamowienia, wiec akcje piszace po
+ * `personalizationCase` (zmiana statusu sprawy, notatka, mail z linkiem) nie
+ * maja czego znalezc — dlatego odrzucamy je z czytelnym komunikatem.
+ */
+const ORDER_SCOPED_TRIGGERS: string[] = [
+  AutomationTrigger.ORDER_INVOICE_ISSUED,
+  AutomationTrigger.ORDER_SHIPMENT_CREATED,
+];
+
+export function isOrderScopedTrigger(trigger: string) {
+  return ORDER_SCOPED_TRIGGERS.includes(trigger);
+}
+
+/** Akcje piszace po sprawie personalizacji — bezuzyteczne przy wyzwalaczach zamowienia. */
+const CASE_SCOPED_ACTION_MESSAGES: Record<string, string> = {
+  [AutomationActionType.SEND_EMAIL]: 'Akcja „Wyślij email" wysyła link do personalizacji sprawy — przy wyzwalaczu zamówienia nie ma czego wysłać',
+  [AutomationActionType.CHANGE_STATUS]: 'Akcja „Zmień status" dotyczy sprawy personalizacji — przy wyzwalaczu zamówienia użyj „Zmień status zamówienia"',
+  [AutomationActionType.ADD_NOTE]: 'Akcja „Dodaj notatkę" zapisuje notatkę sprawy personalizacji — przy wyzwalaczu zamówienia nie ma jej gdzie dopisać',
+};
+
+function assertActionMatchesTriggerScope(actionType: string, trigger: string) {
+  if (!isOrderScopedTrigger(trigger)) return;
+  const message = CASE_SCOPED_ACTION_MESSAGES[actionType];
+  if (message) throw new Error(message);
 }
 
 export interface AutomationAction {
@@ -205,13 +235,25 @@ async function executeSendEmail(config: Record<string, any>, caseData: any): Pro
   console.log(`[Automation] Email sent to ${to} for case ${caseData.id}: ${subject}`);
 }
 
-async function executeChangeStatus(config: Record<string, any>, caseId: string): Promise<void> {
+async function executeChangeStatus(config: Record<string, any>, context: AutomationContext): Promise<void> {
   const status = String(config.status || '');
   if (!status) throw new Error('Missing status for CHANGE_STATUS action');
   await prisma.personalizationCase.update({
-    where: { id: caseId },
+    where: { id: context.caseId },
     data: { status, updatedAt: new Date() },
   });
+}
+
+async function executeChangeOrderStatus(config: Record<string, any>, context: AutomationContext): Promise<void> {
+  const orderId = context.orderId || context.caseData?.order?.id || context.caseId;
+  if (!orderId) throw new Error('Brak zamówienia dla akcji zmiany statusu');
+
+  const status = assertOrderOperationalStatus(String(config.status || ''));
+
+  // Ta sama sciezka co reczna zmiana w panelu: mapowanie na status PrestaShop
+  // i skutki magazynowe. Osobny `prisma.order.update` rozjechalby stan.
+  const { updateOrderStatus } = await import('./shop-order-statuses.service');
+  await updateOrderStatus(orderId, { operationalStatus: status });
 }
 
 async function executeAddNote(config: Record<string, any>, caseId: string): Promise<void> {
@@ -314,12 +356,16 @@ async function executeActions(actions: AutomationAction[], context: AutomationCo
     try {
       let warehouseDocumentAction: InvoiceWarehouseDocumentAction | undefined;
       let shipmentInvoiceAction: ShipmentInvoiceResult | undefined;
+      assertActionMatchesTriggerScope(action.type, context.trigger);
       switch (action.type) {
         case AutomationActionType.SEND_EMAIL:
           await executeSendEmail(action.config || {}, context.caseData);
           break;
         case AutomationActionType.CHANGE_STATUS:
-          await executeChangeStatus(action.config || {}, context.caseId);
+          await executeChangeStatus(action.config || {}, context);
+          break;
+        case AutomationActionType.CHANGE_ORDER_STATUS:
+          await executeChangeOrderStatus(action.config || {}, context);
           break;
         case AutomationActionType.ADD_NOTE:
           await executeAddNote(action.config || {}, context.caseId);

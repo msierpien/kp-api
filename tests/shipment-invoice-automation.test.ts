@@ -101,3 +101,25 @@ test('nieudana faktura nie wywołuje skutków magazynowych', () => {
 test('nadanie listu uruchamia automatyzacje, ale ich błąd nie psuje przesyłki', () => {
   assert.match(SHIPMENTS_SERVICE, /triggerShipmentCreatedAutomations\(\{[\s\S]{0,120}\}\)\.catch\(\(\) => null\)/);
 });
+
+test('akcje sprawy są odrzucane przy wyzwalaczach zamówienia', () => {
+  // Bez tej bariery CHANGE_STATUS przy wyzwalaczu zamowienia probowalby
+  // zaktualizowac sprawe o ID zamowienia i padal na "record not found".
+  assert.match(AUTOMATION_SERVICE, /ORDER_SCOPED_TRIGGERS: string\[\] = \[[\s\S]{0,200}ORDER_SHIPMENT_CREATED,/);
+  assert.match(AUTOMATION_SERVICE, /assertActionMatchesTriggerScope\(action\.type, context\.trigger\);/);
+  for (const actionType of ['SEND_EMAIL', 'CHANGE_STATUS', 'ADD_NOTE']) {
+    assert.match(
+      AUTOMATION_SERVICE,
+      new RegExp(`\\[AutomationActionType\\.${actionType}\\]: 'Akcja`),
+      `brak komunikatu odrzucenia dla ${actionType}`,
+    );
+  }
+});
+
+test('zmiana statusu zamówienia idzie tą samą ścieżką co panel', () => {
+  // Wlasny prisma.order.update pominalby mapowanie na status PrestaShop
+  // i skutki magazynowe (rezerwacje, WZ).
+  assert.match(AUTOMATION_SERVICE, /CHANGE_ORDER_STATUS = 'CHANGE_ORDER_STATUS'/);
+  assert.match(AUTOMATION_SERVICE, /assertOrderOperationalStatus\(String\(config\.status \|\| ''\)\)/);
+  assert.match(AUTOMATION_SERVICE, /updateOrderStatus\(orderId, \{ operationalStatus: status \}\)/);
+});

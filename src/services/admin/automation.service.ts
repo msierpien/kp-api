@@ -248,7 +248,11 @@ async function executeChangeOrderStatus(config: Record<string, any>, context: Au
   const orderId = context.orderId || context.caseData?.order?.id || context.caseId;
   if (!orderId) throw new Error('Brak zamówienia dla akcji zmiany statusu');
 
-  const status = assertOrderOperationalStatus(String(config.status || ''));
+  const rawStatus = String(config.status || '').trim();
+  if (!rawStatus) {
+    throw new Error('Brak statusu w akcji „Zmień status zamówienia" — otwórz regułę, wybierz status i zapisz');
+  }
+  const status = assertOrderOperationalStatus(rawStatus);
 
   // Ta sama sciezka co reczna zmiana w panelu: mapowanie na status PrestaShop
   // i skutki magazynowe. Osobny `prisma.order.update` rozjechalby stan.

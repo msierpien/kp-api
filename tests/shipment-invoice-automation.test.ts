@@ -120,6 +120,12 @@ test('zmiana statusu zamówienia idzie tą samą ścieżką co panel', () => {
   // Wlasny prisma.order.update pominalby mapowanie na status PrestaShop
   // i skutki magazynowe (rezerwacje, WZ).
   assert.match(AUTOMATION_SERVICE, /CHANGE_ORDER_STATUS = 'CHANGE_ORDER_STATUS'/);
-  assert.match(AUTOMATION_SERVICE, /assertOrderOperationalStatus\(String\(config\.status \|\| ''\)\)/);
+  assert.match(AUTOMATION_SERVICE, /assertOrderOperationalStatus\(rawStatus\)/);
   assert.match(AUTOMATION_SERVICE, /updateOrderStatus\(orderId, \{ operationalStatus: status \}\)/);
+});
+
+test('pusty status w akcji zamówienia daje czytelny komunikat', () => {
+  // Formularz pokazywal wartosc domyslna selecta, ale bez wpisu w config
+  // regula szla do API z pustym statusem — komunikat musi mowic, co zrobic.
+  assert.match(AUTOMATION_SERVICE, /Brak statusu w akcji/);
 });

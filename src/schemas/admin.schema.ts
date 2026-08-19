@@ -716,6 +716,42 @@ const canvasConfigSchema = z.object({
   backgroundColor: z.string().default('#ffffff'),
 });
 
+/**
+ * Blok wielokrotnego uzytku - warstwy, grupy, fonty i lista assetow.
+ *
+ * Reuzywa `layerBaseSchema` i `layerGroupSchema` SWIADOMIE: blok nie moze
+ * zawierac warstwy w ksztalcie, ktorego layout nie przyjmie - inaczej wstawienie
+ * konczyloby sie bledem zapisu dopiero u projektanta.
+ */
+const templateBlockPayloadSchema = z.object({
+  version: z.literal(1).default(1),
+  layers: z.array(layerBaseSchema).min(1).max(64),
+  groups: z.array(layerGroupSchema).max(16).optional(),
+  fonts: z.array(fontConfigSchema).max(16).optional(),
+  /** Sciezki grafik uzytych przez warstwy - kopiowane do szablonu docelowego. */
+  assets: z.array(z.string().min(1)).max(32).optional(),
+});
+
+export type TemplateBlockPayload = z.infer<typeof templateBlockPayloadSchema>;
+
+export const createTemplateBlockSchema = z.object({
+  name: z.string().min(1).max(120),
+  category: z.string().min(1).max(60),
+  payload: templateBlockPayloadSchema,
+  widthMm: z.number().positive().max(2000),
+  heightMm: z.number().positive().max(2000),
+  tags: z.array(z.string()).max(12).optional(),
+  sourceTemplateId: z.string().optional(),
+});
+
+export const updateTemplateBlockSchema = z.object({
+  name: z.string().min(1).max(120).optional(),
+  category: z.string().min(1).max(60).optional(),
+  tags: z.array(z.string()).max(12).optional(),
+  isActive: z.boolean().optional(),
+  sortOrder: z.number().int().optional(),
+});
+
 // Strona projektu (wersja 2). Kazda ma wlasny canvas i warstwy.
 const templatePageSchema = z.object({
   id: z.string().min(1),

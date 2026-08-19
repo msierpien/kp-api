@@ -27,6 +27,7 @@ import { storageRoutes } from './storage.routes';
 import { queueRoutes } from './queue.routes';
 import { fontsRoutes } from './fonts.routes';
 import { decorationsRoutes } from './decorations.routes';
+import { templateBlocksRoutes } from './template-blocks.routes';
 import { warehouseCatalogsRoutes } from './warehouse-catalogs.routes';
 import { warehouseRoutes } from './warehouse.routes';
 import { wholesaleRoutes } from './wholesale.routes';
@@ -96,6 +97,7 @@ export async function adminRoutes(fastify: FastifyInstance) {
   fastify.register(queueRoutes, { prefix: '/queues' });
   fastify.register(fontsRoutes, { prefix: '/fonts' });
   fastify.register(decorationsRoutes, { prefix: '/decorations' });
+  fastify.register(templateBlocksRoutes, { prefix: '/template-blocks' });
   fastify.register(warehouseCatalogsRoutes, { prefix: '/warehouse/catalogs' });
   fastify.register(warehouseRoutes, { prefix: '/warehouse' });
   fastify.register(wholesaleRoutes, { prefix: '/wholesale' });

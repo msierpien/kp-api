@@ -42,6 +42,7 @@ model Tenant {
   printJobs             PrintJob[]
   decorationAssets      DecorationAsset[]
   decorationCategories  DecorationCategory[]
+  templateBlocks        TemplateBlock[]
   aiPromptTemplates     AiPromptTemplate[]
   aiUsageLogs           AiUsageLog[]
   caseHelpRequests      CaseHelpRequest[]
@@ -1171,6 +1172,47 @@ model DecorationCategory {
 
   @@unique([tenantId, slug])
   @@map("decoration_categories")
+}
+
+/// Blok wielokrotnego uzytku - kawalek projektu gotowy do wstawienia
+/// w KAZDYM szablonie: stopka RSVP, ramka, monogram, blok adresowy.
+///
+/// Po co osobny model, skoro istnieja szablony: szablon to caly produkt
+/// (format, formularz, sklad do druku), a blok to fragment bez wlasnej kartki.
+/// Przenoszenie stopki miedzy projektami szlo dotad przez kopiuj-wklej miedzy
+/// zakladkami albo przez duplikowanie calego szablonu.
+model TemplateBlock {
+  id       String @id @default(cuid())
+  tenantId String @map("tenant_id")
+  /// Slug kategorii - jak w ozdobnikach, celowo bez klucza obcego.
+  category String
+  name     String
+  /// Warstwy, grupy, fonty i lista uzytych assetow.
+  ///
+  /// Wspolrzedne warstw sa WZGLEDEM WLASNEGO bounding boxa bloku (lewy gorny
+  /// rog = 0,0), a nie wzgledem kartki, z ktorej blok powstal - inaczej blok
+  /// z winietki 90x50 wskoczylby poza zaproszenie 105x148.
+  payload  Json
+  /// Podglad PNG w storage - renderowany z tego samego renderera co druk,
+  /// wiec kafel pokazuje to, co naprawde wyjdzie.
+  previewPath String? @map("preview_path")
+  /// Rozmiar bloku w mm - z niego bierze sie skala przy wstawianiu do
+  /// szablonu o innym dpi.
+  widthMm  Float @map("width_mm")
+  heightMm Float @map("height_mm")
+  tags     String[] @default([])
+  /// Szablon, z ktorego blok powstal - podpowiada, skad wziac assety.
+  sourceTemplateId String? @map("source_template_id")
+  isActive  Boolean @default(true) @map("is_active")
+  sortOrder Int     @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, category])
+  @@index([tags], type: Gin)
+  @@map("template_blocks")
 }
 
 model PrintSettings {

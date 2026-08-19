@@ -20,7 +20,7 @@ const createAutomationSchema = z.object({
   tenantId: z.string().optional(),
   name: z.string().min(1),
   description: z.string().optional().nullable(),
-  trigger: z.enum(['CASE_CREATED', 'CASE_STATUS_CHANGED', 'CASE_SUBMITTED', 'CASE_TIME_ELAPSED', 'ORDER_INVOICE_ISSUED']),
+  trigger: z.enum(['CASE_CREATED', 'CASE_STATUS_CHANGED', 'CASE_SUBMITTED', 'CASE_TIME_ELAPSED', 'ORDER_INVOICE_ISSUED', 'ORDER_SHIPMENT_CREATED']),
   conditions: z.array(z.any()), // JSON array of conditions
   actions: z.array(z.any()), // JSON array of actions
   isActive: z.boolean().optional(),
@@ -151,7 +151,7 @@ export async function automationsRoutes(fastify: FastifyInstance) {
             name: { type: 'string' },
             tenantId: { type: 'string' },
             description: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-            trigger: { type: 'string', enum: ['CASE_CREATED', 'CASE_STATUS_CHANGED', 'CASE_SUBMITTED', 'CASE_TIME_ELAPSED', 'ORDER_INVOICE_ISSUED'] },
+            trigger: { type: 'string', enum: ['CASE_CREATED', 'CASE_STATUS_CHANGED', 'CASE_SUBMITTED', 'CASE_TIME_ELAPSED', 'ORDER_INVOICE_ISSUED', 'ORDER_SHIPMENT_CREATED'] },
             conditions: { type: 'array', items: { type: 'object' } },
             actions: { type: 'array', items: { type: 'object' } },
             isActive: { type: 'boolean' },

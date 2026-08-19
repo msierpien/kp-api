@@ -4,6 +4,7 @@ import { decrypt } from '../../lib/encryption';
 import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
 import { buildAdminConnectorControllerUrl } from '../shops/prestashop-stock-client';
+import { triggerShipmentCreatedAutomations } from './automation.service';
 
 export interface CreateOrderShipmentInput {
   force?: boolean;
@@ -73,10 +74,23 @@ export async function getOrderShipment(orderId: string) {
 
 export async function createOrderShipment(orderId: string, input: CreateOrderShipmentInput = {}) {
   const order = await loadOrder(orderId);
-  return connectorJsonRequest(order, 'inpostshipmentcreate', 'POST', {
+  const result = await connectorJsonRequest<Record<string, unknown>>(order, 'inpostshipmentcreate', 'POST', {
     idOrder: Number(order.externalOrderId),
     ...input,
   });
+
+  // List przewozowy jest juz nadany w InPost — bledu automatyzacji nie wolno
+  // zamienic na blad calej operacji, wiec wynik tylko dokladamy do odpowiedzi.
+  const automation = await triggerShipmentCreatedAutomations({
+    orderId: order.id,
+    shipment: result,
+  }).catch(() => null);
+
+  if (!automation) return result;
+  return {
+    ...(result && typeof result === 'object' && !Array.isArray(result) ? result : { data: result }),
+    automation,
+  };
 }
 
 export async function refreshOrderShipment(orderId: string, input: RefreshOrderShipmentInput = {}) {

@@ -9,6 +9,11 @@ import { createShopEmailService } from './email-settings.service';
 import { queueOrderPersonalizationEmail } from '../queue/email.queue';
 import { confirmDocument, syncWzDraftItemsWithReservations } from './warehouse-documents.service';
 import {
+  issueInvoiceAfterShipment,
+  type IssueInvoiceAfterShipmentConfig,
+  type ShipmentInvoiceResult,
+} from '../orders/order-shipment-invoice.service';
+import {
   buildDryRunResult,
   executeWebhook,
   normalizeConditions,
@@ -36,6 +41,7 @@ export enum AutomationTrigger {
   CASE_SUBMITTED = 'CASE_SUBMITTED',
   CASE_TIME_ELAPSED = 'CASE_TIME_ELAPSED',
   ORDER_INVOICE_ISSUED = 'ORDER_INVOICE_ISSUED',
+  ORDER_SHIPMENT_CREATED = 'ORDER_SHIPMENT_CREATED',
 }
 
 export enum AutomationActionType {
@@ -44,6 +50,7 @@ export enum AutomationActionType {
   ADD_NOTE = 'ADD_NOTE',
   WEBHOOK = 'WEBHOOK',
   CONFIRM_ORDER_WZ_AFTER_INVOICE = 'CONFIRM_ORDER_WZ_AFTER_INVOICE',
+  ISSUE_INVOICE_AFTER_SHIPMENT = 'ISSUE_INVOICE_AFTER_SHIPMENT',
 }
 
 export interface AutomationAction {
@@ -61,6 +68,7 @@ interface AutomationActionExecutionResult {
   type: string;
   error?: string;
   warehouseDocumentAction?: InvoiceWarehouseDocumentAction;
+  shipmentInvoiceAction?: ShipmentInvoiceResult;
 }
 
 function renderTemplate(template: string, variables: Record<string, unknown>) {
@@ -285,12 +293,27 @@ async function executeConfirmOrderWzAfterInvoice(
   }
 }
 
+async function executeIssueInvoiceAfterShipment(
+  config: Record<string, any>,
+  context: AutomationContext,
+): Promise<ShipmentInvoiceResult> {
+  const orderId = context.orderId || context.caseData?.order?.id || context.caseId;
+  if (!orderId) throw new Error('Brak zamówienia dla akcji wystawienia faktury');
+
+  return issueInvoiceAfterShipment(orderId, {
+    blockOnMissingStock: config.blockOnMissingStock,
+    ensureWz: config.ensureWz,
+    requireScanned: config.requireScanned,
+  } satisfies IssueInvoiceAfterShipmentConfig);
+}
+
 async function executeActions(actions: AutomationAction[], context: AutomationContext): Promise<AutomationActionExecutionResult[]> {
   const results: AutomationActionExecutionResult[] = [];
 
   for (const action of actions) {
     try {
       let warehouseDocumentAction: InvoiceWarehouseDocumentAction | undefined;
+      let shipmentInvoiceAction: ShipmentInvoiceResult | undefined;
       switch (action.type) {
         case AutomationActionType.SEND_EMAIL:
           await executeSendEmail(action.config || {}, context.caseData);
@@ -307,10 +330,13 @@ async function executeActions(actions: AutomationAction[], context: AutomationCo
         case AutomationActionType.CONFIRM_ORDER_WZ_AFTER_INVOICE:
           warehouseDocumentAction = await executeConfirmOrderWzAfterInvoice(action.config || {}, context);
           break;
+        case AutomationActionType.ISSUE_INVOICE_AFTER_SHIPMENT:
+          shipmentInvoiceAction = await executeIssueInvoiceAfterShipment(action.config || {}, context);
+          break;
         default:
           throw new Error(`Unknown action type: ${action.type}`);
       }
-      results.push({ type: action.type, warehouseDocumentAction });
+      results.push({ type: action.type, warehouseDocumentAction, shipmentInvoiceAction });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       results.push({ type: action.type, error: message });
@@ -487,6 +513,91 @@ export async function triggerInvoiceIssuedAutomations(input: { orderId: string; 
       documentId: '',
       documentNumber: 'WZ',
       reason: error instanceof Error ? error.message : 'Nie udało się uruchomić automatyzacji faktury',
+    };
+  }
+}
+
+/**
+ * Nadanie listu przewozowego. Zwraca wynik akcji fakturowej, bo panel musi
+ * pokazac operatorowi, ze przy brakach magazynowych faktura i WZ nie powstaly.
+ */
+export async function triggerShipmentCreatedAutomations(input: {
+  orderId: string;
+  shipment?: unknown;
+}): Promise<ShipmentInvoiceResult | null> {
+  try {
+    const order = await prisma.order.findFirst({
+      where: {
+        id: input.orderId,
+        ...(getTenantId() ? { shop: { tenantId: getTenantId() as string } } : {}),
+      },
+      include: { shop: true, items: true },
+    });
+    if (!order) throw new Error('Zamówienie nie znalezione');
+
+    const context: AutomationContext = {
+      caseId: order.id,
+      orderId: order.id,
+      trigger: AutomationTrigger.ORDER_SHIPMENT_CREATED,
+      caseData: { order, shipment: input.shipment ?? null },
+    };
+    const tenantId = getTenantIdFromContext(context);
+    if (!tenantId) return null;
+
+    const automations = await prisma.automation.findMany({
+      where: {
+        tenantId,
+        trigger: AutomationTrigger.ORDER_SHIPMENT_CREATED,
+        isActive: true,
+      },
+      orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
+    });
+    if (automations.length === 0) return null;
+
+    let shipmentInvoiceAction: ShipmentInvoiceResult | null = null;
+
+    for (const automation of automations) {
+      const dryRun = buildDryRunResult(automation.id, automation.conditions, context);
+      if (!dryRun.matched) continue;
+
+      const actions = Array.isArray(automation.actions)
+        ? automation.actions as unknown as AutomationAction[]
+        : [];
+      const actionResults = await executeActions(actions, context);
+      const actionErrors = actionResults
+        .filter((result) => result.error)
+        .map((result) => `${result.type}: ${result.error}`);
+      const actionResult = actionResults.find((result) => result.shipmentInvoiceAction);
+      if (actionResult?.shipmentInvoiceAction) {
+        shipmentInvoiceAction = actionResult.shipmentInvoiceAction;
+      }
+
+      // Wstrzymanie z powodu brakow to nie awaria akcji, ale MUSI zostac slad:
+      // baner w panelu znika po odswiezeniu, a faktury i tak nie ma.
+      const blockedMessage = shipmentInvoiceAction && ['STOCK_MISSING', 'FAILED'].includes(shipmentInvoiceAction.status)
+        ? [`${AutomationActionType.ISSUE_INVOICE_AFTER_SHIPMENT}: ${shipmentInvoiceAction.message}`]
+        : [];
+      const errorMessages = [...actionErrors, ...blockedMessage];
+      const now = new Date();
+
+      await prisma.automation.update({
+        where: { id: automation.id },
+        data: {
+          runCount: { increment: 1 },
+          lastRunAt: now,
+          ...(errorMessages.length > 0
+            ? { lastErrorAt: now, lastErrorMessage: errorMessages.join('\n').slice(0, 5000) }
+            : { lastErrorMessage: null }),
+        },
+      });
+    }
+
+    return shipmentInvoiceAction;
+  } catch (error) {
+    return {
+      status: 'FAILED',
+      message: error instanceof Error ? error.message : 'Nie udało się uruchomić automatyzacji listu przewozowego',
+      warehouseDocument: { status: 'NONE', reason: 'Automatyzacja nie została wykonana' },
     };
   }
 }

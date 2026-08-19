@@ -329,3 +329,88 @@ test('wlasciwosci figury przechodza zapis w calosci', () => {
   assert.equal(shape.borderRadiusMm, 2);
   assert.deepEqual(shape.strokeDashArray, [18, 12]);
 });
+
+test('grupy warstw przechodza przez schemat zapisu', () => {
+  // Pole nieopisane w schemacie jest cicho wycinane - ten test pilnuje, ze
+  // grupy przetrwaja zapis layoutu, bo inaczej edytor gubilby je po kazdym
+  // odswiezeniu i nikt by tego nie zauwazyl az do reklamacji.
+  const canvas = normalizeCanvasConfig({ widthMm: 105, heightMm: 148, dpi: 300 } as any);
+  const layer = {
+    id: 'text_1',
+    name: 'Imiona',
+    type: 'text',
+    visible: true,
+    locked: false,
+    opacity: 1,
+    zIndex: 0,
+    x: 0,
+    y: 0,
+    width: 100,
+    height: 40,
+    rotation: 0,
+    groupId: 'g1',
+    properties: {
+      type: 'text',
+      fieldKey: 'imiona',
+      placeholder: '{{ imiona }}',
+      fontSize: 24,
+      fontFamily: 'Cormorant Garamond',
+    },
+  };
+
+  const parsed = templateLayoutSchema.parse({
+    version: 2,
+    canvas,
+    fonts: [],
+    layers: [layer],
+    pages: [
+      {
+        id: 'page-1',
+        name: 'Przód',
+        canvas,
+        layers: [layer],
+        groups: [
+          { id: 'g1', name: 'Nagłówek', settings: { fontFamily: 'Cormorant', fill: '#a3123a' } },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(parsed.pages?.[0].groups?.[0].name, 'Nagłówek');
+  assert.equal(parsed.pages?.[0].groups?.[0].settings?.fill, '#a3123a');
+  assert.equal(parsed.pages?.[0].layers[0].groupId, 'g1');
+  assert.equal(parsed.layers[0].groupId, 'g1', 'lustro pierwszej strony tez niesie grupe');
+});
+
+test('ostrzezenia o grupach docieraja z pakietu formatu', () => {
+  const canvas = normalizeCanvasConfig({ widthMm: 105, heightMm: 148, dpi: 300 } as any);
+  const layer = {
+    id: 'text_1',
+    name: 'Imiona',
+    type: 'text',
+    visible: true,
+    locked: false,
+    opacity: 1,
+    zIndex: 0,
+    x: 0,
+    y: 0,
+    width: 100,
+    height: 40,
+    rotation: 0,
+    groupId: 'nie-ma-takiej',
+    properties: { type: 'text', fieldKey: 'imiona', placeholder: '{{ imiona }}' } as any,
+  };
+
+  const warnings = collectTemplateLayoutWarnings(
+    {
+      version: 2,
+      canvas,
+      fonts: [],
+      layers: [layer],
+      pages: [{ id: 'page-1', name: 'Przód', canvas, layers: [layer], groups: [] }],
+    } as any,
+    [{ fields: [{ key: 'imiona' }] }]
+  );
+
+  assert.ok(warnings.some((warning) => warning.code === 'LAYER_GROUP_MISSING'));
+});

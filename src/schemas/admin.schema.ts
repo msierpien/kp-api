@@ -664,7 +664,34 @@ const layerBaseSchema = z.object({
   width: z.number().min(0),
   height: z.number().min(0),
   rotation: z.number().default(0),
+  // Grupa, do ktorej warstwa nalezy. Pole nieopisane w schemacie jest CICHO
+  // wycinane przy zapisie - bez tej linii grupy znikalyby po pierwszym zapisie.
+  groupId: z.string().min(1).optional(),
   properties: layerPropertiesSchema,
+});
+
+/**
+ * Grupa warstw - pojemnik, nie warstwa. Renderery jej nie czytaja: ustawienia
+ * grupy sa zmaterializowane w warstwach, a to jest zapis samego pojemnika
+ * (nazwa, zagniezdzenie, ostatnie ustawienia nadane calej grupie).
+ */
+const layerGroupSettingsSchema = z.object({
+  visible: z.boolean().optional(),
+  locked: z.boolean().optional(),
+  opacity: z.number().min(0).max(1).optional(),
+  fontFamily: z.string().optional(),
+  fontSize: z.number().positive().optional(),
+  fill: z.string().optional(),
+  textAlign: z.enum(['left', 'center', 'right']).optional(),
+  letterSpacing: z.number().optional(),
+});
+
+const layerGroupSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  parentId: z.string().min(1).optional(),
+  collapsed: z.boolean().optional(),
+  settings: layerGroupSettingsSchema.optional(),
 });
 
 const fontConfigSchema = z.object({
@@ -695,6 +722,9 @@ const templatePageSchema = z.object({
   name: z.string().min(1),
   canvas: canvasConfigSchema,
   layers: z.array(layerBaseSchema).default([]),
+  // 64 grupy na stronie to i tak wiecej, niz da sie ogarnac wzrokiem - limit
+  // chroni przed zapetlonym zapisem z panelu.
+  groups: z.array(layerGroupSchema).max(64).optional(),
 });
 
 const printPlacementSchema = z.object({

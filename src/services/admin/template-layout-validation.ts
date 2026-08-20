@@ -48,7 +48,7 @@ export function collectTemplateLayoutWarnings(
       if (layer.type === 'text') {
         warnings.push({
           code: 'TEXT_LAYER_FIELD_KEY_MISSING',
-          message: `Warstwa tekstowa "${layer.name}" nie ma fieldKey.`,
+          message: `Warstwa „${layer.name}” nie jest powiązana z żadnym polem formularza — klient nie będzie miał czego w niej wypełnić.`,
           layerId: layer.id,
           layerName: layer.name,
         });
@@ -59,7 +59,7 @@ export function collectTemplateLayoutWarnings(
     if (!formKeys.has(fieldKey)) {
       warnings.push({
         code: 'TEXT_LAYER_FIELD_KEY_UNMAPPED',
-        message: `fieldKey "${fieldKey}" z warstwy "${layer.name}" nie istnieje w formularzu.`,
+        message: `Warstwa „${layer.name}” wskazuje pole „${fieldKey}”, którego nie ma w formularzu — na wydruku zostanie puste miejsce.`,
         layerId: layer.id,
         layerName: layer.name,
         fieldKey,
@@ -70,7 +70,7 @@ export function collectTemplateLayoutWarnings(
     if (seenKeys.has(fieldKey)) {
       warnings.push({
         code: 'TEXT_LAYER_FIELD_KEY_DUPLICATED',
-        message: `fieldKey "${fieldKey}" jest przypisany do więcej niż jednej warstwy.`,
+        message: `Pole „${fieldKey}” jest przypisane do kilku warstw — ta sama odpowiedź klienta pojawi się w każdej z nich.`,
         layerId: layer.id,
         layerName: layer.name,
         fieldKey,
@@ -84,7 +84,7 @@ export function collectTemplateLayoutWarnings(
   if (!layout.layers.some((layer) => layer.type === 'background')) {
     warnings.push({
       code: 'BACKGROUND_LAYER_MISSING',
-      message: 'Layout nie ma warstwy tła. Tło jest opcjonalne, ale eksport do druku może wymagać kontroli.',
+      message: 'Projekt nie ma warstwy tła. To dozwolone, ale przy druku na kolorowym papierze warto sprawdzić, czy tak ma zostać.',
     });
   }
 

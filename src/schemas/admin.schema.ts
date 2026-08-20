@@ -526,6 +526,9 @@ const textFieldPropertiesSchema = z.object({
   // projektant zobaczylby napis bez obrysu i zadnego bledu.
   stroke: z.string().optional(),
   strokeWidthMm: z.number().min(0).optional(),
+  // Etykieta nazwanego stylu. Bez niej zapis gubilby przypisanie i zmiana
+  // stylu przestawalaby dosiegac tej warstwy.
+  styleId: z.string().max(64).optional(),
   editable: z.literal(true).default(true),
   clientDraggable: z.boolean().optional(),
   clientResizable: z.boolean().optional(),
@@ -556,6 +559,9 @@ const staticTextPropertiesSchema = z.object({
   // projektant zobaczylby napis bez obrysu i zadnego bledu.
   stroke: z.string().optional(),
   strokeWidthMm: z.number().min(0).optional(),
+  // Etykieta nazwanego stylu. Bez niej zapis gubilby przypisanie i zmiana
+  // stylu przestawalaby dosiegac tej warstwy.
+  styleId: z.string().max(64).optional(),
   editable: z.literal(false).default(false),
 });
 
@@ -588,6 +594,9 @@ const textboxPropertiesSchema = z.object({
   // projektant zobaczylby napis bez obrysu i zadnego bledu.
   stroke: z.string().optional(),
   strokeWidthMm: z.number().min(0).optional(),
+  // Etykieta nazwanego stylu. Bez niej zapis gubilby przypisanie i zmiana
+  // stylu przestawalaby dosiegac tej warstwy.
+  styleId: z.string().max(64).optional(),
 
   clientDraggable: z.boolean().optional(),
   clientResizable: z.boolean().optional(),
@@ -635,10 +644,31 @@ const textPathPropertiesSchema = z.object({
   // projektant zobaczylby napis bez obrysu i zadnego bledu.
   stroke: z.string().optional(),
   strokeWidthMm: z.number().min(0).optional(),
+  // Etykieta nazwanego stylu. Bez niej zapis gubilby przypisanie i zmiana
+  // stylu przestawalaby dosiegac tej warstwy.
+  styleId: z.string().max(64).optional(),
   clientFontSize: z.boolean().optional(),
   clientFontFamily: z.boolean().optional(),
   clientColor: z.boolean().optional(),
   clientFontWeight: z.boolean().optional(),
+});
+
+/** Nazwany styl tekstu - patrz `textStyles` w layoucie. */
+const textStyleSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(60),
+  properties: z.object({
+    fontFamily: z.string().optional(),
+    fontSize: z.number().positive().optional(),
+    fontUnit: z.enum(['px', 'pt']).optional(),
+    fontWeight: z.number().int().min(100).max(900).optional(),
+    fontStyle: z.enum(['normal', 'italic']).optional(),
+    lineHeight: z.number().positive().optional(),
+    letterSpacing: z.number().optional(),
+    fill: z.string().optional(),
+    textAlign: z.enum(['left', 'center', 'right', 'justify']).optional(),
+    textTransform: z.enum(['none', 'uppercase', 'lowercase', 'capitalize']).optional(),
+  }),
 });
 
 const shapePropertiesSchema = z.object({
@@ -897,6 +927,10 @@ export const templateLayoutSchema = z.object({
   print: printLayoutSchema.optional(),
   imposition: sheetImpositionSchema.optional(),
   mockups: z.array(mockupConfigSchema).optional(),
+  // Nazwane style tekstu. Same DEFINICJE - wartosci sa juz wpisane w warstwy
+  // (kaskada materializowana), wiec brak tego pola nie psulby wygladu, tylko
+  // gubil przypisania i mozliwosc zmiany stylu w jednym miejscu.
+  textStyles: z.array(textStyleSchema).max(50).optional(),
   // Kolory proponowane klientowi; pilnujemy formatu hex, bo trafiaja wprost
   // do stylu tekstu i do wydruku.
   palette: z.array(z.string().regex(/^#[0-9a-fA-F]{6}$/)).max(24).optional(),

@@ -667,6 +667,10 @@ const layerBaseSchema = z.object({
   // Grupa, do ktorej warstwa nalezy. Pole nieopisane w schemacie jest CICHO
   // wycinane przy zapisie - bez tej linii grupy znikalyby po pierwszym zapisie.
   groupId: z.string().min(1).optional(),
+  // Blok z biblioteki, z ktorego warstwa powstala. Dokladnie ta sama pulapka:
+  // panel stemplowal to pole, a zapis je wycinal, wiec rozpoznawanie instancji
+  // bloku nie mialo na czym stanac.
+  blockId: z.string().min(1).optional(),
   properties: layerPropertiesSchema,
 });
 

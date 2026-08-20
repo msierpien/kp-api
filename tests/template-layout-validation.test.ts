@@ -349,6 +349,7 @@ test('grupy warstw przechodza przez schemat zapisu', () => {
     height: 40,
     rotation: 0,
     groupId: 'g1',
+    blockId: 'block_1',
     properties: {
       type: 'text',
       fieldKey: 'imiona',
@@ -380,6 +381,7 @@ test('grupy warstw przechodza przez schemat zapisu', () => {
   assert.equal(parsed.pages?.[0].groups?.[0].settings?.fill, '#a3123a');
   assert.equal(parsed.pages?.[0].layers[0].groupId, 'g1');
   assert.equal(parsed.layers[0].groupId, 'g1', 'lustro pierwszej strony tez niesie grupe');
+  assert.equal(parsed.pages?.[0].layers[0].blockId, 'block_1', 'znacznik bloku przezywa zapis');
 });
 
 test('ostrzezenia o grupach docieraja z pakietu formatu', () => {

@@ -416,3 +416,21 @@ test('ostrzezenia o grupach docieraja z pakietu formatu', () => {
 
   assert.ok(warnings.some((warning) => warning.code === 'LAYER_GROUP_MISSING'));
 });
+
+test('korekta wydruku szablonu przechodzi przez schemat i ma granice', () => {
+  // Bez wpisu w schemacie pole znikneloby po cichu przy zapisie - a projektant
+  // widzialby ustawiona korekte, ktora nic nie robi.
+  const canvas = normalizeCanvasConfig({ widthMm: 90, heightMm: 50, dpi: 300 } as any);
+  const base = { version: 1 as const, canvas, fonts: [], layers: [] };
+
+  const parsed = templateLayoutSchema.parse({ ...base, printOffsetXMm: 3, printOffsetYMm: 3 });
+  assert.equal(parsed.printOffsetXMm, 3);
+  assert.equal(parsed.printOffsetYMm, 3);
+
+  // Ujemna wartosc przesuwa w lewo / do gory - to poprawny przypadek.
+  assert.equal(templateLayoutSchema.parse({ ...base, printOffsetXMm: -2.5 }).printOffsetXMm, -2.5);
+
+  // Poza zakresem to juz nie kalibracja, tylko blad - projekt wyjechalby
+  // poza kartke.
+  assert.equal(templateLayoutSchema.safeParse({ ...base, printOffsetXMm: 50 }).success, false);
+});

@@ -795,8 +795,20 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
     // szablonie: kompensacja dobra dla docinanych kartek nie musi pasowac do
     // arkusza jadacego z innego podajnika, a przesuniete pasery moga wyjsc
     // poza obszar, w ktorym ploter ich szuka.
-    const pdfOffsetXMm = imposition ? imposition.sheetOffsetXMm || 0 : pkg.offsetXMm;
-    const pdfOffsetYMm = imposition ? imposition.sheetOffsetYMm || 0 : pkg.offsetYMm;
+    //
+    // Do tego dochodzi korekta SZABLONU: globalna kompensuje mechanike
+    // podajnika, a szablonowa konkretny format - drukarka inaczej prowadzi
+    // winietke 90x50, a inaczej kartke A6. Arkusz zbiorczy jej nie dolicza
+    // z tego samego powodu, dla ktorego ma wlasna kalibracje.
+    const templateOffsetXMm = Number((layout as { printOffsetXMm?: number })?.printOffsetXMm) || 0;
+    const templateOffsetYMm = Number((layout as { printOffsetYMm?: number })?.printOffsetYMm) || 0;
+
+    const pdfOffsetXMm = imposition
+      ? imposition.sheetOffsetXMm || 0
+      : pkg.offsetXMm + templateOffsetXMm;
+    const pdfOffsetYMm = imposition
+      ? imposition.sheetOffsetYMm || 0
+      : pkg.offsetYMm + templateOffsetYMm;
 
     const combinedPages: Array<{ png: Buffer; widthPx: number; heightPx: number; dpi: number }> = [];
 

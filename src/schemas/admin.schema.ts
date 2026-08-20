@@ -878,6 +878,10 @@ export const templateLayoutSchema = z.object({
   // Kolor wiodacy motywu - podstawiany pod `currentColor` w warstwach
   // i w podkladzie wektorowym arkusza.
   primaryColor: z.string().regex(/^#[0-9a-fA-F]{3,8}$/).optional(),
+  // Korekta pozycji wydruku dla TEGO szablonu - kompensuje sposob, w jaki
+  // drukarka prowadzi konkretny format. Zakres jak przy korekcie globalnej.
+  printOffsetXMm: z.number().min(-20).max(20).optional(),
+  printOffsetYMm: z.number().min(-20).max(20).optional(),
 });
 
 export const templateAssetParamsSchema = z.object({

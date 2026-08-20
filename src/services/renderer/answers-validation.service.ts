@@ -10,6 +10,7 @@ import {
   type TemplateLayoutJson,
 } from '../../types/template-layout';
 import { validateAnswers } from './text-validator.service';
+import { findStaleContent } from './stale-content';
 import { getTextPathArcLength } from '@msierpien/kp-template-core';
 
 export type FieldValidationConfig = PersonalizationAnswerField & {
@@ -129,6 +130,9 @@ function describeLayerBox(layer: Layer | undefined, dpi: number) {
         family: props.fontFamily || 'Inter',
         size: fontSize,
         weight: Number(props.fontWeight || 400),
+        style: props.fontStyle === 'italic' ? 'italic' : 'normal',
+        letterSpacing: Number(props.letterSpacing) || 0,
+        transform: props.textTransform,
       } : undefined,
     };
   }
@@ -149,10 +153,17 @@ function describeLayerBox(layer: Layer | undefined, dpi: number) {
     maxLines,
     // Tylko `textbox` zawija tekst; `text` i `text_path` sa jednoliniowe.
     wraps: layer?.type === 'textbox',
+    // Swiatlo, kursywa i wersaliki zmieniaja SZEROKOSC napisu, wiec bez nich
+    // walidator mierzyl co innego niz renderer rysuje: przy swietle 100 na
+    // dwudziestu znakach nie widzial dwoch firetow nadmiaru, a kursywe mierzyl
+    // plikiem regular.
     font: props ? {
       family: props.fontFamily || 'Inter',
       size: fontSize,
       weight: Number(props.fontWeight || 400),
+      style: props.fontStyle === 'italic' ? 'italic' : 'normal',
+      letterSpacing: Number(props.letterSpacing) || 0,
+      transform: props.textTransform,
     } : undefined,
   };
 }
@@ -238,6 +249,35 @@ function hiddenFieldWarnings(
           : `Sztuka ${itemIndex + 1}: element ukryty na projekcie — ta treść nie pójdzie na wydruk`,
       details: { hiddenLayer: true },
     }));
+}
+
+/**
+ * Ostrzezenia o tresci z innej uroczystosci - "OSIEMNASTYCH URODZIN" przy
+ * trzydziestce, data z zeszlego roku.
+ *
+ * Wzory sprzedaja sie latami, wiec napis, ktory klient zostawil bez zmiany,
+ * bywa poprawnym zdaniem o CUDZEJ uroczystosci. Zwykla walidacja nie ma tego
+ * jak zauwazyc: pole jest wypelnione, miesci sie w ramce i nie lamie zadnej
+ * reguly formatu.
+ */
+function staleContentWarnings(
+  fields: FieldValidationConfig[],
+  values: Record<string, unknown>,
+  itemIndex?: number
+): PrintPackageFieldIssue[] {
+  const labelByKey = new Map(fields.map((field) => [field.key, field.label]));
+
+  return findStaleContent(
+    fields.map((field) => ({ key: field.key, label: field.label, type: field.type })),
+    values
+  ).map((issue) => ({
+    field: issue.field,
+    fieldLabel: labelByKey.get(issue.field),
+    severity: 'warning' as const,
+    itemIndex,
+    message: itemIndex === undefined ? issue.message : `Sztuka ${itemIndex + 1}: ${issue.message}`,
+    details: { staleContent: true },
+  }));
 }
 
 /** Prefiks klucza pseudo-pola dla tekstu dopisanego przez klienta. */
@@ -384,6 +424,9 @@ export async function validatePrintPackageAnswers(
       undefined,
       answers.sharedAnswers
     ),
+    // Liczba lat bywa polem wspolnym, a formula okazji indywidualnym (albo
+    // odwrotnie), wiec porownujemy je na komplecie odpowiedzi wspolnych.
+    ...staleContentWarnings(sharedFields, answers.sharedAnswers),
   ];
   const items: PrintPackageItemValidation[] = [];
 
@@ -411,6 +454,9 @@ export async function validatePrintPackageAnswers(
         itemIndex,
         itemAnswers
       ),
+      // Odpowiedzi sztuki widziane razem ze wspolnymi - inaczej liczba lat
+      // z pola wspolnego nie mialaby z czym sie porownac.
+      ...staleContentWarnings(itemFields, itemAnswers, itemIndex),
     ];
     items.push({
       itemIndex,

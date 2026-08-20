@@ -11,6 +11,7 @@ import { isSvgPath, rasterizeSvgFile } from './svg-raster.service';
 import {
   SILHOUETTE_MARKS_DEFAULT,
   applyPrimaryColor,
+  applyTextTransform,
   buildShapeGeometry,
   buildTextPathD,
   getSheetBackgroundUrl,
@@ -20,6 +21,7 @@ import {
   getTextPathArcLength,
   resolvePrimaryColor,
   resolveTextPathStartOffset,
+  resolveTextStroke,
   type RegistrationMarksConfig,
 } from '@msierpien/kp-template-core';
 import { drawImageInQuad, quadToPixels, type Quad } from '../../lib/mockup-warp';
@@ -365,11 +367,12 @@ async function layerToFabricObject(
     const props = layer.properties as TextFieldProperties;
     const value = String(answers[props.fieldKey] || props.placeholder || '');
 
-    const textField = new IText(value, {
+    const textField = new IText(applyTextTransform(value, props.textTransform), {
       ...common,
       // charSpacing fabrica ma te sama jednostke co letterSpacing formatu
       // (1/1000 firetu), wiec nie ma tu zadnego przeliczania.
       charSpacing: Number(props.letterSpacing) || 0,
+      ...(resolveTextStroke(props, dpi, scale) ?? {}),
       fontSize: fontSizeToRenderPx(props.fontSize, getFontUnit(props.fontUnit), dpi, scale),
       fontFamily: props.fontFamily,
       fontWeight: String(props.fontWeight || 400),
@@ -398,9 +401,10 @@ async function layerToFabricObject(
       return answers[key] || match;
     });
     
-    const staticText = new IText(value, {
+    const staticText = new IText(applyTextTransform(value, props.textTransform), {
       ...common,
       charSpacing: Number(props.letterSpacing) || 0,
+      ...(resolveTextStroke(props, dpi, scale) ?? {}),
       fontSize: fontSizeToRenderPx(props.fontSize, getFontUnit(props.fontUnit), dpi, scale),
       fontFamily: props.fontFamily,
       fontWeight: String(props.fontWeight || 400),
@@ -442,9 +446,10 @@ async function layerToFabricObject(
     const arcLength = getTextPathArcLength(geometry, dpi);
     const anchor = getTextPathAnchorOffset(geometry, dpi);
 
-    const textPath = new IText(value, {
+    const textPath = new IText(applyTextTransform(value, props.textTransform), {
       ...common,
       charSpacing: Number(props.letterSpacing) || 0,
+      ...(resolveTextStroke(props, dpi, scale) ?? {}),
       fontSize: fontSizeToRenderPx(props.fontSize, getFontUnit(props.fontUnit), dpi, scale),
       fontFamily: props.fontFamily,
       fontWeight: String(props.fontWeight || 400),
@@ -501,9 +506,10 @@ async function layerToFabricObject(
       value = String(answers[props.fieldKey]);
     }
     
-    const textbox = new Textbox(value, {
+    const textbox = new Textbox(applyTextTransform(value, props.textTransform), {
       ...common,
       charSpacing: Number(props.letterSpacing) || 0,
+      ...(resolveTextStroke(props, dpi, scale) ?? {}),
       fontSize: fontSizeToRenderPx(props.fontSize, getFontUnit(props.fontUnit), dpi, scale),
       fontFamily: props.fontFamily,
       fontWeight: String(props.fontWeight || 400),

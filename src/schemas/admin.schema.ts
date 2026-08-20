@@ -518,6 +518,10 @@ const textFieldPropertiesSchema = z.object({
   textTransform: z.enum(['none', 'uppercase', 'lowercase', 'capitalize']).default('none'),
   styleRanges: z.array(textStyleRangeSchema).optional(),
   letterSpacing: z.number().optional(),
+  // Obrys glifow. Bez tych pol zapis layoutu wycinalby je po cichu, a
+  // projektant zobaczylby napis bez obrysu i zadnego bledu.
+  stroke: z.string().optional(),
+  strokeWidthMm: z.number().min(0).optional(),
   editable: z.literal(true).default(true),
   clientDraggable: z.boolean().optional(),
   clientResizable: z.boolean().optional(),
@@ -543,6 +547,11 @@ const staticTextPropertiesSchema = z.object({
   fill: z.string().default('#000000'),
   textAlign: z.enum(['left', 'center', 'right']).default('left'),
   lineHeight: z.number().positive().default(1.2),
+  textTransform: z.enum(['none', 'uppercase', 'lowercase', 'capitalize']).optional(),
+  // Obrys glifow. Bez tych pol zapis layoutu wycinalby je po cichu, a
+  // projektant zobaczylby napis bez obrysu i zadnego bledu.
+  stroke: z.string().optional(),
+  strokeWidthMm: z.number().min(0).optional(),
   editable: z.literal(false).default(false),
 });
 
@@ -570,6 +579,12 @@ const textboxPropertiesSchema = z.object({
   splitByGrapheme: z.boolean().optional(),
   styleRanges: z.array(textStyleRangeSchema).optional(),
   letterSpacing: z.number().optional(),
+  textTransform: z.enum(['none', 'uppercase', 'lowercase', 'capitalize']).optional(),
+  // Obrys glifow. Bez tych pol zapis layoutu wycinalby je po cichu, a
+  // projektant zobaczylby napis bez obrysu i zadnego bledu.
+  stroke: z.string().optional(),
+  strokeWidthMm: z.number().min(0).optional(),
+
   clientDraggable: z.boolean().optional(),
   clientResizable: z.boolean().optional(),
   clientRotatable: z.boolean().optional(),
@@ -612,6 +627,10 @@ const textPathPropertiesSchema = z.object({
   fill: z.string().default('#000000'),
   textTransform: z.enum(['none', 'uppercase', 'lowercase', 'capitalize']).optional(),
   letterSpacing: z.number().optional(),
+  // Obrys glifow. Bez tych pol zapis layoutu wycinalby je po cichu, a
+  // projektant zobaczylby napis bez obrysu i zadnego bledu.
+  stroke: z.string().optional(),
+  strokeWidthMm: z.number().min(0).optional(),
   clientFontSize: z.boolean().optional(),
   clientFontFamily: z.boolean().optional(),
   clientColor: z.boolean().optional(),

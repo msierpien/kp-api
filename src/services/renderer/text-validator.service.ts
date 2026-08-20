@@ -2,6 +2,7 @@
 import opentype from 'opentype.js';
 import path from 'path';
 import fs from 'fs/promises';
+import { applyTextTransform } from '@msierpien/kp-template-core';
 import { getFontsRegistryVersion, resolveFontFile } from '../admin/fonts.service';
 
 interface ValidationError {
@@ -54,6 +55,11 @@ interface FieldConfig {
     family?: string;
     size?: number;
     weight?: number;
+    style?: 'normal' | 'italic';
+    /** Swiatlo miedzy literami w tysiecznych firetu (jak `charSpacing`). */
+    letterSpacing?: number;
+    /** Wielkosc liter narzucona przez warstwe - mierzymy tekst PO zamianie. */
+    transform?: string;
   };
 }
 
@@ -104,8 +110,12 @@ const FALLBACK_ALLOWED_CHARS_REGEX =
  * potrafi zarejestrowac do druku, wiec tylko dla nich pomiar odpowiada temu,
  * co realnie wyjdzie na wydruku.
  */
-async function loadFont(fontFamily: string, weight: number = 400): Promise<opentype.Font | null> {
-  const cacheKey = `${fontFamily}-${weight}`;
+async function loadFont(
+  fontFamily: string,
+  weight: number = 400,
+  style: 'normal' | 'italic' = 'normal'
+): Promise<opentype.Font | null> {
+  const cacheKey = `${fontFamily}-${weight}-${style}`;
 
   invalidateFontCacheOnRegistryChange();
 
@@ -116,7 +126,7 @@ async function loadFont(fontFamily: string, weight: number = 400): Promise<opent
   try {
     // Ten sam resolver co renderer - pomiar musi trafiac w plik, ktory
     // faktycznie pojdzie na wydruk (bold jest zauwazalnie szerszy od regulara).
-    const match = await resolveFontFile(fontFamily, weight);
+    const match = await resolveFontFile(fontFamily, weight, style);
 
     if (!match) {
       console.warn(
@@ -150,18 +160,27 @@ async function measureTextWidth(
   text: string,
   fontFamily: string = 'Inter',
   fontSize: number = DEFAULT_FONT_SIZE,
-  fontWeight: number = 400
+  fontWeight: number = 400,
+  letterSpacing: number = 0,
+  fontStyle: 'normal' | 'italic' = 'normal'
 ): Promise<{ width: number; measured: boolean }> {
-  const font = await loadFont(fontFamily, fontWeight);
+  const font = await loadFont(fontFamily, fontWeight, fontStyle);
+
+  // Swiatlo miedzy literami dokladane osobno: opentype zna tylko metryki
+  // kroju, a `charSpacing` to ustawienie warstwy. Fabric dolicza je po KAZDYM
+  // znaku, wiec mnozymy przez dlugosc, a nie przez liczbe odstepow - inaczej
+  // przy dwudziestu znakach i swietle 100 walidator nie widzi dwoch firetow
+  // nadmiaru i przepuszcza tekst, ktory wyjedzie z ramki.
+  const spacing = (Number(letterSpacing) || 0) / 1000 * fontSize * text.length;
 
   if (!font) {
     // Fallback: przybliżone obliczenie (0.6 * fontSize na znak)
-    return { width: text.length * fontSize * 0.6, measured: false };
+    return { width: text.length * fontSize * 0.6 + spacing, measured: false };
   }
 
   // opentype.js getAdvanceWidth zwraca szerokość w jednostkach fontu
   // Trzeba przeskalować do pikseli: width * fontSize / unitsPerEm
-  return { width: font.getAdvanceWidth(text, fontSize), measured: true };
+  return { width: font.getAdvanceWidth(text, fontSize) + spacing, measured: true };
 }
 
 /**
@@ -177,7 +196,9 @@ async function wrapToWidth(
   maxWidth: number,
   fontFamily: string,
   fontSize: number,
-  fontWeight: number
+  fontWeight: number,
+  letterSpacing: number = 0,
+  fontStyle: 'normal' | 'italic' = 'normal'
 ): Promise<string[]> {
   const lines: string[] = [];
 
@@ -186,7 +207,14 @@ async function wrapToWidth(
 
     for (const word of paragraph.split(/\s+/).filter(Boolean)) {
       const candidate = current ? `${current} ${word}` : word;
-      const { width } = await measureTextWidth(candidate, fontFamily, fontSize, fontWeight);
+      const { width } = await measureTextWidth(
+        candidate,
+        fontFamily,
+        fontSize,
+        fontWeight,
+        letterSpacing,
+        fontStyle
+      );
 
       if (width <= maxWidth || !current) {
         current = candidate;
@@ -331,21 +359,38 @@ async function validateField(
     const fontSize = fieldConfig.font?.size || DEFAULT_FONT_SIZE;
     const fontFamily = fieldConfig.font?.family || 'Inter';
     const fontWeight = fieldConfig.font?.weight || 400;
+    const letterSpacing = fieldConfig.font?.letterSpacing || 0;
+    const fontStyle = fieldConfig.font?.style === 'italic' ? 'italic' : 'normal';
+
+    // Warstwa moze narzucac wersaliki - a "ALEKSANDRA" jest wyraznie szersza
+    // niz "Aleksandra". Mierzymy to, co naprawde pojdzie na papier, ta sama
+    // funkcja co renderer.
+    const measuredValue = applyTextTransform(normalizedValue, fieldConfig.font?.transform);
 
     // Ramka zawijajaca lamie tekst po spacjach dokladnie tak, jak zrobi to
     // renderer - inaczej walidacja odrzucalaby wpisy, ktore drukuja sie
     // poprawnie. Do sprawdzenia zostaje wtedy najdluzsze SLOWO (nie da sie go
     // zlamac) i liczba linii po zawinieciu.
     const lines = fieldConfig.wraps
-      ? await wrapToWidth(normalizedValue, maxWidth, fontFamily, fontSize, fontWeight)
-      : normalizedValue.split('\n');
+      ? await wrapToWidth(
+          measuredValue,
+          maxWidth,
+          fontFamily,
+          fontSize,
+          fontWeight,
+          letterSpacing,
+          fontStyle
+        )
+      : measuredValue.split('\n');
 
     for (let i = 0; i < lines.length; i++) {
       const { width: lineWidth, measured } = await measureTextWidth(
         lines[i],
         fontFamily,
         fontSize,
-        fontWeight
+        fontWeight,
+        letterSpacing,
+        fontStyle
       );
 
       if (lineWidth > maxWidth) {

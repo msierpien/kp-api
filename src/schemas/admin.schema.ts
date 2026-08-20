@@ -882,6 +882,15 @@ export const templateLayoutSchema = z.object({
   // drukarka prowadzi konkretny format. Zakres jak przy korekcie globalnej.
   printOffsetXMm: z.number().min(-20).max(20).optional(),
   printOffsetYMm: z.number().min(-20).max(20).optional(),
+  // Profil druku (drukarka, format papieru, podajnik, jakosc) wskazany po
+  // nazwie - jego tresc zyje w konfiguracji agenta przy drukarce. `options` to
+  // odstepstwa od profilu; kluczy nie znamy z gory, bo pochodza z PPD sterownika.
+  printProfile: z
+    .object({
+      profile: z.string().min(1).max(100),
+      options: z.record(z.string(), z.string()).optional(),
+    })
+    .optional(),
 });
 
 export const templateAssetParamsSchema = z.object({

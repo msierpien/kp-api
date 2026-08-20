@@ -581,6 +581,32 @@ export async function listCasePrintAssets(caseId: string) {
   });
 }
 
+/**
+ * Profil druku zapisany na szablonie tej sprawy - podpowiedz dla okna druku.
+ *
+ * Czytamy z BIEZACEGO szablonu, nie ze snapshotu layoutu zamrozonego przy
+ * zatwierdzeniu sprawy: zamrazamy projekt, ktory klient zaakceptowal, a to,
+ * z ktorego podajnika i na jakim papierze to leci, jest ustawieniem produkcji
+ * i ma dzialac takze na sprawach czekajacych juz w kolejce.
+ *
+ * Zwracamy sama nazwe profilu. To, czy agent taki profil zna, sprawdza panel -
+ * nazwa bez pokrycia ma skonczyc sie recznym wyborem, nie wydrukiem "czymkolwiek".
+ */
+export async function getCaseTemplatePrintProfile(caseId: string) {
+  const caseItem = await prisma.personalizationCase.findUnique({
+    where: { id: caseId },
+    select: { template: { select: { layoutJson: true } } },
+  });
+
+  const layout = (caseItem?.template.layoutJson || {}) as {
+    printProfile?: { profile?: string; options?: Record<string, string> };
+  };
+  const profile = layout.printProfile?.profile;
+  if (!profile) return null;
+
+  return { profile, options: layout.printProfile?.options ?? {} };
+}
+
 /** Reczne domkniecie zadania STALE, gdy operator potwierdzi, ze wydruk wyszedl. */
 export async function resolveStaleJob(jobId: string, printed: boolean) {
   const job = await prisma.printJob.findFirst({ where: { id: jobId } });

@@ -800,8 +800,17 @@ export async function generateCasePrintPackage(id: string, options: GeneratePrin
     // podajnika, a szablonowa konkretny format - drukarka inaczej prowadzi
     // winietke 90x50, a inaczej kartke A6. Arkusz zbiorczy jej nie dolicza
     // z tego samego powodu, dla ktorego ma wlasna kalibracje.
-    const templateOffsetXMm = Number((layout as { printOffsetXMm?: number })?.printOffsetXMm) || 0;
-    const templateOffsetYMm = Number((layout as { printOffsetYMm?: number })?.printOffsetYMm) || 0;
+    //
+    // Czytane z BIEZACEGO szablonu, nie z `layout` - ten po zatwierdzeniu sprawy
+    // jest zamrozonym snapshotem projektu. Zamrazamy to, co klient zaakceptowal;
+    // kalibracja drukarki nie jest czescia tej umowy i poprawka ma dzialac takze
+    // na sprawach czekajacych juz w kolejce do druku.
+    const printCalibration = (caseItem.template.layoutJson || {}) as {
+      printOffsetXMm?: number;
+      printOffsetYMm?: number;
+    };
+    const templateOffsetXMm = Number(printCalibration.printOffsetXMm) || 0;
+    const templateOffsetYMm = Number(printCalibration.printOffsetYMm) || 0;
 
     const pdfOffsetXMm = imposition
       ? imposition.sheetOffsetXMm || 0

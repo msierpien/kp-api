@@ -434,3 +434,31 @@ test('korekta wydruku szablonu przechodzi przez schemat i ma granice', () => {
   // poza kartke.
   assert.equal(templateLayoutSchema.safeParse({ ...base, printOffsetXMm: 50 }).success, false);
 });
+
+test('profil druku szablonu przechodzi przez schemat razem z nadpisaniami', () => {
+  const canvas = normalizeCanvasConfig({ widthMm: 105, heightMm: 100, dpi: 300 } as any);
+  const base = { version: 1 as const, canvas, fonts: [], layers: [] };
+
+  // Klucze opcji pochodza z PPD sterownika, wiec schemat nie moze ich znac
+  // z gory - przepuszcza dowolna mape tekst -> tekst.
+  const parsed = templateLayoutSchema.parse({
+    ...base,
+    printProfile: { profile: 'winietki-105x100', options: { EPIJ_Qual: '307' } },
+  });
+  assert.equal(parsed.printProfile?.profile, 'winietki-105x100');
+  assert.equal(parsed.printProfile?.options?.EPIJ_Qual, '307');
+
+  // Sam profil, bez odstepstw - najczestszy przypadek.
+  assert.equal(
+    templateLayoutSchema.parse({ ...base, printProfile: { profile: 'a4-karton' } }).printProfile
+      ?.profile,
+    'a4-karton'
+  );
+
+  // Pusta nazwa to nie jest "brak profilu", tylko blad - brak zapisujemy
+  // nieobecnoscia calego pola.
+  assert.equal(
+    templateLayoutSchema.safeParse({ ...base, printProfile: { profile: '' } }).success,
+    false
+  );
+});

@@ -28,6 +28,7 @@ import { casePrintSchema } from '../../schemas/print.schema';
 import {
   createPrintJob,
   listCasePrintAssets,
+  getCaseTemplatePrintProfile,
   toPrintJobDto,
 } from '../../services/print/print-job.service';
 import {
@@ -374,7 +375,14 @@ export async function casesRoutes(fastify: FastifyInstance) {
           .status(400)
           .send({ error: 'Validation Error', message: parsed.error.errors[0].message });
       }
-      return reply.send({ assets: await listCasePrintAssets(parsed.data.id) });
+      // Razem z plikami oddajemy profil druku z szablonu - okno druku ustawia
+      // sie samo, zamiast kazac operatorowi pamietac, na czym drukuje sie ten
+      // format.
+      const [assets, printProfile] = await Promise.all([
+        listCasePrintAssets(parsed.data.id),
+        getCaseTemplatePrintProfile(parsed.data.id),
+      ]);
+      return reply.send({ assets, printProfile });
     }
   );
 

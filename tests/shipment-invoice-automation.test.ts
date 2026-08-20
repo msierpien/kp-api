@@ -129,3 +129,11 @@ test('pusty status w akcji zamówienia daje czytelny komunikat', () => {
   // regula szla do API z pustym statusem — komunikat musi mowic, co zrobic.
   assert.match(AUTOMATION_SERVICE, /Brak statusu w akcji/);
 });
+
+test('regula z niekompletna akcja nie zapisze sie do bazy', () => {
+  // Walidacja przy ZAPISIE, nie przy uruchomieniu: inaczej regula pada w srodku
+  // nadania listu, gdy faktura juz poszla.
+  assert.match(AUTOMATION_SERVICE, /function assertAutomationActionConfig/);
+  assert.match(AUTOMATION_SERVICE, /list\.forEach\(assertAutomationActionConfig\);/);
+  assert.match(AUTOMATION_SERVICE, /Akcja „Zmień status zamówienia" wymaga wybranego statusu/);
+});

@@ -678,8 +678,39 @@ function automationConditionsJson(conditions: unknown): Prisma.InputJsonValue {
   return normalizeConditions(conditions) as unknown as Prisma.InputJsonValue;
 }
 
+/**
+ * Regula z niekompletna akcja pada dopiero przy uruchomieniu — czyli w srodku
+ * nadania listu, gdy faktura juz poszla. Konfiguracje sprawdzamy wiec przy
+ * ZAPISIE, zeby zla regula w ogole nie weszla do bazy (tez ze skryptu, ktory
+ * idzie przez ten serwis).
+ */
+function assertAutomationActionConfig(action: any) {
+  const type = String(action?.type || '');
+  const config = (action?.config && typeof action.config === 'object') ? action.config : {};
+
+  if (type === AutomationActionType.CHANGE_ORDER_STATUS) {
+    const status = String(config.status || '').trim();
+    if (!status) throw new Error('Akcja „Zmień status zamówienia" wymaga wybranego statusu');
+    assertOrderOperationalStatus(status);
+    return;
+  }
+
+  if (type === AutomationActionType.CHANGE_STATUS) {
+    if (!String(config.status || '').trim()) {
+      throw new Error('Akcja „Zmień status" wymaga wybranego statusu sprawy');
+    }
+    return;
+  }
+
+  if (type === AutomationActionType.WEBHOOK && !String(config.url || '').trim()) {
+    throw new Error('Akcja „Webhook" wymaga adresu URL');
+  }
+}
+
 function automationActionsJson(actions: unknown): Prisma.InputJsonValue {
-  return (Array.isArray(actions) ? actions : []) as unknown as Prisma.InputJsonValue;
+  const list = Array.isArray(actions) ? actions : [];
+  list.forEach(assertAutomationActionConfig);
+  return list as unknown as Prisma.InputJsonValue;
 }
 
 async function loadCaseData(caseId: string) {

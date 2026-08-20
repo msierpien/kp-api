@@ -48,7 +48,19 @@ const AGE_WORDS = [
 const GENERIC_HEADINGS = ['menu', 'program', 'zaproszenie', 'winietka', 'zyczenia', 'jadlospis'];
 
 /** Slowa, po ktorych poznajemy nazwe wlasna lokalu. */
-const VENUE_WORDS = ['sala', 'restauracj', 'hotel', 'dworek', 'karczm', 'palac', 'willa'];
+const VENUE_WORDS = [
+  // Rdzenie, nie mianowniki: napis brzmi "W SALI BANKIETOWEJ", nie "sala",
+  // a "sala" nie pasowala do niczego, co klienci naprawde pisza.
+  'sal',
+  'restauracj',
+  'hotel',
+  'dwor',
+  'karczm',
+  'palac',
+  'will',
+  'kosciel',
+  'kosciol',
+];
 
 /** Wzorzec do uzupelnienia - "xx.xx.xxxx", "___", "XX". Tego nikt nie wydrukuje. */
 const PLACEHOLDER_SHAPED = /(x{2,}|_{2,}|\.{3,})/i;

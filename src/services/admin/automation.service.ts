@@ -4,9 +4,16 @@ import { config as appConfig } from '../../config';
 import { decrypt } from '../../lib/encryption';
 import { getTenantContext, getTenantId } from '../../lib/tenant-context';
 import { assertOrderOperationalStatus } from '../../lib/order-statuses';
+import {
+  shipmentServiceLabel,
+  shipmentStageFromStatus,
+  shipmentStageLabel,
+  shipmentTrackingUrl,
+} from '../../lib/inpost-statuses';
 import { generateAccessToken, getTokenExpiryDate, maskToken } from '../../lib/token';
 import { emailService } from '../email/email.service';
 import { createShopEmailService } from './email-settings.service';
+import { findEmailTemplateForAction } from './email-templates.service';
 import { queueOrderPersonalizationEmail } from '../queue/email.queue';
 import { confirmDocument, syncWzDraftItemsWithReservations } from './warehouse-documents.service';
 import {
@@ -14,6 +21,7 @@ import {
   type IssueInvoiceAfterShipmentConfig,
   type ShipmentInvoiceResult,
 } from '../orders/order-shipment-invoice.service';
+import { AUTOMATION_SCENARIOS, getAutomationScenario } from './automation-scenarios';
 import {
   buildDryRunResult,
   executeWebhook,
@@ -43,12 +51,14 @@ export enum AutomationTrigger {
   CASE_TIME_ELAPSED = 'CASE_TIME_ELAPSED',
   ORDER_INVOICE_ISSUED = 'ORDER_INVOICE_ISSUED',
   ORDER_SHIPMENT_CREATED = 'ORDER_SHIPMENT_CREATED',
+  ORDER_SHIPMENT_STATUS_CHANGED = 'ORDER_SHIPMENT_STATUS_CHANGED',
 }
 
 export enum AutomationActionType {
   SEND_EMAIL = 'SEND_EMAIL',
   CHANGE_STATUS = 'CHANGE_STATUS',
   ADD_NOTE = 'ADD_NOTE',
+  SEND_ORDER_EMAIL = 'SEND_ORDER_EMAIL',
   WEBHOOK = 'WEBHOOK',
   CONFIRM_ORDER_WZ_AFTER_INVOICE = 'CONFIRM_ORDER_WZ_AFTER_INVOICE',
   ISSUE_INVOICE_AFTER_SHIPMENT = 'ISSUE_INVOICE_AFTER_SHIPMENT',
@@ -64,6 +74,7 @@ export enum AutomationActionType {
 const ORDER_SCOPED_TRIGGERS: string[] = [
   AutomationTrigger.ORDER_INVOICE_ISSUED,
   AutomationTrigger.ORDER_SHIPMENT_CREATED,
+  AutomationTrigger.ORDER_SHIPMENT_STATUS_CHANGED,
 ];
 
 export function isOrderScopedTrigger(trigger: string) {
@@ -160,14 +171,22 @@ async function executeSendEmail(config: Record<string, any>, caseData: any): Pro
     : renderTemplate(String(config.to), variables);
   if (!to) throw new Error('Missing email recipient');
 
-  const subject = renderTemplate(
-    String(config.subject || `Personalizacja zamówienia {{orderReference}} - {{shopName}}`),
-    variables,
-  );
-  const body = renderTemplate(
-    String(config.body || config.template || 'Link do personalizacji: {{personalizationUrl}}'),
-    variables,
-  );
+  // Tresc z biblioteki szablonow wygrywa nad wklejona w regule; bez
+  // `templateId` regula dziala dokladnie jak wczesniej.
+  const caseTemplate = await findEmailTemplateForAction({
+    templateId: config.templateId,
+    shopId: caseData?.order?.shop?.id ?? null,
+  });
+  const subjectSource = caseTemplate?.subject
+    || config.subject
+    || 'Personalizacja zamówienia {{orderReference}} - {{shopName}}';
+  const bodySource = caseTemplate?.bodyText
+    || config.body
+    || config.template
+    || 'Link do personalizacji: {{personalizationUrl}}';
+
+  const subject = renderTemplate(String(subjectSource), variables);
+  const body = renderTemplate(String(bodySource), variables);
 
   // Zamowienie moze miec KILKA produktow personalizowanych, a kazdy zaklada
   // wlasna sprawe - wysylka wprost daloby klientowi tyle maili, ile pozycji.
@@ -182,11 +201,11 @@ async function executeSendEmail(config: Record<string, any>, caseData: any): Pro
       shopId: caseData?.order?.shop?.id || caseData?.shop?.id || undefined,
       to,
       subject: renderTemplate(
-        String(config.subject || `Personalizacja zamówienia {{orderReference}} - {{shopName}}`),
+        String(subjectSource),
         { ...variables, productName: '{{productName}}', quantity: '{{quantity}}' },
       ),
       body: renderTemplate(
-        String(config.body || config.template || 'Link do personalizacji: {{personalizationUrl}}'),
+        String(bodySource),
         {
           ...variables,
           personalizationUrl: '{{personalizationUrl}}',
@@ -233,6 +252,72 @@ async function executeSendEmail(config: Record<string, any>, caseData: any): Pro
   }
 
   console.log(`[Automation] Email sent to ${to} for case ${caseData.id}: ${subject}`);
+}
+
+/**
+ * Mail o zamowieniu — inaczej niz SEND_EMAIL nie dotyka sprawy personalizacji
+ * ani tokenow, wiec dziala przy wyzwalaczach zamowienia i przesylki.
+ */
+async function executeSendOrderEmail(config: Record<string, any>, context: AutomationContext): Promise<void> {
+  const order = context.caseData?.order;
+  if (!order?.id) throw new Error('Brak zamówienia dla akcji „Wyślij email o zamówieniu”');
+
+  const shipment = (context.caseData?.shipment ?? {}) as Record<string, any>;
+  const trackingNumber = String(shipment.trackingNumber ?? '').trim();
+  const shipmentStatus = String(shipment.status ?? '').trim();
+  const stage = shipmentStageFromStatus(shipmentStatus);
+
+  const variables = {
+    customerName: order.customerName || '',
+    orderReference: order.orderReference || '',
+    shopName: order.shop?.name || '',
+    trackingNumber,
+    trackingUrl: shipmentTrackingUrl(trackingNumber) ?? '',
+    carrierService: shipmentServiceLabel(shipment.service) ?? '',
+    pickupPoint: String(shipment.targetPoint ?? ''),
+    shipmentStatus,
+    shipmentStage: shipmentStageLabel(stage),
+  };
+
+  const to = config.to && config.to !== 'customer'
+    ? renderTemplate(String(config.to), variables)
+    : order.customerEmail;
+  if (!to) throw new Error('Zamówienie nie ma adresu e-mail odbiorcy');
+
+  // Tresc z biblioteki szablonow wygrywa nad wklejona w regule; regula bez
+  // `templateId` dziala jak dotad, wiec starsze reguly zostaja nietkniete.
+  const template = await findEmailTemplateForAction({
+    templateId: config.templateId,
+    shopId: order.shop?.id ?? null,
+  });
+
+  const subject = renderTemplate(
+    String(template?.subject || config.subject || 'Zamówienie {{orderReference}}'),
+    variables,
+  );
+  const body = renderTemplate(String(template?.bodyText || config.body || config.template || ''), variables);
+  if (!body.trim()) {
+    throw new Error(config.templateId
+      ? 'Szablon wskazany w regule nie istnieje, jest wyłączony albo należy do innego sklepu'
+      : 'Akcja „Wyślij email o zamówieniu” nie ma treści wiadomości');
+  }
+
+  // Nadawca zalezy od SKLEPU: kazdy wysyla z wlasnej domeny, inaczej SPF
+  // i DKIM nie zgadzaja sie z adresem i poczta laduje w spamie.
+  const sender = order.shop?.id ? await createShopEmailService(order.shop.id).catch(() => null) : null;
+  const mailer = sender ?? emailService;
+  if (!sender && !emailService.isConfigured()) {
+    throw new Error('Email service not configured');
+  }
+
+  await mailer.sendAutomationEmail({
+    to,
+    subject,
+    body,
+    shopName: String(variables.shopName),
+  });
+
+  console.log(`[Automation] Order email sent to ${to} for order ${order.orderReference}: ${subject}`);
 }
 
 async function executeChangeStatus(config: Record<string, any>, context: AutomationContext): Promise<void> {
@@ -374,6 +459,9 @@ async function executeActions(actions: AutomationAction[], context: AutomationCo
         case AutomationActionType.ADD_NOTE:
           await executeAddNote(action.config || {}, context.caseId);
           break;
+        case AutomationActionType.SEND_ORDER_EMAIL:
+          await executeSendOrderEmail(action.config || {}, context);
+          break;
         case AutomationActionType.WEBHOOK:
           await executeWebhook(action.config || {}, context);
           break;
@@ -395,6 +483,180 @@ async function executeActions(actions: AutomationAction[], context: AutomationCo
   }
 
   return results;
+}
+
+interface AutomationRunOutcome {
+  automationId: string;
+  automationName: string;
+  actionResults: AutomationActionExecutionResult[];
+}
+
+interface RunAutomationsInput {
+  trigger: string;
+  tenantId: string;
+  context: AutomationContext;
+  /**
+   * Klucz idempotencji, np. `shipment:<id>:ready_to_pickup`. Gdy reguła ma go
+   * juz w historii, pomijamy ja bez wykonania akcji — inaczej powtorzony
+   * przebieg synchronizacji wyslalby klientowi drugiego maila o tym samym.
+   */
+  contextKey?: string | null;
+  subjectLabel?: string | null;
+  /** Komunikaty traktowane jak blad reguly mimo braku wyjatku (np. wstrzymana faktura). */
+  blockingMessages?: (results: AutomationActionExecutionResult[]) => string[];
+}
+
+/**
+ * Wspolny przebieg dla wszystkich wyzwalaczy: dopasowanie warunkow, blokada
+ * powtorki, wykonanie akcji i slad w historii.
+ */
+async function runAutomationsForTrigger(input: RunAutomationsInput): Promise<AutomationRunOutcome[]> {
+  const automations = await prisma.automation.findMany({
+    where: {
+      tenantId: input.tenantId,
+      trigger: input.trigger,
+      isActive: true,
+    },
+    orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
+  });
+
+  const outcomes: AutomationRunOutcome[] = [];
+
+  for (const automation of automations) {
+    const dryRun = buildDryRunResult(automation.id, automation.conditions, input.context);
+
+    if (!dryRun.matched) {
+      await recordAutomationRun({
+        automationId: automation.id,
+        tenantId: input.tenantId,
+        trigger: input.trigger,
+        status: 'SKIPPED',
+        matched: false,
+        // Bez klucza: pominiecie nie moze zablokowac pozniejszego wykonania,
+        // gdy warunki w koncu zostana spelnione.
+        contextKey: null,
+        subjectLabel: input.subjectLabel ?? null,
+        payload: { conditionResults: dryRun.conditionResults },
+      });
+      continue;
+    }
+
+    const run = await reserveAutomationRun({
+      automationId: automation.id,
+      tenantId: input.tenantId,
+      trigger: input.trigger,
+      contextKey: input.contextKey ?? null,
+      subjectLabel: input.subjectLabel ?? null,
+    });
+    if (!run) continue;
+
+    const actions = Array.isArray(automation.actions)
+      ? automation.actions as unknown as AutomationAction[]
+      : [];
+    const actionResults = await executeActions(actions, input.context);
+    const actionErrors = actionResults
+      .filter((result) => result.error)
+      .map((result) => `${result.type}: ${result.error}`);
+    const errors = [...actionErrors, ...(input.blockingMessages?.(actionResults) ?? [])];
+    const now = new Date();
+
+    await prisma.automation.update({
+      where: { id: automation.id },
+      data: {
+        runCount: { increment: 1 },
+        lastRunAt: now,
+        ...(errors.length > 0
+          ? { lastErrorAt: now, lastErrorMessage: errors.join('\n').slice(0, 5000) }
+          : { lastErrorMessage: null }),
+      },
+    });
+
+    await prisma.automationRun.update({
+      where: { id: run.id },
+      data: {
+        status: errors.length > 0 ? 'ERROR' : 'OK',
+        error: errors.length > 0 ? errors.join('\n').slice(0, 5000) : null,
+        finishedAt: now,
+        payloadJson: {
+          conditionResults: dryRun.conditionResults,
+          actions: actionResults.map((result) => ({ type: result.type, error: result.error ?? null })),
+        } as unknown as Prisma.InputJsonValue,
+      },
+    }).catch((error) => {
+      // Historia nie moze przewrocic wykonanej juz automatyzacji.
+      console.error('[Automation] Nie udało się zapisać wyniku uruchomienia:', error);
+    });
+
+    outcomes.push({
+      automationId: automation.id,
+      automationName: automation.name,
+      actionResults,
+    });
+  }
+
+  return outcomes;
+}
+
+/**
+ * Rezerwuje wpis w historii PRZED wykonaniem akcji. Kolizja klucza znaczy, ze
+ * ten sam kontekst obsluzyla juz wczesniejsza proba — wtedy zwracamy null
+ * i reguła nie rusza po raz drugi.
+ */
+async function reserveAutomationRun(input: {
+  automationId: string;
+  tenantId: string;
+  trigger: string;
+  contextKey: string | null;
+  subjectLabel: string | null;
+}): Promise<{ id: string } | null> {
+  try {
+    return await prisma.automationRun.create({
+      data: {
+        automationId: input.automationId,
+        tenantId: input.tenantId,
+        trigger: input.trigger,
+        status: 'RUNNING',
+        matched: true,
+        contextKey: input.contextKey,
+        subjectLabel: input.subjectLabel,
+      },
+      select: { id: true },
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function recordAutomationRun(input: {
+  automationId: string;
+  tenantId: string;
+  trigger: string;
+  status: string;
+  matched: boolean;
+  contextKey: string | null;
+  subjectLabel: string | null;
+  payload?: Record<string, unknown>;
+}) {
+  try {
+    await prisma.automationRun.create({
+      data: {
+        automationId: input.automationId,
+        tenantId: input.tenantId,
+        trigger: input.trigger,
+        status: input.status,
+        matched: input.matched,
+        contextKey: input.contextKey,
+        subjectLabel: input.subjectLabel,
+        finishedAt: new Date(),
+        ...(input.payload ? { payloadJson: input.payload as unknown as Prisma.InputJsonValue } : {}),
+      },
+    });
+  } catch (error) {
+    console.error('[Automation] Nie udało się zapisać historii automatyzacji:', error);
+  }
 }
 
 function getTenantIdForAutomationData(data: { tenantId?: string }) {
@@ -442,39 +704,12 @@ export async function triggerAutomations(context: AutomationContext): Promise<vo
       return;
     }
 
-    const automations = await prisma.automation.findMany({
-      where: {
-        tenantId,
-        trigger: context.trigger,
-        isActive: true,
-      },
-      orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
+    await runAutomationsForTrigger({
+      trigger: context.trigger,
+      tenantId,
+      context,
+      subjectLabel: context.caseData?.order?.orderReference ?? context.caseId,
     });
-
-    for (const automation of automations) {
-      const dryRun = buildDryRunResult(automation.id, automation.conditions, context);
-      if (!dryRun.matched) continue;
-
-      const actions = Array.isArray(automation.actions)
-        ? automation.actions as unknown as AutomationAction[]
-        : [];
-      const actionResults = await executeActions(actions, context);
-      const actionErrors = actionResults
-        .filter((result) => result.error)
-        .map((result) => `${result.type}: ${result.error}`);
-      const now = new Date();
-
-      await prisma.automation.update({
-        where: { id: automation.id },
-        data: {
-          runCount: { increment: 1 },
-          lastRunAt: now,
-          ...(actionErrors.length > 0
-            ? { lastErrorAt: now, lastErrorMessage: actionErrors.join('\n').slice(0, 5000) }
-            : { lastErrorMessage: null }),
-        },
-      });
-    }
   } catch (error) {
     console.error('[Automation] Failed to trigger automations:', error);
   }
@@ -510,53 +745,27 @@ export async function triggerInvoiceIssuedAutomations(input: { orderId: string; 
       return { status: 'NONE', reason: 'Brak tenanta dla automatyzacji faktury' };
     }
 
-    const automations = await prisma.automation.findMany({
-      where: {
-        tenantId,
-        trigger: AutomationTrigger.ORDER_INVOICE_ISSUED,
-        isActive: true,
-      },
-      orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
+    const outcomes = await runAutomationsForTrigger({
+      trigger: AutomationTrigger.ORDER_INVOICE_ISSUED,
+      tenantId,
+      context,
+      // Faktura wystawia sie raz, wiec jej numer wystarcza za blokade powtorki.
+      contextKey: `invoice:${input.invoiceId}`,
+      subjectLabel: order.orderReference,
     });
-    if (automations.length === 0) {
+
+    if (outcomes.length === 0) {
       return { status: 'NONE', reason: 'Brak aktywnej automatyzacji dla wystawionej faktury' };
     }
 
-    let warehouseDocumentAction: InvoiceWarehouseDocumentAction = {
+    const warehouseDocumentAction = outcomes
+      .flatMap((outcome) => outcome.actionResults)
+      .find((result) => result.warehouseDocumentAction)?.warehouseDocumentAction;
+
+    return warehouseDocumentAction ?? {
       status: 'NONE',
       reason: 'Automatyzacja nie zwróciła akcji WZ',
     };
-
-    for (const automation of automations) {
-      const dryRun = buildDryRunResult(automation.id, automation.conditions, context);
-      if (!dryRun.matched) continue;
-
-      const actions = Array.isArray(automation.actions)
-        ? automation.actions as unknown as AutomationAction[]
-        : [];
-      const actionResults = await executeActions(actions, context);
-      const actionErrors = actionResults
-        .filter((result) => result.error)
-        .map((result) => `${result.type}: ${result.error}`);
-      const actionResult = actionResults.find((result) => result.warehouseDocumentAction);
-      if (actionResult?.warehouseDocumentAction) {
-        warehouseDocumentAction = actionResult.warehouseDocumentAction;
-      }
-      const now = new Date();
-
-      await prisma.automation.update({
-        where: { id: automation.id },
-        data: {
-          runCount: { increment: 1 },
-          lastRunAt: now,
-          ...(actionErrors.length > 0
-            ? { lastErrorAt: now, lastErrorMessage: actionErrors.join('\n').slice(0, 5000) }
-            : { lastErrorMessage: null }),
-        },
-      });
-    }
-
-    return warehouseDocumentAction;
   } catch (error) {
     return {
       status: 'FAILED',
@@ -594,54 +803,25 @@ export async function triggerShipmentCreatedAutomations(input: {
     const tenantId = getTenantIdFromContext(context);
     if (!tenantId) return null;
 
-    const automations = await prisma.automation.findMany({
-      where: {
-        tenantId,
-        trigger: AutomationTrigger.ORDER_SHIPMENT_CREATED,
-        isActive: true,
-      },
-      orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
-    });
-    if (automations.length === 0) return null;
-
     let shipmentInvoiceAction: ShipmentInvoiceResult | null = null;
 
-    for (const automation of automations) {
-      const dryRun = buildDryRunResult(automation.id, automation.conditions, context);
-      if (!dryRun.matched) continue;
-
-      const actions = Array.isArray(automation.actions)
-        ? automation.actions as unknown as AutomationAction[]
-        : [];
-      const actionResults = await executeActions(actions, context);
-      const actionErrors = actionResults
-        .filter((result) => result.error)
-        .map((result) => `${result.type}: ${result.error}`);
-      const actionResult = actionResults.find((result) => result.shipmentInvoiceAction);
-      if (actionResult?.shipmentInvoiceAction) {
-        shipmentInvoiceAction = actionResult.shipmentInvoiceAction;
-      }
-
+    const outcomes = await runAutomationsForTrigger({
+      trigger: AutomationTrigger.ORDER_SHIPMENT_CREATED,
+      tenantId,
+      context,
+      subjectLabel: order.orderReference,
       // Wstrzymanie z powodu brakow to nie awaria akcji, ale MUSI zostac slad:
       // baner w panelu znika po odswiezeniu, a faktury i tak nie ma.
-      const blockedMessage = shipmentInvoiceAction && ['STOCK_MISSING', 'FAILED'].includes(shipmentInvoiceAction.status)
-        ? [`${AutomationActionType.ISSUE_INVOICE_AFTER_SHIPMENT}: ${shipmentInvoiceAction.message}`]
-        : [];
-      const errorMessages = [...actionErrors, ...blockedMessage];
-      const now = new Date();
+      blockingMessages: (results) => {
+        const action = results.find((result) => result.shipmentInvoiceAction)?.shipmentInvoiceAction;
+        if (action) shipmentInvoiceAction = action;
+        return action && ['STOCK_MISSING', 'FAILED'].includes(action.status)
+          ? [`${AutomationActionType.ISSUE_INVOICE_AFTER_SHIPMENT}: ${action.message}`]
+          : [];
+      },
+    });
 
-      await prisma.automation.update({
-        where: { id: automation.id },
-        data: {
-          runCount: { increment: 1 },
-          lastRunAt: now,
-          ...(errorMessages.length > 0
-            ? { lastErrorAt: now, lastErrorMessage: errorMessages.join('\n').slice(0, 5000) }
-            : { lastErrorMessage: null }),
-        },
-      });
-    }
-
+    if (outcomes.length === 0) return null;
     return shipmentInvoiceAction;
   } catch (error) {
     return {
@@ -652,9 +832,191 @@ export async function triggerShipmentCreatedAutomations(input: {
   }
 }
 
+/**
+ * Zmiana statusu przesylki u przewoznika. Stad ida maile „kurier doreczy dzis"
+ * i „paczka czeka w paczkomacie" — synchronizacja wola to raz na kazda realna
+ * zmiane, a `contextKey` pilnuje, zeby ponowny przebieg nic nie powtorzyl.
+ */
+export async function triggerShipmentStatusAutomations(input: {
+  orderId: string;
+  shipmentId: string;
+  shipment: Record<string, unknown>;
+  previousStatus?: string | null;
+}): Promise<void> {
+  try {
+    const order = await prisma.order.findUnique({
+      where: { id: input.orderId },
+      include: { shop: true },
+    });
+    if (!order) return;
+
+    // Warunki reguł pisze sie na etapie (`shipment.stage`), bo surowych
+    // statusow przewoznika sa dziesiatki i dochodza nowe. Etap dokladamy tu,
+    // zeby regula widziala go obok surowej nazwy.
+    const status = String(input.shipment.status ?? '');
+    const shipment = {
+      ...input.shipment,
+      stage: shipmentStageFromStatus(status),
+      stageLabel: shipmentStageLabel(shipmentStageFromStatus(status)),
+      previousStage: input.previousStatus ? shipmentStageFromStatus(input.previousStatus) : null,
+    };
+
+    const context: AutomationContext = {
+      caseId: order.id,
+      orderId: order.id,
+      shipmentId: input.shipmentId,
+      trigger: AutomationTrigger.ORDER_SHIPMENT_STATUS_CHANGED,
+      previousStatus: input.previousStatus ?? undefined,
+      newStatus: status,
+      caseData: { order, shipment },
+    };
+
+    const tenantId = order.shop.tenantId;
+    if (!tenantId) return;
+
+    await runAutomationsForTrigger({
+      trigger: AutomationTrigger.ORDER_SHIPMENT_STATUS_CHANGED,
+      tenantId,
+      context,
+      contextKey: `shipment:${input.shipmentId}:${status || 'unknown'}`,
+      subjectLabel: order.orderReference,
+    });
+  } catch (error) {
+    console.error('[Automation] Nie udało się uruchomić automatyzacji statusu przesyłki:', error);
+  }
+}
+
+export interface AutomationRunMetrics {
+  /** Siedem dni wstecz, od najstarszego — panel rysuje z tego sparkline. */
+  daily: Array<{ date: string; total: number; errors: number }>;
+  total: number;
+  errors: number;
+}
+
+const METRICS_WINDOW_DAYS = 7;
+
 export async function listAutomations() {
-  return prisma.automation.findMany({
+  const automations = await prisma.automation.findMany({
     orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }],
+  });
+  if (automations.length === 0) return [];
+
+  const metrics = await loadAutomationMetrics(automations.map((automation) => automation.id));
+
+  return automations.map((automation) => ({
+    ...automation,
+    metrics: metrics.get(automation.id) ?? emptyMetrics(),
+  }));
+}
+
+function emptyMetrics(): AutomationRunMetrics {
+  const daily = Array.from({ length: METRICS_WINDOW_DAYS }, (_, index) => {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() - (METRICS_WINDOW_DAYS - 1 - index));
+    return { date: date.toISOString().slice(0, 10), total: 0, errors: 0 };
+  });
+  return { daily, total: 0, errors: 0 };
+}
+
+/** Uruchomienia z ostatnich 7 dni per reguła i dzień — dane pod sparkline w liście. */
+async function loadAutomationMetrics(automationIds: string[]): Promise<Map<string, AutomationRunMetrics>> {
+  const since = new Date();
+  since.setHours(0, 0, 0, 0);
+  since.setDate(since.getDate() - (METRICS_WINDOW_DAYS - 1));
+
+  const runs = await prisma.automationRun.findMany({
+    where: {
+      automationId: { in: automationIds },
+      matched: true,
+      createdAt: { gte: since },
+    },
+    select: { automationId: true, status: true, createdAt: true },
+  });
+
+  const result = new Map<string, AutomationRunMetrics>();
+  for (const run of runs) {
+    const metrics = result.get(run.automationId) ?? emptyMetrics();
+    const day = run.createdAt.toISOString().slice(0, 10);
+    const bucket = metrics.daily.find((item) => item.date === day);
+    if (bucket) {
+      bucket.total += 1;
+      if (run.status === 'ERROR') bucket.errors += 1;
+    }
+    metrics.total += 1;
+    if (run.status === 'ERROR') metrics.errors += 1;
+    result.set(run.automationId, metrics);
+  }
+
+  return result;
+}
+
+export async function listAutomationRuns(automationId: string, limit = 25) {
+  await getAutomationById(automationId);
+  return prisma.automationRun.findMany({
+    where: { automationId },
+    orderBy: { createdAt: 'desc' },
+    take: Math.min(Math.max(limit, 1), 100),
+  });
+}
+
+/**
+ * Zbiorcza zmiana priorytetow po przeciagnieciu wiersza. Wyzszy priorytet =
+ * wczesniejsze wykonanie (tak samo jak w `orderBy` przy wyzwalaniu reguł).
+ */
+export async function reorderAutomations(items: Array<{ id: string; priority: number }>) {
+  const ids = items.map((item) => item.id);
+  const owned = await prisma.automation.findMany({
+    where: { id: { in: ids } },
+    select: { id: true },
+  });
+  const ownedIds = new Set(owned.map((automation) => automation.id));
+  const allowed = items.filter((item) => ownedIds.has(item.id));
+
+  await prisma.$transaction(allowed.map((item) => prisma.automation.update({
+    where: { id: item.id },
+    data: { priority: item.priority },
+  })));
+
+  return { updated: allowed.length };
+}
+
+export async function duplicateAutomation(id: string) {
+  const source = await getAutomationById(id);
+
+  return prisma.automation.create({
+    data: {
+      tenantId: source.tenantId,
+      name: `${source.name} (kopia)`,
+      description: source.description,
+      trigger: source.trigger,
+      conditions: source.conditions as Prisma.InputJsonValue,
+      actions: source.actions as Prisma.InputJsonValue,
+      // Kopia startuje wylaczona: dwie identyczne, aktywne reguly zrobilyby
+      // wszystko po dwa razy, zanim ktokolwiek zdazy poprawic warunki.
+      isActive: false,
+      priority: source.priority,
+    },
+  });
+}
+
+export function listAutomationScenarios() {
+  return AUTOMATION_SCENARIOS;
+}
+
+export async function createAutomationFromScenario(scenarioId: string, overrides: { name?: string } = {}) {
+  const scenario = getAutomationScenario(scenarioId);
+  if (!scenario) throw new Error('Nie znamy takiego scenariusza');
+
+  return createAutomation({
+    name: overrides.name || scenario.name,
+    description: scenario.summary,
+    trigger: scenario.trigger,
+    conditions: scenario.conditions,
+    actions: scenario.actions,
+    // Scenariusze piszace do klienta wchodza wylaczone — najpierw podglad tresci.
+    isActive: !scenario.startsDisabled,
+    priority: scenario.priority,
   });
 }
 

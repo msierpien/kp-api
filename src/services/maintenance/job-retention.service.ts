@@ -21,6 +21,7 @@ export const FAILED_RETENTION_DAYS = 90;
 export interface JobRetentionStats {
   renderJobsDeleted: number;
   printJobsDeleted: number;
+  automationRunsDeleted: number;
 }
 
 function daysAgo(days: number): Date {
@@ -57,21 +58,37 @@ export async function pruneJobHistory(options: { dryRun?: boolean } = {}): Promi
     ],
   };
 
+  // Historia automatyzacji rosnie z kazdym uruchomieniem reguly, a wpisy
+  // „warunki niespelnione" powstaja przy KAZDEJ sprawie. Trzymamy tyle, ile
+  // realnie ktos oglada wstecz; bledy dluzej, bo z nich sie diagnozuje.
+  // Wpisy z kluczem idempotencji przezywaja dluzej: skasowany klucz
+  // pozwolilby wyslac klientowi drugiego maila o tym samym statusie.
+  const automationRunWhere = {
+    OR: [
+      { status: { not: 'ERROR' }, contextKey: null, createdAt: { lt: completedBefore } },
+      { status: 'ERROR', createdAt: { lt: failedBefore } },
+      { contextKey: { not: null }, createdAt: { lt: failedBefore } },
+    ],
+  };
+
   if (dryRun) {
-    const [renderJobsDeleted, printJobsDeleted] = await Promise.all([
+    const [renderJobsDeleted, printJobsDeleted, automationRunsDeleted] = await Promise.all([
       prisma.renderJob.count({ where: renderWhere }),
       prisma.printJob.count({ where: printWhere }),
+      prisma.automationRun.count({ where: automationRunWhere }),
     ]);
-    return { renderJobsDeleted, printJobsDeleted };
+    return { renderJobsDeleted, printJobsDeleted, automationRunsDeleted };
   }
 
-  const [renderResult, printResult] = await Promise.all([
+  const [renderResult, printResult, automationRunResult] = await Promise.all([
     prisma.renderJob.deleteMany({ where: renderWhere }),
     prisma.printJob.deleteMany({ where: printWhere }),
+    prisma.automationRun.deleteMany({ where: automationRunWhere }),
   ]);
 
   return {
     renderJobsDeleted: renderResult.count,
     printJobsDeleted: printResult.count,
+    automationRunsDeleted: automationRunResult.count,
   };
 }

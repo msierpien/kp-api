@@ -10,6 +10,12 @@ import { FEATURE_PERSONALIZATION_EDITOR, tenantHasFeature } from '../../lib/feat
 import { releaseOrderReservations, reserveOrder } from './warehouse-reservations.service';
 import { getTenantId } from '../../lib/tenant-context';
 import {
+  shipmentServiceLabel,
+  shipmentStageLabel,
+  shipmentTrackingUrl,
+  type ShipmentStage,
+} from '../../lib/inpost-statuses';
+import {
   ACTIVE_ORDER_OPERATIONAL_STATUSES,
   INACTIVE_ORDER_OPERATIONAL_STATUSES,
   ORDER_OPERATIONAL_STATUSES,
@@ -64,6 +70,17 @@ export interface OrderListItem {
     issuedAt: Date | null;
     sentAt: Date | null;
   };
+  /** Ostatnia przesylka zamowienia; null, gdy nikt nie nadal jeszcze listu. */
+  shipment: {
+    stage: ShipmentStage;
+    stageLabel: string;
+    status: string | null;
+    trackingNumber: string | null;
+    trackingUrl: string | null;
+    service: string | null;
+    serviceLabel: string | null;
+    statusChangedAt: Date | null;
+  } | null;
 }
 
 export interface OrderCountsResponse {
@@ -218,6 +235,13 @@ function buildOrderWhere(
     }
   }
 
+  const shipmentStage = blankToUndefined((query as OrdersListQueryInput).shipmentStage);
+  if (shipmentStage === 'none') {
+    where.shipments = { none: {} };
+  } else if (shipmentStage) {
+    where.shipments = { some: { stage: shipmentStage } };
+  }
+
   return where;
 }
 
@@ -304,6 +328,17 @@ export async function getOrdersList(query: OrdersListQueryInput): Promise<Pagina
             sentAt: true,
           },
         },
+        shipments: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: {
+            stage: true,
+            status: true,
+            trackingNumber: true,
+            service: true,
+            statusChangedAt: true,
+          },
+        },
       },
     }),
     prisma.order.count({ where }),
@@ -314,6 +349,7 @@ export async function getOrdersList(query: OrdersListQueryInput): Promise<Pagina
       .map((item) => item.personalizationCase)
       .filter((item): item is NonNullable<typeof item> => Boolean(item));
     const invoice = order.salesDocuments[0] ?? null;
+    const shipment = order.shipments[0] ?? null;
     const addressValue = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value)
       ? value as Record<string, unknown>
       : null;
@@ -375,6 +411,18 @@ export async function getOrdersList(query: OrdersListQueryInput): Promise<Pagina
         issuedAt: invoice?.issuedAt ?? null,
         sentAt: invoice?.sentAt ?? null,
       },
+      shipment: shipment
+        ? {
+          stage: shipment.stage as ShipmentStage,
+          stageLabel: shipmentStageLabel(shipment.stage),
+          status: shipment.status,
+          trackingNumber: shipment.trackingNumber,
+          trackingUrl: shipmentTrackingUrl(shipment.trackingNumber),
+          service: shipment.service,
+          serviceLabel: shipmentServiceLabel(shipment.service),
+          statusChangedAt: shipment.statusChangedAt,
+        }
+        : null,
     };
   });
 

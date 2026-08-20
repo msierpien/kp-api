@@ -6,6 +6,7 @@ export const TENANT_MODELS = new Set([
   'User',
   'AuthSession',
   'Automation',
+  'AutomationRun',
   'AiSettings',
   'PrintSettings',
   'PrintAgent',
@@ -17,6 +18,7 @@ export const TENANT_MODELS = new Set([
   'Shop',
   'PersonalizationTemplate',
   'EmailSettings',
+  'EmailTemplate',
   'WarehouseProduct',
   'WarehouseCatalog',
   'WarehouseLeadTimeGroup',
@@ -54,6 +56,8 @@ export const TENANT_MODELS = new Set([
   'DecorationAsset',
   'DecorationCategory',
   'CaseHelpRequest',
+  'TemplateBlock',
+  'OrderShipment',
 ]);
 
 const DEBUG_TENANT_CONTEXT = process.env.DEBUG_TENANT_CONTEXT === 'true';

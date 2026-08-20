@@ -14,6 +14,7 @@ import * as orderReturnsService from '../../services/admin/order-returns.service
 import * as shopOrderStatusesService from '../../services/admin/shop-order-statuses.service';
 import * as substitutionService from '../../services/admin/order-item-substitution.service';
 import { extractOrderShippingInfo } from '../../services/orders/order-shipping-info.service';
+import { SHIPMENT_STAGES } from '../../lib/inpost-statuses';
 import { isShippedOrderOperationalStatus } from '../../lib/order-statuses';
 import {
   createManualOrderSchema,
@@ -144,6 +145,7 @@ export async function ordersRoutes(fastify: FastifyInstance) {
             dateFrom: { type: 'string' },
             dateTo: { type: 'string' },
             shipBy: { type: 'string', enum: ['overdue', 'today', 'tomorrow', 'future', 'shipped', ''] },
+            shipmentStage: { type: 'string', enum: [...SHIPMENT_STAGES, 'none', ''] },
             sortBy: { type: 'string', enum: ['createdAtShop', 'totalPaid', 'maxShippingDate', 'orderReference'], default: 'createdAtShop' },
             sortOrder: { type: 'string', enum: ['asc', 'desc'], default: 'desc' },
           },
@@ -192,6 +194,7 @@ export async function ordersRoutes(fastify: FastifyInstance) {
             dateFrom: { type: 'string' },
             dateTo: { type: 'string' },
             shipBy: { type: 'string', enum: ['overdue', 'today', 'tomorrow', 'future', 'shipped', ''] },
+            shipmentStage: { type: 'string', enum: [...SHIPMENT_STAGES, 'none', ''] },
             sortBy: { type: 'string', enum: ['createdAtShop', 'totalPaid', 'maxShippingDate', 'orderReference'], default: 'createdAtShop' },
             sortOrder: { type: 'string', enum: ['asc', 'desc'], default: 'desc' },
             scope: { type: 'string', enum: ['sidebar', 'list', ''], default: 'sidebar' },
@@ -400,6 +403,9 @@ export async function ordersRoutes(fastify: FastifyInstance) {
             include: { emailLogs: { orderBy: { createdAt: 'desc' }, take: 10 } },
           },
           warehouseDocuments: true,
+          // Nasza kopia statusow przewoznika: panel pokazuje z niej etap
+          // doreczenia od razu, bez czekania na odpowiedz connectora.
+          shipments: { orderBy: { createdAt: 'desc' } },
         },
       });
 
@@ -589,6 +595,44 @@ export async function ordersRoutes(fastify: FastifyInstance) {
         return reply.send(result);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Nie udało się odświeżyć statusu przesyłki';
+        return reply.status(400).send({ error: 'Shipment Error', message });
+      }
+    },
+  );
+
+  // Synchronizacja statusow przesylek na zadanie. Normalnie robi to scheduler
+  // co 20 minut; ten endpoint sluzy do sprawdzenia konfiguracji i do recznego
+  // dociagniecia statusow, gdy operator nie chce czekac na kolejny cykl.
+  fastify.post<{ Body: { shopId?: string } }>(
+    '/shipments/sync',
+    {
+      schema: {
+        tags: ['orders'],
+        summary: 'Zaciągnij statusy przesyłek InPost ze sklepu',
+        body: {
+          type: 'object',
+          properties: { shopId: { type: 'string' } },
+          additionalProperties: false,
+        },
+        response: { 200: looseObjectResponse },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const shopId = request.body?.shopId;
+        const results = shopId
+          ? [await orderShipmentsService.syncShipmentsForShop(shopId)]
+          : await orderShipmentsService.syncShipmentsForAllShops();
+
+        return reply.send({
+          shops: results.length,
+          ordersChecked: results.reduce((total, result) => total + result.ordersChecked, 0),
+          shipmentsSeen: results.reduce((total, result) => total + result.shipmentsSeen, 0),
+          changes: results.flatMap((result) => result.changes),
+          errors: results.flatMap((result) => result.errors),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Nie udało się zsynchronizować przesyłek';
         return reply.status(400).send({ error: 'Shipment Error', message });
       }
     },

@@ -23,6 +23,7 @@ export interface AutomationContext {
   caseData?: any;
   orderId?: string;
   invoiceId?: string;
+  shipmentId?: string;
   previousStatus?: string;
   newStatus?: string;
 }

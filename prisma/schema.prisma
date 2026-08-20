@@ -81,6 +81,9 @@ model Tenant {
   productCardOperationLogs ProductCardOperationLog[]
   competitorCategoryMappings CompetitorCategoryMapping[]
   competitorPriceAutomationRuns CompetitorPriceAutomationRun[]
+  orderShipments                OrderShipment[]
+  automationRuns                AutomationRun[]
+  emailTemplates                EmailTemplate[]
 
   @@index([status])
   @@index([slug])
@@ -136,6 +139,7 @@ model Shop {
   tenant               Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   orders               Order[]
   emailSettings        EmailSettings?
+  emailTemplates       EmailTemplate[]
   syncLogs             SyncLog[]
   personalizedProducts PersonalizedProduct[]
   productMappings      ShopProductMapping[]
@@ -234,6 +238,7 @@ model Order {
   salesDocuments        SalesDocument[]
   returns               OrderReturn[]
   customerReturnRequests CustomerReturnRequest[]
+  shipments              OrderShipment[]
 
   @@unique([shopId, externalOrderId])
   @@index([shopId, orderReference])
@@ -294,6 +299,44 @@ model OrderItem {
   @@index([sourceType])
   @@index([bundleGroupId])
   @@map("order_items")
+}
+
+/// Przesylka kuriera odbita z systemu sklepu. Statusy zyja w module InPost po
+/// stronie PrestaShop; tutaj trzymamy ich kopie, zeby lista zamowien nie
+/// musiala odpytywac connectora przy kazdym otwarciu, a automatyzacje mialy
+/// z czym porownac nowy stan.
+model OrderShipment {
+  id                 String    @id @default(cuid())
+  tenantId           String    @map("tenant_id")
+  orderId            String    @map("order_id")
+  carrier            String    @default("INPOST")
+  /// id_shipment z tabeli sklepu — klucz, po ktorym rozpoznajemy te sama przesylke
+  externalShipmentId String    @map("external_shipment_id")
+  shipxShipmentId    String?   @map("shipx_shipment_id")
+  trackingNumber     String?   @map("tracking_number")
+  service            String?
+  sendingMethod      String?   @map("sending_method")
+  targetPoint        String?   @map("target_point")
+  /// Surowy status przewoznika, np. `ready_to_pickup`
+  status             String?
+  /// Nasz etap doreczenia wyliczony ze statusu — patrz src/lib/inpost-statuses.ts
+  stage              String    @default("UNKNOWN")
+  statusChangedAt    DateTime? @map("status_changed_at")
+  isFinal            Boolean   @default(false) @map("is_final")
+  payloadJson        Json?     @map("payload_json")
+  syncedAt           DateTime  @default(now()) @map("synced_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, carrier, externalShipmentId])
+  @@index([orderId])
+  @@index([tenantId, stage])
+  @@index([tenantId, isFinal])
+  @@index([trackingNumber])
+  @@map("order_shipments")
 }
 
 // ============================================
@@ -1064,6 +1107,34 @@ model EmailSettings {
   @@map("email_settings")
 }
 
+/// Szablon wiadomosci do klienta. Dotad tresci mieszkaly w polu `body` akcji
+/// automatyzacji albo wprost w kodzie serwisu pocztowego — zmiana jednego
+/// zdania wymagala wejscia w regule albo deployu.
+model EmailTemplate {
+  id          String   @id @default(cuid())
+  tenantId    String   @map("tenant_id")
+  /// Szablon konkretnego sklepu; NULL = wspolny dla tenanta.
+  shopId      String?  @map("shop_id")
+  /// Stabilny klucz do wolania z kodu, np. `shipment-ready-to-pickup`
+  key         String
+  name        String
+  description String?
+  subject     String
+  bodyText    String   @map("body_text") @db.Text
+  /// ORDER | CASE — decyduje, jakie zmienne sa dostepne w podgladzie
+  scope       String   @default("ORDER")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shop   Shop?  @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, key])
+  @@index([tenantId, scope])
+  @@map("email_templates")
+}
+
 // ============================================
 // Ustawienia AI
 // ============================================
@@ -1418,6 +1489,7 @@ model Automation {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  runs   AutomationRun[]
 
   @@index([tenantId])
   @@index([tenantId, trigger])
@@ -1426,6 +1498,36 @@ model Automation {
   @@index([isActive])
   @@index([priority])
   @@map("automations")
+}
+
+/// Slad po kazdym podejsciu reguly do sprawy albo zamowienia. Dotad po
+/// automatyzacji zostawal tylko licznik i ostatni blad, wiec nie dalo sie
+/// dojsc, co konkretnie sie wykonalo. `contextKey` pelni druga role: jest
+/// blokada powtorki — ta sama zmiana statusu przesylki nie wyśle drugiego
+/// maila, nawet jesli synchronizacja zobaczy ja ponownie.
+model AutomationRun {
+  id           String    @id @default(cuid())
+  automationId String    @map("automation_id")
+  tenantId     String    @map("tenant_id")
+  trigger      String
+  /// OK | ERROR | SKIPPED
+  status       String    @default("OK")
+  matched      Boolean   @default(true)
+  contextKey   String?   @map("context_key")
+  /// Czego dotyczylo uruchomienie, np. numer zamowienia — do listy w panelu
+  subjectLabel String?   @map("subject_label")
+  payloadJson  Json?     @map("payload_json")
+  error        String?   @db.Text
+  createdAt    DateTime  @default(now()) @map("created_at")
+  finishedAt   DateTime? @map("finished_at")
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([automationId, contextKey])
+  @@index([automationId, createdAt])
+  @@index([tenantId, createdAt])
+  @@map("automation_runs")
 }
 
 // ============================================

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SHIPMENT_STAGES } from '../lib/inpost-statuses';
 import { ORDER_OPERATIONAL_STATUSES } from '../lib/order-statuses';
 import { PERSONALIZATION_CASE_STATUSES } from '../lib/personalization-case-statuses';
 
@@ -399,6 +400,9 @@ export const ordersListQuerySchema = paginationSchema.extend({
   dateFrom: z.string().trim().optional(),
   dateTo: z.string().trim().optional(),
   shipBy: z.enum(['overdue', 'today', 'tomorrow', 'future', 'shipped', '']).optional(),
+  // Etap doreczenia przesylki (patrz src/lib/inpost-statuses.ts). `none` to
+  // zamowienia bez zapisanej przesylki — te, ktorym nikt nie nadal listu.
+  shipmentStage: z.enum([...SHIPMENT_STAGES, 'none', '']).optional(),
   sortBy: z.enum(['createdAtShop', 'totalPaid', 'maxShippingDate', 'orderReference']).default('createdAtShop'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
@@ -838,6 +842,8 @@ const sheetImpositionSchema = z.object({
   slots: z.array(impositionSlotSchema).default([]),
   marks: registrationMarksSchema.optional(),
   backgroundUrl: z.string().min(1).optional(),
+  // Plik ze sciezkami ciecia do importu w Silhouette Studio.
+  cutFileUrl: z.string().min(1).optional(),
   // Podklad per strona. Pusty string jest DOZWOLONY i znaczy "ten arkusz bez
   // podkladu" - stad brak min(1) na wartosci.
   pageBackgrounds: z.record(z.string(), z.string()).optional(),

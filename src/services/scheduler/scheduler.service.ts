@@ -8,6 +8,7 @@ import { syncWholesaleProviderForTenant } from '../admin/wholesale.service';
 import { reconcilePrestaShopForTenant } from '../prestashop/prestashop-reconciliation.service';
 import { syncStockForShop } from '../stock/stock-sync.service';
 import { runCompetitorPriceAutomationForTenant } from '../admin/competitor-analytics.service';
+import { syncShipmentsForAllShops } from '../admin/order-shipments.service';
 import { intervalToCron, spreadMinuteOffset } from './cron-schedule';
 // BullMQ Worker automatycznie przetwarza RenderJobs - nie potrzebujemy crona
 
@@ -353,12 +354,43 @@ export async function initializeScheduler() {
     scheduleStorageCleanup();
     schedulePrestaShopReconciliation();
     scheduleDailyInventoryPublication();
+    scheduleShipmentStatusSync();
     
     console.log('[Scheduler] ℹ️  RenderJobs processing handled by BullMQ Worker');
   } catch (error) {
     console.error('[Scheduler] ❌ Failed to initialize scheduler:', error);
     throw error;
   }
+}
+
+/**
+ * Statusy przesylek InPost co 20 minut. Przewoznik nie wola do nas, wiec
+ * jedyna droga do "kurier doreczy dzisiaj" i "paczka czeka w paczkomacie"
+ * jest pytanie sklepu — panel i powiadomienia klienta stoja na tym cyklu.
+ */
+function scheduleShipmentStatusSync() {
+  cron.schedule(
+    '*/20 * * * *',
+    async () => {
+      try {
+        const results = await syncShipmentsForAllShops();
+        const changes = results.reduce((total, result) => total + result.changes.length, 0);
+        const errors = results.reduce((total, result) => total + result.errors.length, 0);
+
+        if (changes > 0 || errors > 0) {
+          console.log(
+            `[Scheduler] 📦 Shipment statuses: ${changes} changed, ${errors} errors ` +
+            `across ${results.length} shops`
+          );
+        }
+      } catch (error) {
+        console.error('[Scheduler] ❌ Shipment status sync failed:', error);
+      }
+    },
+    { timezone: 'Europe/Warsaw' }
+  );
+
+  console.log('[Scheduler] 📅 Scheduled InPost shipment status sync: every 20 minutes');
 }
 
 /**
@@ -390,7 +422,8 @@ function scheduleStorageCleanup() {
         const jobs = await pruneJobHistory();
         console.log(
           `[Scheduler] ✅ Job history pruned: ` +
-          `${jobs.renderJobsDeleted} render jobs, ${jobs.printJobsDeleted} print jobs`
+          `${jobs.renderJobsDeleted} render jobs, ${jobs.printJobsDeleted} print jobs, ` +
+          `${jobs.automationRunsDeleted} automation runs`
         );
       } catch (error) {
         console.error('[Scheduler] ❌ Storage cleanup failed:', error);

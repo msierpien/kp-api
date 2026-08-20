@@ -1,7 +1,12 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import {
+  createAutomationFromScenario,
+  duplicateAutomation,
+  listAutomationRuns,
+  listAutomationScenarios,
   listAutomations,
+  reorderAutomations,
   getAutomationById,
   createAutomation,
   updateAutomation,
@@ -20,7 +25,15 @@ const createAutomationSchema = z.object({
   tenantId: z.string().optional(),
   name: z.string().min(1),
   description: z.string().optional().nullable(),
-  trigger: z.enum(['CASE_CREATED', 'CASE_STATUS_CHANGED', 'CASE_SUBMITTED', 'CASE_TIME_ELAPSED', 'ORDER_INVOICE_ISSUED', 'ORDER_SHIPMENT_CREATED']),
+  trigger: z.enum([
+    'CASE_CREATED',
+    'CASE_STATUS_CHANGED',
+    'CASE_SUBMITTED',
+    'CASE_TIME_ELAPSED',
+    'ORDER_INVOICE_ISSUED',
+    'ORDER_SHIPMENT_CREATED',
+    'ORDER_SHIPMENT_STATUS_CHANGED',
+  ]),
   conditions: z.array(z.any()), // JSON array of conditions
   actions: z.array(z.any()), // JSON array of actions
   isActive: z.boolean().optional(),
@@ -28,6 +41,13 @@ const createAutomationSchema = z.object({
 });
 
 const updateAutomationSchema = createAutomationSchema.partial();
+
+const reorderSchema = z.object({
+  items: z.array(z.object({
+    id: z.string().cuid(),
+    priority: z.number().int().min(0).max(100),
+  })).min(1),
+});
 
 const toggleAutomationSchema = z.object({
   isActive: z.boolean(),
@@ -95,6 +115,167 @@ export async function automationsRoutes(fastify: FastifyInstance) {
     }
   });
 
+  // GET /admin/automations/scenarios — gotowe reguly do jednego kliku
+  fastify.get('/scenarios', {
+    schema: {
+      tags: ['automations'],
+      summary: 'Biblioteka gotowych scenariuszy automatyzacji',
+      response: { 200: { type: 'array', items: { type: 'object', additionalProperties: true } } },
+    },
+  }, async (_request: FastifyRequest, reply: FastifyReply) => {
+    return reply.send(listAutomationScenarios());
+  });
+
+  // POST /admin/automations/scenarios/:scenarioId — zapisz scenariusz jako regule
+  fastify.post<{ Params: { scenarioId: string }; Body: { name?: string } }>(
+    '/scenarios/:scenarioId',
+    {
+      schema: {
+        tags: ['automations'],
+        summary: 'Utwórz automatyzację z gotowego scenariusza',
+        params: { type: 'object', properties: { scenarioId: { type: 'string' } } },
+        body: { type: 'object', properties: { name: { type: 'string' } }, additionalProperties: false },
+        response: { 201: { type: 'object', additionalProperties: true } },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const automation = await createAutomationFromScenario(
+          request.params.scenarioId,
+          request.body ?? {},
+        );
+        return reply.status(201).send(automation);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Nie udało się utworzyć reguły ze scenariusza';
+        return reply.status(400).send({ error: 'Validation Error', message });
+      }
+    },
+  );
+
+  // PATCH /admin/automations/reorder — kolejnosc po przeciagnieciu wiersza
+  fastify.patch<{ Body: { items?: Array<{ id: string; priority: number }> } }>(
+    '/reorder',
+    {
+      schema: {
+        tags: ['automations'],
+        summary: 'Zbiorcza zmiana priorytetów automatyzacji',
+        body: {
+          type: 'object',
+          required: ['items'],
+          properties: {
+            items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['id', 'priority'],
+                properties: {
+                  id: { type: 'string' },
+                  priority: { type: 'integer', minimum: 0, maximum: 100 },
+                },
+              },
+            },
+          },
+        },
+        response: { 200: { type: 'object', additionalProperties: true } },
+      },
+    },
+    async (request, reply) => {
+      const parsed = reorderSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: parsed.error.errors[0].message,
+        });
+      }
+
+      try {
+        return reply.send(await reorderAutomations(parsed.data.items));
+      } catch (error) {
+        fastify.log.error(error);
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Nie udało się zapisać kolejności automatyzacji',
+        });
+      }
+    },
+  );
+
+  // GET /admin/automations/:id/runs — historia uruchomien
+  fastify.get<{ Params: { id: string }; Querystring: { limit?: number } }>(
+    '/:id/runs',
+    {
+      schema: {
+        tags: ['automations'],
+        summary: 'Historia uruchomień automatyzacji',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        querystring: {
+          type: 'object',
+          properties: { limit: { type: 'integer', minimum: 1, maximum: 100, default: 25 } },
+        },
+        response: { 200: { type: 'array', items: { type: 'object', additionalProperties: true } } },
+      },
+    },
+    async (request, reply) => {
+      const paramsParsed = automationIdSchema.safeParse(request.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: paramsParsed.error.errors[0].message,
+        });
+      }
+
+      try {
+        const runs = await listAutomationRuns(paramsParsed.data.id, request.query.limit ?? 25);
+        return reply.send(runs);
+      } catch (error: any) {
+        if (error?.message === 'Automation not found') {
+          return reply.status(404).send({ error: 'Not Found', message: 'Automatyzacja nie została znaleziona' });
+        }
+        fastify.log.error(error);
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Nie udało się pobrać historii uruchomień',
+        });
+      }
+    },
+  );
+
+  // POST /admin/automations/:id/duplicate
+  fastify.post<{ Params: { id: string } }>(
+    '/:id/duplicate',
+    {
+      schema: {
+        tags: ['automations'],
+        summary: 'Duplikuj automatyzację',
+        params: { type: 'object', properties: { id: { type: 'string' } } },
+        response: { 201: { type: 'object', additionalProperties: true } },
+      },
+    },
+    async (request, reply) => {
+      const paramsParsed = automationIdSchema.safeParse(request.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send({
+          error: 'Validation Error',
+          message: paramsParsed.error.errors[0].message,
+        });
+      }
+
+      try {
+        const automation = await duplicateAutomation(paramsParsed.data.id);
+        return reply.status(201).send(automation);
+      } catch (error: any) {
+        if (error?.message === 'Automation not found') {
+          return reply.status(404).send({ error: 'Not Found', message: 'Automatyzacja nie została znaleziona' });
+        }
+        fastify.log.error(error);
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: 'Nie udało się zduplikować automatyzacji',
+        });
+      }
+    },
+  );
+
   // GET /admin/automations/:id
   fastify.get<{ Params: { id: string } }>(
     '/:id',
@@ -151,7 +332,7 @@ export async function automationsRoutes(fastify: FastifyInstance) {
             name: { type: 'string' },
             tenantId: { type: 'string' },
             description: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-            trigger: { type: 'string', enum: ['CASE_CREATED', 'CASE_STATUS_CHANGED', 'CASE_SUBMITTED', 'CASE_TIME_ELAPSED', 'ORDER_INVOICE_ISSUED', 'ORDER_SHIPMENT_CREATED'] },
+            trigger: { type: 'string', enum: ['CASE_CREATED', 'CASE_STATUS_CHANGED', 'CASE_SUBMITTED', 'CASE_TIME_ELAPSED', 'ORDER_INVOICE_ISSUED', 'ORDER_SHIPMENT_CREATED', 'ORDER_SHIPMENT_STATUS_CHANGED'] },
             conditions: { type: 'array', items: { type: 'object' } },
             actions: { type: 'array', items: { type: 'object' } },
             isActive: { type: 'boolean' },

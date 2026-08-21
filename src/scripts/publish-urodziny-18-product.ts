@@ -55,7 +55,9 @@ const CATALOG_NAME = 'Kreatywne Papierki'
 
 /** Kategoria glowna + dodatkowe, w ktorych produkt tez ma byc widoczny. */
 const CATEGORY_DEFAULT = '47' // Zaproszenia (Papeteria)
-const CATEGORY_IDS = ['47', '834', '829'] // + Zaproszenia urodzinowe, 18. urodziny
+// 833 dolozone razem ze zdjeciami 30/40/50: karta obsluguje kazdy wiek,
+// wiec ma byc widoczna takze poza kategoria osiemnastki.
+const CATEGORY_IDS = ['47', '834', '829', '833'] // + Zaproszenia urodzinowe, 18. urodziny, Okrągłe urodziny
 
 const TAX_RULES_GROUP_ID = '1' // PL Standard Rate (23%)
 const TAX_RATE = 0.23
@@ -86,16 +88,17 @@ const FEATURES: Array<{ featureId: string; value: string }> = [
 
 // --- Tresci ------------------------------------------------------------
 
-const META_TITLE = 'Zaproszenia na 18. urodziny z kopertą – Czarna Kokarda 12 × 17 cm'
+const META_TITLE = 'Zaproszenia urodzinowe z kopertą – Czarna Kokarda 12 × 17 cm (18, 30, 40, 50)'
 const META_DESCRIPTION =
-  'Eleganckie zaproszenie na osiemnastkę 12 × 17 cm z czarną kokardą i białą kopertą B6 w cenie. ' +
-  'Całą treść i listę gości wpisujesz w edytorze, drukujemy po Twojej akceptacji. 7 zł za sztukę.'
+  'Eleganckie zaproszenie urodzinowe 12 × 17 cm z czarną kokardą i białą kopertą B6 w cenie. ' +
+  'Liczbę lat wpisujesz sam – 18, 30, 40, 50 albo dowolną inną. Całą treść ustalasz w edytorze. 7 zł za sztukę.'
 
-const DESCRIPTION_SHORT = `<p>Pionowe <strong>zaproszenie na 18. urodziny 12 × 17 cm</strong> w klasycznej czerni i bieli, z czarną kokardą i dużą liczbą „18” złożoną krojem Bodoni. <strong>Biała koperta B6 jest w cenie.</strong></p>
-<p>✔ osobny adresat na każdym zaproszeniu – wpisujesz listę gości<br />✔ całą treść ustalasz w edytorze po zakupie<br />✔ koperty ozdobne i lakową pieczęć dobierasz obok przycisku „Do koszyka”<br />✔ druk dopiero po Twojej akceptacji podglądu</p>`
+const DESCRIPTION_SHORT = `<p>Pionowe <strong>zaproszenie urodzinowe 12 × 17 cm</strong> w klasycznej czerni i bieli, z czarną kokardą i dużą liczbą lat złożoną krojem Bodoni. <strong>Liczbę lat wpisujesz sam</strong> – ta sama karta obsłuży 18, 30, 40, 50 i każdą inną rocznicę. <strong>Biała koperta B6 jest w cenie.</strong></p>
+<p>✔ dowolny wiek – liczba lat, motto i cała treść są do zmiany<br />✔ osobny adresat na każdym zaproszeniu – wpisujesz listę gości<br />✔ koperty ozdobne i lakową pieczęć dobierasz obok przycisku „Do koszyka”<br />✔ druk dopiero po Twojej akceptacji podglądu</p>`
 
-const DESCRIPTION = `<h2>Zaproszenie na 18. urodziny „Czarna Kokarda”</h2>
-<p>Pionowa karta 12 × 17 cm dla osiemnastki, która ma wyglądać dorośle. Czysta biel papieru, czarna typografia i satynowa kokarda po prawej stronie – bez konfetti, bez balonów, bez cyfr w brokacie. U góry motto oddzielone cienką kreską, pod nim liczba <strong>18</strong> złożona krojem Bodoni Moda, a niżej kolumna treści zamknięta odręcznym podpisem.</p>
+const DESCRIPTION = `<h2>Zaproszenie urodzinowe „Czarna Kokarda” – na każdy wiek</h2>
+<p>Pionowa karta 12 × 17 cm dla urodzin, które mają wyglądać dorośle. Czysta biel papieru, czarna typografia i satynowa kokarda po prawej stronie – bez konfetti, bez balonów, bez brokatu. U góry motto oddzielone cienką kreską, pod nim duża liczba lat złożona krojem Bodoni Moda, a niżej kolumna treści zamknięta odręcznym podpisem.</p>
+<p><strong>To nie jest karta wyłącznie na osiemnastkę.</strong> Liczba lat to zwykłe pole w edytorze – wpisujesz 18, 30, 40, 50, 60 albo dowolną inną. Motto u góry też zmieniasz na własne, więc karta bez śladu przestawia się z przyjęcia maturzystki na jubileusz w gronie znajomych.</p>
 <p>Ten sam układ pasuje na przyjęcie w sali bankietowej, na kameralną kolację w restauracji i na domówkę – decyduje treść, którą wpisujesz sam.</p>
 
 <h2>Biała koperta B6 w cenie</h2>
@@ -110,62 +113,113 @@ const DESCRIPTION = `<h2>Zaproszenie na 18. urodziny „Czarna Kokarda”</h2>
 <h2>Co ustalasz w edytorze</h2>
 <p>Po złożeniu zamówienia dostajesz dostęp do edytora, w którym wpisujesz:</p>
 <ul>
+<li><strong>liczbę lat</strong> – dwie cyfry w przerwie pionowej kreski, dowolny wiek,</li>
 <li><strong>listę gości</strong> – osobny adresat na każdym zaproszeniu w zamówieniu, np. „Sz. P. Annę i Macieja Spoczyńskich”,</li>
-<li><strong>liczbę lat</strong> – domyślnie 18, ale ta sama karta obsłuży każdą okrągłą rocznicę,</li>
-<li><strong>okazję</strong> – tekst pod liczbą, np. „na przyjęcie z okazji moich osiemnastych urodzin”,</li>
+<li><strong>okazję</strong> – tekst pod liczbą, np. „na przyjęcie z okazji moich czterdziestych urodzin”,</li>
 <li><strong>datę i godzinę przyjęcia</strong>,</li>
 <li><strong>miejsce przyjęcia</strong> – nazwa lokalu i adres,</li>
-<li><strong>podpis</strong> – imię solenizanta pismem odręcznym,</li>
-<li><strong>motto u góry karty</strong> – ma gotowe brzmienie, ale możesz je zmienić albo usunąć.</li>
+<li><strong>podpis</strong> – imię jubilata pismem odręcznym,</li>
+<li><strong>motto u góry karty</strong> – klikasz je na podglądzie i wpisujesz własne albo usuwasz.</li>
 </ul>
 <p>Podgląd na bieżąco pokazuje gotowe zaproszenie, a my drukujemy dopiero po Twojej akceptacji.</p>
 
 <h2>Specyfikacja produktu</h2>
-<p><strong>Rodzaj:</strong> zaproszenie jednostronne<br /><strong>Format:</strong> 120 × 170 mm<br /><strong>Nadruk:</strong> kolorowy, jednostronny<br /><strong>Kroje pisma:</strong> Bodoni Moda, Cormorant Infant, pismo odręczne<br /><strong>Personalizacja:</strong> cała treść zaproszenia, adresat osobny dla każdej sztuki<br /><strong>Koperta:</strong> biała B6 12,5 × 17,5 cm w cenie; ozdobne i z wklejką do dokupienia</p>
+<p><strong>Rodzaj:</strong> zaproszenie jednostronne<br /><strong>Format:</strong> 120 × 170 mm<br /><strong>Nadruk:</strong> kolorowy, jednostronny<br /><strong>Kroje pisma:</strong> Bodoni Moda, Cormorant Infant, pismo odręczne<br /><strong>Personalizacja:</strong> liczba lat i cała treść zaproszenia, adresat osobny dla każdej sztuki<br /><strong>Koperta:</strong> biała B6 12,5 × 17,5 cm w cenie; ozdobne i z wklejką do dokupienia</p>
 
 <h2>Jak zamówić</h2>
 <ol>
 <li>Podaj liczbę zaproszeń i ewentualnie wybierz koperty ozdobne.</li>
-<li>Po złożeniu zamówienia otwierasz edytor i wpisujesz treść oraz listę gości.</li>
+<li>Po złożeniu zamówienia otwierasz edytor, wpisujesz liczbę lat, treść i listę gości.</li>
 <li>Akceptujesz podgląd – drukujemy i wysyłamy gotowe zaproszenia razem z kopertami.</li>
 </ol>
 
 <h2>Na jaką okazję</h2>
 <ul>
 <li>18. urodziny – przyjęcie w sali, restauracji albo w domu</li>
-<li>okrągłe urodziny 30, 40, 50 i 60+ – wystarczy zmienić liczbę lat</li>
-<li>elegancka kolacja rocznicowa w czarno-białej kolorystyce</li>
+<li>30. i 40. urodziny – kameralna kolacja albo impreza w gronie znajomych</li>
+<li>50., 60. i kolejne jubileusze – elegancka oprawa bez motywów dziecięcych</li>
+<li>rocznice i uroczystości rodzinne w czarno-białej kolorystyce</li>
 </ul>`
+
+// --- Zdjecia produktu: cztery ujecia wieku -----------------------------
+
+/**
+ * Karta obsluguje dowolna liczbe lat, wiec galeria pokazuje cztery
+ * najczestsze okragle urodziny zamiast czterech razy osiemnastki.
+ *
+ * `quote_text` NIE jest polem formularza - to warstwa `textbox` z
+ * `editable: true`, ktora klient nadpisuje wprost na podgladzie
+ * (`layoutOverrides.layers[id].text`). Renderer rozwiazuje textboxy po
+ * `properties.fieldKey` z odpowiedzi, wiec ten sam klucz wystarczy tutaj
+ * i zdjecia nie obiecuja czegos, czego produkt nie potrafi.
+ */
+const AGE_SHOTS: Array<{ age: string; occasion: string; quote: string; signature: string }> = [
+  {
+    age: '18',
+    occasion: 'NA PRZYJĘCIE Z OKAZJI MOICH\nOSIEMNASTYCH URODZIN',
+    quote: 'Osiemnaście lat to początek nowej podróży\n– pełnej marzeń, wyzwań i pięknych chwil',
+    signature: 'Dorota',
+  },
+  {
+    age: '30',
+    occasion: 'NA PRZYJĘCIE Z OKAZJI MOICH\nTRZYDZIESTYCH URODZIN',
+    quote: 'Trzydzieści lat to najlepszy moment,\nżeby świętować w dobrym towarzystwie',
+    signature: 'Marta',
+  },
+  {
+    age: '40',
+    occasion: 'NA PRZYJĘCIE Z OKAZJI MOICH\nCZTERDZIESTYCH URODZIN',
+    quote: 'Czterdzieści lat brzmi bardzo poważnie\n– dopóki nie zacznie się przyjęcie',
+    signature: 'Anna',
+  },
+  {
+    age: '50',
+    occasion: 'NA PRZYJĘCIE Z OKAZJI MOICH\nPIĘĆDZIESIĄTYCH URODZIN',
+    quote: 'Pięćdziesiąt lat to pół wieku wspomnień\n– a najlepsze wciąż przed nami',
+    signature: 'Ewa',
+  },
+]
+
 
 // --- Zdjecia produktu --------------------------------------------------
 
 /**
- * Zdjecia karty: mockupy szablonu wyrenderowane z domyslna trescia, wiec
- * klient oglada dokladnie to, co dostanie. Brak mockupow = brak zdjec,
- * a nie blad - karta moze poczekac na grafike.
+ * Zdjecia karty: mockupy szablonu wyrenderowane realna trescia, wiec klient
+ * oglada dokladnie to, co dostanie. Brak mockupow = brak zdjec, a nie blad -
+ * karta moze poczekac na grafike.
+ *
+ * Szablon nie ma `variants`, a mimo to zdjec jest kilka: galeria pokazuje
+ * `AGE_SHOTS`, czyli te sama karte z rozna liczba lat. Kolejnosc `AGE_SHOTS`
+ * jest kolejnoscia wysylki do PrestaShop, a pierwsze zdjecie zostaje okladka.
  */
 async function ensureProductPhotos(layout: any, force: boolean) {
   const mockups: any[] = layout?.mockups || []
   if (mockups.length === 0) return []
 
   const base = await defaultAnswers()
-  const variantFieldKey: string | undefined = layout?.variantFieldKey
-  const variants: any[] = Array.isArray(layout?.variants) ? layout.variants : []
 
-  // Bez wariantow zostaje jedno ujecie na mockup - jak przy karcie bez wyboru.
-  const shots =
-    variantFieldKey && variants.length > 0
-      ? variants.map((variant) => ({
-          suffix: variant.id,
-          answers: { ...base, [variantFieldKey]: variant.matchValue ?? base[variantFieldKey] },
-        }))
-      : [{ suffix: 'default', answers: base }]
+  const shots = AGE_SHOTS.map((shot) => ({
+    suffix: shot.age,
+    answers: {
+      ...base,
+      age_number: shot.age,
+      occasion_text: shot.occasion,
+      signature: shot.signature,
+      quote_text: shot.quote,
+    },
+  }))
 
   const dir = path.join(process.cwd(), 'storage', 'templates', TEMPLATE_CODE, 'produkt')
   const files: string[] = []
 
-  const jobs = mockups.flatMap((mockup, index) =>
-    shots.map((shot) => ({ mockup, name: `urodziny-18-${shot.suffix}-${index + 1}.jpg`, answers: shot.answers }))
+  // Ujecia przed mockupami: przy kilku scenach galeria idzie wtedy
+  // 18/30/40/50 w pierwszej scenie, a nie 18 w kazdej po kolei.
+  const jobs = shots.flatMap((shot) =>
+    mockups.map((mockup, index) => ({
+      mockup,
+      name: `urodziny-${shot.suffix}-lat-${index + 1}.jpg`,
+      answers: shot.answers,
+    }))
   )
 
   for (const job of jobs) {

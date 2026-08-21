@@ -63,7 +63,10 @@ const TAX_RULES_GROUP_ID = '1' // PL Standard Rate (23%)
 const TAX_RATE = 0.23
 
 const REFERENCE = 'ZAP-18-12X17'
-const PRODUCT_NAME = 'Zaproszenie na 18. urodziny – Czarna Kokarda 12 × 17 cm z kopertą'
+// Referencja zostaje przy osiemnastce (jest kluczem dopasowania zamowien
+// i SKU w magazynie), ale nazwa mowi juz o kazdym wieku - karta obsluguje
+// dowolna liczbe lat, a `link_rewrite` idzie za nazwa.
+const PRODUCT_NAME = 'Zaproszenie urodzinowe – Czarna Kokarda 12 × 17 cm z kopertą (18, 30, 40, 50)'
 
 /** Cena katalogowa brutto (zaproszenie + biala koperta B6); PrestaShop trzyma netto. */
 const PRICE_GROSS = 7.0

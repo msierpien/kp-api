@@ -138,3 +138,32 @@ describe('buildProductsOrderBy', () => {
     assert.deepEqual(buildProductsOrderBy('sku', undefined), { sku: 'asc' });
   });
 });
+
+describe('buildProductsWhere — widoki nie wychodzą poza wybrany sklep', () => {
+  it('„bez mapowania" nie omija zawężenia do sklepu', () => {
+    const where = buildProductsWhere({ shopId: 'shop-1', hasShopMapping: false }, TENANT);
+    const scoped = conditions(where).filter((item) => item.shopProductMappings);
+    // Musza byc oba warunki: nalezy do sklepu ORAZ nie ma do niego mapowania,
+    // czyli zbior pusty. Sam `none` znaczylby "produkty spoza sklepu".
+    assert.equal(scoped.length, 2);
+    assert.ok(scoped.some((item) => item.shopProductMappings.some));
+    assert.ok(scoped.some((item) => item.shopProductMappings.none));
+  });
+
+  it('przy „pokaż też nieprzypisane" zostaje samo „bez mapowania"', () => {
+    const where = buildProductsWhere(
+      { shopId: 'shop-1', shopScope: 'all', hasShopMapping: false },
+      TENANT,
+    );
+    const scoped = conditions(where).filter((item) => item.shopProductMappings);
+    assert.equal(scoped.length, 1);
+    assert.deepEqual(scoped[0].shopProductMappings.none, { isActive: true, shopId: 'shop-1' });
+  });
+
+  it('bez wybranego sklepu „bez mapowania" znaczy „w żadnym sklepie"', () => {
+    const where = buildProductsWhere({ hasShopMapping: false }, TENANT);
+    const scoped = conditions(where).filter((item) => item.shopProductMappings);
+    assert.equal(scoped.length, 1);
+    assert.deepEqual(scoped[0].shopProductMappings.none, { isActive: true });
+  });
+});

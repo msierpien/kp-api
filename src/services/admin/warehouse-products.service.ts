@@ -329,15 +329,21 @@ export function buildProductsWhere(query: ProductsWhereQuery, tenantId: string |
     isActive: true,
     ...(shopId ? { shopId } : {}),
   };
+  // Zawezenie do sklepu obowiazuje zawsze, gdy sklep jest wybrany, a zakres to
+  // 'mapped'. Wczesniej hasShopMapping to zawezenie omijal, wiec widok "bez
+  // mapowania" pokazywal produkty spoza sklepu i wychodzil liczniejszy niz
+  // "wszystkie" tego sklepu. Teraz oba warunki sie skladaja: przy zakresie
+  // 'mapped' zbior jest pusty i to jest prawda, a nie blad - produktow spoza
+  // sklepu szuka sie po wlaczeniu "pokaz tez nieprzypisane".
+  if (shopId && shopScope !== 'all') {
+    and.push({ shopProductMappings: { some: shopMappingFilter } });
+  }
   if (hasShopMapping !== undefined) {
     and.push({
       shopProductMappings: hasShopMapping === false
         ? { none: shopMappingFilter }
         : { some: shopMappingFilter },
     });
-  } else if (shopId && shopScope !== 'all') {
-    // Sam shopId oznacza "produkty powiązane z tym sklepem"
-    and.push({ shopProductMappings: { some: shopMappingFilter } });
   }
   // Stan w sklepie czytamy z externalActive, czyli z tego, co ostatni import
   // zobaczyl w PrestaShop. isActive mowi tylko, czy mapowanie zyje.

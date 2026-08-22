@@ -1,10 +1,12 @@
 /// <reference lib="dom" />
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { parse } from 'csv-parse/sync';
 import { Prisma } from '@prisma/client';
 import prisma from '../../../lib/prisma';
 import { getTenantId } from '../../../lib/tenant-context';
 
-export type WholesalePreset = 'GODAN' | 'PARTYDECO' | 'CUSTOM';
+export type WholesalePreset = 'GODAN' | 'PARTYDECO' | 'NETUNO' | 'CUSTOM';
 export type WholesaleAvailabilityRule = 'STOCK_ONLY' | 'STOCK_OR_FUTURE_DELIVERY';
 
 export interface FieldMapping {
@@ -69,6 +71,29 @@ const PRESET_CONFIGS: Record<Exclude<WholesalePreset, 'CUSTOM'>, WholesaleProvid
       image: 'photos',
       category: 'category_path',
       warehouseAvailableAt: 'availability_date',
+    },
+  },
+  /**
+   * Netuno nie udostepnia feedu - CSV powstaje ze scrapera (scripts/scrape-netuno.ts),
+   * ktory zapisuje go lokalnie i wskazuje na niego feedUrl (file://...).
+   * `price_net` to cena katalogowa za jedna sztuke; progi ilosciowe siedza w
+   * osobnych kolumnach i nie sa cena zakupu - ta wchodzi dokumentem PZ.
+   * Kolumna zdjec nazywa sie `photos`, bo tylko dla tej nazwy parseImageUrls
+   * dzieli wartosc po przecinku.
+   */
+  NETUNO: {
+    preset: 'NETUNO',
+    delimiter: ';',
+    availabilityRule: 'STOCK_ONLY',
+    fieldMapping: {
+      sku: 'reference',
+      ean: 'ean',
+      name: 'name',
+      stock: 'stock',
+      price: 'price_net',
+      description: 'description',
+      image: 'photos',
+      category: 'category',
     },
   },
 };
@@ -202,6 +227,17 @@ export function resolveWholesaleAvailabilityRule(configJson: unknown): Wholesale
 }
 
 export async function fetchFeed(feedUrl: string) {
+  // Feed ze scrapera lezy na dysku, nie pod adresem HTTP - nie wystawiamy cennika
+  // hurtowni publicznie tylko po to, zeby moc go odczytac.
+  if (feedUrl.startsWith('file://')) {
+    try {
+      return await readFile(fileURLToPath(feedUrl), 'utf8');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'nieznany błąd';
+      throw new Error(`Błąd odczytu feedu hurtowni z pliku: ${message}`);
+    }
+  }
+
   const response = await fetch(feedUrl);
   if (!response.ok) {
     const text = await response.text().catch(() => '');
@@ -303,6 +339,7 @@ function detectPreset(feedUrl: string, name: string): WholesalePreset {
   const value = `${feedUrl} ${name}`.toLowerCase();
   if (value.includes('godan')) return 'GODAN';
   if (value.includes('partydeco') || value.includes('party deco')) return 'PARTYDECO';
+  if (value.includes('netuno')) return 'NETUNO';
   return 'CUSTOM';
 }
 

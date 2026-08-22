@@ -683,6 +683,13 @@ const PRODUCT_VIEW_QUERIES = {
 
 const PROVIDER_SCOPED_VIEWS = new Set<string>(['providerReview']);
 
+/**
+ * Widoki, ktore z natury pytaja o produkty spoza wybranego sklepu. Licza sie
+ * zawsze na calym magazynie, bo inaczej odpowiedz brzmialaby "zero" - nazwa
+ * widoku mowi wprost, ze to nie jest podzbior asortymentu tego sklepu.
+ */
+const WHOLE_WAREHOUSE_VIEWS = new Set<string>(['withoutMapping']);
+
 export type ProductViewCounts = Record<keyof typeof PRODUCT_VIEW_QUERIES, number>;
 
 export async function getProductViewCounts(query: ProductViewCountsQuery = {}): Promise<ProductViewCounts> {
@@ -705,6 +712,7 @@ export async function getProductViewCounts(query: ProductViewCountsQuery = {}): 
           ...PRODUCT_VIEW_QUERIES[viewId],
           ...sharedQuery,
           ...(providerScoped ? { wholesaleProviderId } : {}),
+          ...(WHOLE_WAREHOUSE_VIEWS.has(viewId) ? { shopScope: 'all' as const } : {}),
         },
         tenantId,
       );

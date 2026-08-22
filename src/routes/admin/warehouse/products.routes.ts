@@ -76,6 +76,11 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
           soldSinceDays: { type: 'integer', minimum: 1, maximum: 3650 },
           createdFrom: { type: 'string' },
           createdTo: { type: 'string' },
+          sortBy: {
+            type: 'string',
+            enum: ['name', 'sku', 'currentStock', 'purchasePrice', 'retailPrice', 'createdAt', 'updatedAt', 'shopCount', 'wholesaleCount'],
+          },
+          sortDir: { type: 'string', enum: ['asc', 'desc'] },
           shopStatus: { type: 'string', enum: ['active', 'inactive', 'missing'] },
           noSalesSinceMonths: { type: 'integer', minimum: 1, maximum: 120 },
           archiveStatus: { type: 'string', enum: ['active', 'archived', 'all'] },

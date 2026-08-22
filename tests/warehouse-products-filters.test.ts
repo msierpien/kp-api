@@ -3,7 +3,7 @@ import './helpers/test-env';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { buildProductsWhere } from '../src/services/admin/warehouse-products.service';
+import { buildProductsOrderBy, buildProductsWhere } from '../src/services/admin/warehouse-products.service';
 
 /**
  * Filtry listy produktow decyduja o tym, co wpada do masowek i do kreatora
@@ -112,5 +112,29 @@ describe('buildProductsWhere — filtry łączą się przez AND', () => {
     assert.ok(all.some((item) => item.wholesaleMappings?.none));
     assert.ok(all.some((item) => item.shopProductMappings?.some?.externalActive === false));
     assert.ok(all.some((item) => item.orderItems?.none));
+  });
+});
+
+describe('buildProductsOrderBy', () => {
+  it('bez wyboru sortuje po nazwie rosnąco', () => {
+    assert.deepEqual(buildProductsOrderBy(undefined, undefined), { name: 'asc' });
+  });
+
+  it('puste ceny lądują na końcu niezależnie od kierunku', () => {
+    assert.deepEqual(buildProductsOrderBy('purchasePrice', 'desc'), {
+      purchasePrice: { sort: 'desc', nulls: 'last' },
+    });
+    assert.deepEqual(buildProductsOrderBy('retailPrice', 'asc'), {
+      retailPrice: { sort: 'asc', nulls: 'last' },
+    });
+  });
+
+  it('liczba sklepów i hurtowni sortuje się po liczności relacji', () => {
+    assert.deepEqual(buildProductsOrderBy('shopCount', 'desc'), { shopProductMappings: { _count: 'desc' } });
+    assert.deepEqual(buildProductsOrderBy('wholesaleCount', 'asc'), { wholesaleMappings: { _count: 'asc' } });
+  });
+
+  it('nieznany kierunek traktuje jak rosnąco', () => {
+    assert.deepEqual(buildProductsOrderBy('sku', undefined), { sku: 'asc' });
   });
 });

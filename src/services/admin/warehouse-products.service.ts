@@ -142,6 +142,8 @@ export interface ProductsQuery {
   soldSinceDays?: number;
   createdFrom?: string;
   createdTo?: string;
+  sortBy?: ProductSortField;
+  sortDir?: 'asc' | 'desc';
   stockBelow?: number;
   hasBarcode?: boolean;
   hasShopMapping?: boolean;
@@ -159,6 +161,41 @@ export interface InventorySnapshotQuery {
 }
 
 const MAX_BULK_PRODUCT_IDS = 500;
+
+/**
+ * Kolumny, po ktorych da sie sortowac po stronie bazy. Marza i stan hurtowni
+ * sa poza ta lista: pierwsza to arytmetyka miedzy kolumnami, druga siedzi
+ * w relacji - zadnego z nich Prisma nie posortuje bez surowego SQL.
+ */
+export const PRODUCT_SORT_FIELDS = [
+  'name',
+  'sku',
+  'currentStock',
+  'purchasePrice',
+  'retailPrice',
+  'createdAt',
+  'updatedAt',
+  'shopCount',
+  'wholesaleCount',
+] as const;
+
+export type ProductSortField = typeof PRODUCT_SORT_FIELDS[number];
+
+export function buildProductsOrderBy(sortBy: ProductSortField | undefined, sortDir: 'asc' | 'desc' | undefined) {
+  const direction = sortDir === 'desc' ? 'desc' : 'asc';
+  if (!sortBy) return { name: 'asc' as const };
+
+  if (sortBy === 'shopCount') return { shopProductMappings: { _count: direction } };
+  if (sortBy === 'wholesaleCount') return { wholesaleMappings: { _count: direction } };
+
+  // Puste ceny na koniec niezaleznie od kierunku - inaczej sortowanie po cenie
+  // zaczyna sie od setek pozycji bez ceny i nic nie mowi.
+  if (sortBy === 'purchasePrice' || sortBy === 'retailPrice') {
+    return { [sortBy]: { sort: direction, nulls: 'last' } } as const;
+  }
+
+  return { [sortBy]: direction };
+}
 
 function productListInclude(shopId?: string) {
   return {
@@ -569,7 +606,7 @@ export async function resolveProductsWhere(query: ProductsWhereQuery, tenantId: 
 
 export async function getProducts(query: ProductsQuery = {}) {
   const tenantId = requireTenantId();
-  const { page = 1, limit = 50, shopId } = query;
+  const { page = 1, limit = 50, shopId, sortBy, sortDir } = query;
   const skip = (page - 1) * limit;
 
   const where = await resolveProductsWhere(query, tenantId);
@@ -579,7 +616,7 @@ export async function getProducts(query: ProductsQuery = {}) {
       where,
       skip,
       take: limit,
-      orderBy: { name: 'asc' },
+      orderBy: buildProductsOrderBy(sortBy, sortDir) as Prisma.WarehouseProductOrderByWithRelationInput,
       include: productListInclude(shopId),
     }),
     prisma.warehouseProduct.count({ where }),

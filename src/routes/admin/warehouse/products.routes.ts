@@ -11,6 +11,7 @@ import * as pricingService from '../../../services/admin/warehouse-pricing.servi
 import * as productCardService from '../../../services/admin/product-card.service';
 import * as aiContentProposalService from '../../../services/admin/ai-content-proposals.service';
 import * as aiBulkContentJobsService from '../../../services/admin/ai-bulk-content-jobs.service';
+import * as cleanupService from '../../../services/admin/warehouse-product-cleanup.service';
 import { pricingProductsBodySchema } from './pricing.routes';
 import { getProductStock } from '../../../services/admin/warehouse-stock.service';
 
@@ -59,6 +60,10 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
           isActive: { type: 'boolean' },
           stockStatus: { type: 'string', enum: ['available', 'zero', 'negative', 'low'] },
           wholesaleStockStatus: { type: 'string', enum: ['available', 'unavailable', 'missingOffer'] },
+          wholesaleProviderId: { type: 'string' },
+          shopStatus: { type: 'string', enum: ['active', 'inactive', 'missing'] },
+          noSalesSinceMonths: { type: 'integer', minimum: 1, maximum: 120 },
+          archiveStatus: { type: 'string', enum: ['active', 'archived', 'all'] },
           missingPrice: { type: 'string', enum: ['purchase', 'retail'] },
           stockBelow: { type: 'number' },
           hasBarcode: { type: 'boolean' },
@@ -91,6 +96,7 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
           search: { type: 'string' },
           catalogId: { type: 'string' },
           shopId: { type: 'string' },
+          wholesaleProviderId: { type: 'string' },
         },
       },
       response: {
@@ -104,8 +110,11 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
             withoutMapping: { type: 'integer' },
             withoutWholesaleOffer: { type: 'integer' },
             wholesaleUnavailable: { type: 'integer' },
+            shopInactive: { type: 'integer' },
             withoutPrice: { type: 'integer' },
             stockUntracked: { type: 'integer' },
+            archived: { type: 'integer' },
+            providerReview: { type: 'integer' },
           },
         },
       },
@@ -216,6 +225,211 @@ export async function registerWarehouseProductRoutes(fastify: FastifyInstance) {
       const message = error instanceof Error ? error.message : 'Błąd masowego usuwania produktów';
       const status = message.includes('nie znalezion') ? 404 : 400;
       return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+
+  // Selekcja: albo lista id (recznie zaznaczone), albo filtry listy. Filtry sa
+  // istotniejsze - zbior 1800 produktow nie zmiesci sie w liscie id.
+  const cleanupSelectionSchema = {
+    type: 'object',
+    properties: {
+      productIds: { type: 'array', items: { type: 'string' } },
+      filters: { type: 'object', additionalProperties: true },
+    },
+  } as const;
+
+  // POST /admin/warehouse/products/cleanup/preview
+  fastify.post('/products/cleanup/preview', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Podgląd skutków czyszczenia katalogu (bez żadnej zmiany)',
+      body: {
+        type: 'object',
+        required: ['selection', 'mode'],
+        properties: {
+          selection: cleanupSelectionSchema,
+          mode: { type: 'string', enum: cleanupService.CLEANUP_MODES },
+          shopId: { type: 'string' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: cleanupService.CleanupInput }>, reply: FastifyReply) => {
+    try {
+      const preview = await cleanupService.previewCleanup(request.body);
+      return reply.send(preview);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się policzyć skutków czyszczenia';
+      return reply.status(400).send({ error: 'Error', message });
+    }
+  });
+
+  // POST /admin/warehouse/products/cleanup
+  fastify.post('/products/cleanup', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Uruchom czyszczenie katalogu w tle',
+      body: {
+        type: 'object',
+        required: ['selection', 'mode'],
+        properties: {
+          selection: cleanupSelectionSchema,
+          mode: { type: 'string', enum: cleanupService.CLEANUP_MODES },
+          shopId: { type: 'string' },
+          reason: { type: 'string' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: cleanupService.CleanupInput }>, reply: FastifyReply) => {
+    try {
+      const result = await cleanupService.startCleanupRun({
+        ...request.body,
+        createdById: request.user?.userId ?? null,
+      });
+      return reply.status(202).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się uruchomić czyszczenia';
+      return reply.status(400).send({ error: 'Error', message });
+    }
+  });
+
+  // GET /admin/warehouse/products/cleanup/runs
+  fastify.get('/products/cleanup/runs', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Historia porządków w katalogu',
+      querystring: {
+        type: 'object',
+        properties: {
+          page: { type: 'integer', minimum: 1, default: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+          status: { type: 'string' },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: cleanupService.CleanupRunsQuery }>, reply: FastifyReply) => {
+    try {
+      const result = await cleanupService.listCleanupRuns(request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się pobrać historii porządków';
+      return reply.status(400).send({ error: 'Error', message });
+    }
+  });
+
+  // GET /admin/warehouse/products/cleanup/runs/:id
+  fastify.get('/products/cleanup/runs/:id', {
+    schema: { tags: ['warehouse'], summary: 'Stan przebiegu porządków' },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await cleanupService.getCleanupRun(request.params.id);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się pobrać przebiegu';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  // POST /admin/warehouse/products/cleanup/runs/:id/stop
+  fastify.post('/products/cleanup/runs/:id/stop', {
+    schema: { tags: ['warehouse'], summary: 'Zatrzymaj przebieg po bieżącej paczce' },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const run = await cleanupService.stopCleanupRun(request.params.id);
+      return reply.send(run);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się zatrzymać przebiegu';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  // POST /admin/warehouse/products/cleanup/runs/:id/retry-failed
+  fastify.post('/products/cleanup/runs/:id/retry-failed', {
+    schema: { tags: ['warehouse'], summary: 'Ponów wyłącznie pozycje zakończone błędem' },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const result = await cleanupService.retryFailedCleanupItems(
+        request.params.id,
+        request.user?.userId ?? null,
+      );
+      return reply.status(202).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się ponowić błędów';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  // GET /admin/warehouse/products/cleanup/runs/:id/report
+  // Raport wraca jako JSON, a nie strumien CSV: panel chodzi po API z tokenem
+  // w naglowku, wiec plik i tak sklada przegladarka po stronie klienta.
+  fastify.get('/products/cleanup/runs/:id/report', {
+    schema: { tags: ['warehouse'], summary: 'Raport przebiegu porządków (treść CSV)' },
+  }, async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+    try {
+      const report = await cleanupService.exportCleanupRunCsv(request.params.id);
+      return reply.send(report);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się przygotować raportu';
+      const status = message.includes('nie znalezion') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  // POST /admin/warehouse/products/:id/shop-visibility
+  fastify.post('/products/:id/shop-visibility', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Włącz lub wyłącz produkt w sklepie (bez ruszania mapowania)',
+      body: {
+        type: 'object',
+        required: ['active'],
+        properties: {
+          active: { type: 'boolean' },
+          shopId: { type: 'string' },
+        },
+      },
+    },
+  }, async (
+    request: FastifyRequest<{ Params: { id: string }; Body: { active: boolean; shopId?: string } }>,
+    reply: FastifyReply,
+  ) => {
+    try {
+      const result = await shopProductPublicationService.setShopProductVisibility({
+        warehouseProductId: request.params.id,
+        active: request.body.active,
+        shopId: request.body.shopId,
+      });
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się zmienić widoczności w sklepie';
+      const status = message.includes('nie ma aktywnego mapowania') ? 404 : 400;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
+  // POST /admin/warehouse/products/restore
+  fastify.post('/products/restore', {
+    schema: {
+      tags: ['warehouse'],
+      summary: 'Przywróć produkty z archiwum',
+      body: {
+        type: 'object',
+        required: ['productIds'],
+        properties: {
+          productIds: { type: 'array', minItems: 1, items: { type: 'string' } },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Body: { productIds: string[] } }>, reply: FastifyReply) => {
+    try {
+      const result = await cleanupService.restoreArchivedProducts(request.body.productIds);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Nie udało się przywrócić produktów';
+      return reply.status(400).send({ error: 'Error', message });
     }
   });
 

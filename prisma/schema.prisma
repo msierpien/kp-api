@@ -84,6 +84,7 @@ model Tenant {
   orderShipments                OrderShipment[]
   automationRuns                AutomationRun[]
   emailTemplates                EmailTemplate[]
+  warehouseCleanupRuns          WarehouseCleanupRun[]
 
   @@index([status])
   @@index([slug])
@@ -163,6 +164,7 @@ model Shop {
   competitorCategoryMappings CompetitorCategoryMapping[]
   competitorAutoPricingSettings WarehousePricingSettings[]
   competitorPriceAutomationRuns CompetitorPriceAutomationRun[]
+  warehouseCleanupRuns WarehouseCleanupRun[]
 
   @@index([tenantId])
   @@index([status])
@@ -1555,6 +1557,7 @@ model User {
   tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   authSessions AuthSession[]
   printJobs    PrintJob[]
+  warehouseCleanupRuns WarehouseCleanupRun[]
 
   @@index([tenantId])
   @@index([email])
@@ -1672,6 +1675,10 @@ model WarehouseProduct {
   leadTimeGroupId String? @map("lead_time_group_id")
   isActive      Boolean  @default(true) @map("is_active")
   isStockTracked Boolean @default(true) @map("is_stock_tracked")
+  /// Archiwum: produkt wypada z list, stanow, synchronizacji i zamawiania, ale
+  /// zostaje w bazie, zeby dokumenty, faktury i zwroty dalej sie otwieraly.
+  archivedAt    DateTime? @map("archived_at")
+  archivedReason String?  @map("archived_reason")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
@@ -1696,6 +1703,7 @@ model WarehouseProduct {
   productCardOperationLogs ProductCardOperationLog[]
   aiUsageLogs         AiUsageLog[]
   aiBulkContentJobItems AiBulkContentJobItem[]
+  cleanupRunItems     WarehouseCleanupRunItem[]
 
   @@unique([tenantId, sku])
   @@index([tenantId])
@@ -1703,6 +1711,7 @@ model WarehouseProduct {
   @@index([leadTimeGroupId])
   @@index([tenantId, isActive])
   @@index([tenantId, isActive, isStockTracked])
+  @@index([tenantId, archivedAt])
   @@map("warehouse_products")
 }
 
@@ -2063,7 +2072,15 @@ model ShopProductMapping {
   warehouseProductId        String?   @map("warehouse_product_id")
   personalizationEnabled    Boolean   @default(false) @map("personalization_enabled")
   personalizationTemplateId String?   @map("personalization_template_id")
+  /// Mapowanie zyje: laczy produkt magazynowy z pozycja w sklepie. Nie mowi nic
+  /// o tym, czy produkt jest wlaczony w sklepie - od tego jest externalActive.
   isActive                  Boolean   @default(true) @map("is_active")
+  /// Wartosc `active` z PrestaShop. null = nie wiemy (mapowanie sprzed importu,
+  /// ktory to zaciaga). Ustawia import i akcje publikacji.
+  externalActive            Boolean?  @map("external_active")
+  externalActiveSyncedAt    DateTime? @map("external_active_synced_at")
+  /// Kiedy import po raz pierwszy nie znalazl juz tej pozycji w sklepie.
+  missingInShopSince        DateTime? @map("missing_in_shop_since")
   lastSyncAt                DateTime? @map("last_sync_at")
   createdAt                 DateTime  @default(now()) @map("created_at")
   updatedAt                 DateTime  @updatedAt @map("updated_at")
@@ -2082,6 +2099,7 @@ model ShopProductMapping {
   @@index([tenantId, externalSku])
   @@index([tenantId, externalEan])
   @@index([tenantId, isActive])
+  @@index([tenantId, externalActive])
   @@index([tenantId, personalizationEnabled])
   @@index([personalizationTemplateId])
   @@map("shop_product_mappings")
@@ -2452,4 +2470,75 @@ model WholesaleFeedStagingItem {
   @@index([providerId, externalSku])
   @@index([tenantId])
   @@map("wholesale_feed_staging_items")
+}
+
+
+/// Jeden przebieg porzadkow w katalogu: co wybrano, w jakim trybie, co z tego
+/// wyszlo. Zapis jest po to, zeby dalo sie pokazac raport i ponowic bledy.
+model WarehouseCleanupRun {
+  id             String    @id @default(cuid())
+  tenantId       String    @map("tenant_id")
+  shopId         String?   @map("shop_id")
+  /// DEACTIVATE_ARCHIVE | SHOP_DELETE | PURGE | UNLINK
+  mode           String
+  /// PENDING | RUNNING | DONE | FAILED | STOPPED
+  status         String    @default("PENDING")
+  /// Selekcja zapisana tak, jak ja podano: lista id albo filtry listy.
+  selectionJson  Json      @map("selection_json")
+  /// Podglad skutkow z chwili uruchomienia.
+  previewJson    Json?     @map("preview_json")
+  total          Int       @default(0)
+  processed      Int       @default(0)
+  shopDeactivated Int      @default(0) @map("shop_deactivated")
+  shopDeleted    Int       @default(0) @map("shop_deleted")
+  archived       Int       @default(0)
+  purged         Int       @default(0)
+  unlinked       Int       @default(0)
+  skipped        Int       @default(0)
+  failed         Int       @default(0)
+  /// Zatrzymanie w trakcie: worker sprawdza to miedzy paczkami.
+  stopRequested  Boolean   @default(false) @map("stop_requested")
+  errorMessage   String?   @map("error_message") @db.Text
+  startedAt      DateTime? @map("started_at")
+  finishedAt     DateTime? @map("finished_at")
+  createdById    String?   @map("created_by_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  tenant    Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shop      Shop?                     @relation(fields: [shopId], references: [id], onDelete: SetNull)
+  createdBy User?                     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  items     WarehouseCleanupRunItem[]
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
+  @@map("warehouse_cleanup_runs")
+}
+
+/// Pozycja przebiegu: jeden produkt i to, co sie z nim stalo. SKU i nazwa sa
+/// przepisane, bo przy trybie PURGE produktu juz nie ma.
+model WarehouseCleanupRunItem {
+  id                 String   @id @default(cuid())
+  runId              String   @map("run_id")
+  tenantId           String   @map("tenant_id")
+  warehouseProductId String?  @map("warehouse_product_id")
+  sku                String
+  name               String
+  externalProductId  String?  @map("external_product_id")
+  /// DONE | SKIPPED | FAILED
+  status             String
+  /// Co zrobiono lub co zablokowalo: SHOP_DEACTIVATED, ARCHIVED, PURGED,
+  /// UNLINKED, BLOCKED_OPEN_ORDER, BLOCKED_RESERVATION, BLOCKED_PERSONALIZATION,
+  /// ARCHIVED_INSTEAD_OF_PURGE, SHOP_API_ERROR.
+  action             String
+  message            String?  @db.Text
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  run     WarehouseCleanupRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  product WarehouseProduct?   @relation(fields: [warehouseProductId], references: [id], onDelete: SetNull)
+
+  @@index([runId, status])
+  @@index([tenantId])
+  @@index([warehouseProductId])
+  @@map("warehouse_cleanup_run_items")
 }

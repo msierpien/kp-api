@@ -27,12 +27,14 @@ import { startStockSyncWorker, stopStockSyncWorker } from './services/queue/stoc
 import { startPriceSyncWorker, stopPriceSyncWorker } from './services/queue/price-sync.worker';
 import { startWholesaleSyncWorker, stopWholesaleSyncWorker } from './services/queue/wholesale-sync.worker';
 import { startAiContentWorker, stopAiContentWorker } from './services/queue/ai-content.worker';
+import { startWarehouseCleanupWorker, stopWarehouseCleanupWorker } from './services/queue/warehouse-cleanup.worker';
 import { closeQueue } from './services/queue/render.queue';
 import { closeEmailQueue } from './services/queue/email.queue';
 import { closeStockSyncQueue } from './services/queue/stock-sync.queue';
 import { closePriceSyncQueue } from './services/queue/price-sync.queue';
 import { closeWholesaleSyncQueue } from './services/queue/wholesale-sync.queue';
 import { closeAiContentQueue } from './services/queue/ai-content.queue';
+import { closeWarehouseCleanupQueue } from './services/queue/warehouse-cleanup.queue';
 // Puppeteer removed - no browser to close anymore
 import bullBoardPlugin from './plugins/bull-board';
 import swaggerDocsPlugin from './plugins/swagger-docs.plugin';
@@ -281,10 +283,12 @@ const gracefulShutdown = async () => {
     await stopPriceSyncWorker();
     await stopWholesaleSyncWorker();
     await stopAiContentWorker();
+    await stopWarehouseCleanupWorker();
     await closeStockSyncQueue();
     await closePriceSyncQueue();
     await closeWholesaleSyncQueue();
     await closeAiContentQueue();
+    await closeWarehouseCleanupQueue();
     await closeQueue();
     await closeEmailQueue();
     server.log.info('🛑 Workers and queues stopped');
@@ -385,6 +389,13 @@ const start = async () => {
         server.log.info('AI content worker started (BullMQ)');
       } catch (error) {
         server.log.error({ err: error }, 'Failed to start AI content worker');
+      }
+
+      try {
+        startWarehouseCleanupWorker();
+        server.log.info('Warehouse cleanup worker started (BullMQ)');
+      } catch (error) {
+        server.log.error({ err: error }, 'Failed to start warehouse cleanup worker');
       }
     } else {
       server.log.info('Workers disabled for this runtime role');

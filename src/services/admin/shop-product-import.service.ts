@@ -17,10 +17,16 @@ export interface ImportProductsResult {
   variants: number;
   /** Kombinacje pominięte z braku reference (SKU). */
   variantsSkippedNoSku: number;
+  /** Mapowania, których sklep już nie zwraca (tylko przy pełnym imporcie). */
+  missingInShop: number;
 }
 
 export interface ImportProductsOptions {
   limit?: number;
+  /**
+   * Domyslnie false: zaciagamy takze produkty wylaczone w sklepie, inaczej panel
+   * nie ma jak pokazac, ze cos w PrestaShop jest zgaszone, ani tego posprzatac.
+   */
   activeOnly?: boolean;
 }
 
@@ -120,6 +126,7 @@ export async function importProductsFromShop(
       skippedNoSku: 0,
       variants: 0,
       variantsSkippedNoSku: 0,
+      missingInShop: 0,
     };
 
     const productIdsWithSku = products
@@ -160,7 +167,9 @@ export async function importProductsFromShop(
           externalEan: product.ean,
           externalName: product.name,
           externalPrice: product.price,
-          isActive: product.active,
+          isActive: true,
+          externalActive: product.active,
+          externalActiveSyncedAt: new Date(),
           lastSyncAt: new Date(),
         },
         update: {
@@ -168,7 +177,10 @@ export async function importProductsFromShop(
           externalEan: product.ean,
           externalName: product.name,
           externalPrice: product.price,
-          isActive: product.active,
+          isActive: true,
+          externalActive: product.active,
+          externalActiveSyncedAt: new Date(),
+          missingInShopSince: null,
           lastSyncAt: new Date(),
         },
       });
@@ -210,7 +222,9 @@ export async function importProductsFromShop(
           externalEan: combination.ean,
           externalName: parent.name,
           externalPrice: price,
-          isActive: parent.active,
+          isActive: true,
+          externalActive: parent.active,
+          externalActiveSyncedAt: new Date(),
           lastSyncAt: new Date(),
         },
         update: {
@@ -218,11 +232,50 @@ export async function importProductsFromShop(
           externalEan: combination.ean,
           externalName: parent.name,
           externalPrice: price,
-          isActive: parent.active,
+          isActive: true,
+          externalActive: parent.active,
+          externalActiveSyncedAt: new Date(),
+          missingInShopSince: null,
           lastSyncAt: new Date(),
         },
       });
       result.variants++;
+    }
+
+    // Pozycje, ktorych sklep juz nie zwraca, to albo produkt skasowany w
+    // PrestaShop, albo pomylka po naszej stronie. Nie kasujemy mapowania - tylko
+    // znaczymy data, zeby raport sierot mial na czym stanac, a produkt przestal
+    // udawac, ze jest w sklepie. Robimy to wylacznie po pelnym imporcie: przy
+    // imporcie z limitem "brak w wyniku" nic nie znaczy.
+    const fullImport = normalizeImportLimit(options.limit) === undefined && !(options.activeOnly ?? false);
+    if (fullImport) {
+      const seenKeys = new Set<string>();
+      for (const product of products) {
+        if (product.sku) seenKeys.add(`${product.id}:0`);
+      }
+      for (const combination of combinations) {
+        if (combination.sku) seenKeys.add(`${combination.productId}:${combination.id}`);
+      }
+
+      const knownMappings = await prisma.shopProductMapping.findMany({
+        where: { tenantId, shopId, missingInShopSince: null },
+        select: { id: true, externalProductId: true, externalCombinationId: true },
+      });
+      const goneIds = knownMappings
+        .filter((mapping) => !seenKeys.has(`${mapping.externalProductId}:${mapping.externalCombinationId}`))
+        .map((mapping) => mapping.id);
+
+      if (goneIds.length) {
+        await prisma.shopProductMapping.updateMany({
+          where: { id: { in: goneIds } },
+          data: {
+            missingInShopSince: new Date(),
+            externalActive: false,
+            externalActiveSyncedAt: new Date(),
+          },
+        });
+        result.missingInShop = goneIds.length;
+      }
     }
 
     await prisma.shop.update({
@@ -623,7 +676,7 @@ async function fetchShopProducts(shop: Shop, options: ImportProductsOptions) {
     const batch = await client.fetchProducts({
       limit: batchLimit,
       offset,
-      activeOnly: options.activeOnly ?? true,
+      activeOnly: options.activeOnly ?? false,
     });
 
     products.push(...batch);

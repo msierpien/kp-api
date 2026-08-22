@@ -21,6 +21,8 @@ export const TENANT_MODELS = new Set([
   'EmailTemplate',
   'WarehouseProduct',
   'WarehouseCatalog',
+  'WarehouseCleanupRun',
+  'WarehouseCleanupRunItem',
   'WarehouseLeadTimeGroup',
   'WarehouseClearance',
   'WarehousePriceGroup',

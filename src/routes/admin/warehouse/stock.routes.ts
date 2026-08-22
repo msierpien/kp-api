@@ -56,6 +56,29 @@ export async function registerWarehouseStockRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.get('/shop-catalog-orphans', {
+    schema: {
+      tags: ['warehouse-diagnostics'],
+      summary: 'Rozjazd katalogu sklepu i panelu po porzadkach',
+      querystring: {
+        type: 'object',
+        properties: {
+          shopId: { type: 'string' },
+          limit: { type: 'integer', minimum: 1, maximum: 500, default: 100 },
+        },
+      },
+    },
+  }, async (request: FastifyRequest<{ Querystring: diagnosticsService.ShopCatalogOrphansQuery }>, reply: FastifyReply) => {
+    try {
+      const result = await diagnosticsService.getShopCatalogOrphans(request.query);
+      return reply.send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Blad pobierania rozjazdu katalogu';
+      const status = message.includes('Brak kontekstu') ? 400 : 500;
+      return reply.status(status).send({ error: 'Error', message });
+    }
+  });
+
   fastify.get('/prestashop-reconciliation', {
     schema: {
       tags: ['warehouse-diagnostics'],

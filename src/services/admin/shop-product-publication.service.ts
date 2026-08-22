@@ -549,7 +549,7 @@ async function getPublicationShop(tenantId: string, shopId: string) {
   return shop;
 }
 
-function buildPrestaShopClient(shop: Shop) {
+export function buildPrestaShopClient(shop: Shop) {
   const config = parseShopPublicationConfig(shop);
   return new PrestaShopClient({
     baseUrl: shop.baseUrl,
@@ -844,4 +844,81 @@ function normalizePrice(value?: number | string | Prisma.Decimal | null) {
 
 function decimalToNumber(value?: Prisma.Decimal | number | string | null) {
   return normalizePrice(value);
+}
+
+export interface SetShopProductVisibilityInput {
+  warehouseProductId: string;
+  shopId?: string;
+  active: boolean;
+}
+
+export interface SetShopProductVisibilityResult {
+  changed: number;
+  failed: number;
+  errors: Array<{ shopId: string; externalProductId: string; message: string }>;
+}
+
+/**
+ * Gasi albo zapala produkt w sklepie, nie ruszajac niczego innego.
+ *
+ * To nie to samo, co "Usun ze sklepu": mapowanie zostaje zywe, produkt zostaje
+ * w katalogu sklepu, zmienia sie wylacznie flaga `active` w PrestaShop. Karta
+ * produktu dotad w ogole nie wiedziala o zdalnym stanie, wiec jedynym sposobem
+ * na zgaszenie pojedynczej pozycji bylo zerwanie mapowania.
+ */
+export async function setShopProductVisibility(
+  input: SetShopProductVisibilityInput,
+): Promise<SetShopProductVisibilityResult> {
+  const tenantId = requireTenantId();
+
+  const mappings = await prisma.shopProductMapping.findMany({
+    where: {
+      tenantId,
+      warehouseProductId: input.warehouseProductId,
+      isActive: true,
+      ...(input.shopId ? { shopId: input.shopId } : {}),
+    },
+    include: { shop: true },
+  });
+  if (mappings.length === 0) throw new Error('Produkt nie ma aktywnego mapowania do sklepu');
+
+  const result: SetShopProductVisibilityResult = { changed: 0, failed: 0, errors: [] };
+  // Warianty dziela id produktu-rodzica, wiec wolamy API raz na (sklep, produkt).
+  const targets = new Map<string, { shop: typeof mappings[number]['shop']; externalProductId: string }>();
+  for (const mapping of mappings) {
+    targets.set(`${mapping.shopId}:${mapping.externalProductId}`, {
+      shop: mapping.shop,
+      externalProductId: mapping.externalProductId,
+    });
+  }
+
+  for (const target of targets.values()) {
+    try {
+      const client = buildPrestaShopClient(target.shop);
+      await client.setProductActive(target.externalProductId, input.active);
+      await prisma.shopProductMapping.updateMany({
+        where: {
+          tenantId,
+          shopId: target.shop.id,
+          externalProductId: target.externalProductId,
+          isActive: true,
+        },
+        data: {
+          externalActive: input.active,
+          externalActiveSyncedAt: new Date(),
+          lastSyncAt: new Date(),
+        },
+      });
+      result.changed++;
+    } catch (error) {
+      result.failed++;
+      result.errors.push({
+        shopId: target.shop.id,
+        externalProductId: target.externalProductId,
+        message: error instanceof Error ? error.message : 'Nie udało się zmienić widoczności w sklepie',
+      });
+    }
+  }
+
+  return result;
 }

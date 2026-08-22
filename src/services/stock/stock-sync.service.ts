@@ -263,6 +263,8 @@ export async function publishInventoryToShops(options: PublishInventoryOptions) 
     // wiec mapowania wariantow (kombinacji) sa wylaczone z syncu stanow.
     externalCombinationId: '0',
     warehouseProductId: productIds.length > 0 ? { in: productIds } : { not: null },
+    // Zarchiwizowany produkt nie ma czego publikowac - wypadl z obiegu.
+    warehouseProduct: { archivedAt: null },
     shop: { status: 'ACTIVE', platform: 'PRESTASHOP' },
   };
 

@@ -533,6 +533,7 @@ async function resolveProductsAndShops(tenantId: string, input: PricingProductsI
   const productWhere: Prisma.WarehouseProductWhereInput = {
     tenantId,
     isActive: true,
+    archivedAt: null,
     ...(input.productIds?.length ? { id: { in: input.productIds.slice(0, take) } } : {}),
     ...(input.catalogId ? { catalogId: input.catalogId } : {}),
     ...(input.priceGroupId ? { priceGroupMembers: { some: { priceGroupId: input.priceGroupId } } } : {}),
@@ -1518,6 +1519,7 @@ async function filteredProductIdsForPricing(tenantId: string, filters: PricingPr
   const productWhere: Prisma.WarehouseProductWhereInput = {
     tenantId,
     isActive: true,
+    archivedAt: null,
     ...(categoryProductIds ? { id: { in: Array.from(categoryProductIds) } } : {}),
     ...(search ? {
       OR: [
@@ -1616,6 +1618,7 @@ export async function getPricingProducts(query: PricingProductsQuery) {
   const productWhere: Prisma.WarehouseProductWhereInput = {
     tenantId,
     isActive: true,
+    archivedAt: null,
     ...(categoryProductIds ? { id: { in: Array.from(categoryProductIds) } } : {}),
     ...(search ? {
       OR: [

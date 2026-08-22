@@ -753,3 +753,127 @@ function getDocumentStockDelta(item: { quantity: Prisma.Decimal; systemQuantity?
 
   return Number(item.quantity) * getDocumentDirection(item.document.type);
 }
+
+export interface ShopCatalogOrphansQuery {
+  shopId?: string;
+  limit?: number;
+}
+
+/**
+ * Rozjazd miedzy katalogiem sklepu a panelem. Po wiekszych porzadkach obie
+ * strony potrafia sie rozjechac w dwie strony naraz, a zadna z list sama tego
+ * nie pokazuje:
+ *  - pozycja zyje w PrestaShop, ale nie ma produktu magazynowego (nikt jej nie
+ *    zmapowal albo produkt zostal skasowany lokalnie),
+ *  - produkt jest u nas i ma mapowanie, ale sklep przestal go zwracac,
+ *  - produkt jest zarchiwizowany u nas, a w sklepie dalej jest wlaczony.
+ */
+export async function getShopCatalogOrphans(query: ShopCatalogOrphansQuery = {}) {
+  const tenantId = requireTenantId();
+  const limit = Math.min(500, Math.max(1, query.limit ?? 100));
+  const shopFilter = query.shopId ? { shopId: query.shopId } : {};
+
+  const [inShopWithoutProduct, missingInShop, archivedButActiveInShop, counts] = await Promise.all([
+    prisma.shopProductMapping.findMany({
+      where: { tenantId, ...shopFilter, isActive: true, warehouseProductId: null, missingInShopSince: null },
+      select: {
+        id: true,
+        externalProductId: true,
+        externalSku: true,
+        externalName: true,
+        externalActive: true,
+        shop: { select: { id: true, name: true } },
+      },
+      orderBy: { externalSku: 'asc' },
+      take: limit,
+    }),
+    prisma.shopProductMapping.findMany({
+      where: { tenantId, ...shopFilter, missingInShopSince: { not: null }, warehouseProductId: { not: null } },
+      select: {
+        id: true,
+        externalProductId: true,
+        externalSku: true,
+        missingInShopSince: true,
+        shop: { select: { id: true, name: true } },
+        warehouseProduct: { select: { id: true, sku: true, name: true, archivedAt: true } },
+      },
+      orderBy: { missingInShopSince: 'desc' },
+      take: limit,
+    }),
+    prisma.shopProductMapping.findMany({
+      where: {
+        tenantId,
+        ...shopFilter,
+        isActive: true,
+        externalActive: true,
+        warehouseProduct: { archivedAt: { not: null } },
+      },
+      select: {
+        id: true,
+        externalProductId: true,
+        externalSku: true,
+        shop: { select: { id: true, name: true } },
+        warehouseProduct: { select: { id: true, sku: true, name: true, archivedAt: true } },
+      },
+      orderBy: { externalSku: 'asc' },
+      take: limit,
+    }),
+    prisma.$transaction([
+      prisma.shopProductMapping.count({
+        where: { tenantId, ...shopFilter, isActive: true, warehouseProductId: null, missingInShopSince: null },
+      }),
+      prisma.shopProductMapping.count({
+        where: { tenantId, ...shopFilter, missingInShopSince: { not: null }, warehouseProductId: { not: null } },
+      }),
+      prisma.shopProductMapping.count({
+        where: {
+          tenantId,
+          ...shopFilter,
+          isActive: true,
+          externalActive: true,
+          warehouseProduct: { archivedAt: { not: null } },
+        },
+      }),
+    ]),
+  ]);
+
+  return {
+    counts: {
+      inShopWithoutProduct: counts[0],
+      missingInShop: counts[1],
+      archivedButActiveInShop: counts[2],
+    },
+    inShopWithoutProduct: inShopWithoutProduct.map((mapping) => ({
+      mappingId: mapping.id,
+      shopId: mapping.shop.id,
+      shopName: mapping.shop.name,
+      externalProductId: mapping.externalProductId,
+      externalSku: mapping.externalSku,
+      externalName: mapping.externalName,
+      externalActive: mapping.externalActive,
+    })),
+    missingInShop: missingInShop.map((mapping) => ({
+      mappingId: mapping.id,
+      shopId: mapping.shop.id,
+      shopName: mapping.shop.name,
+      externalProductId: mapping.externalProductId,
+      externalSku: mapping.externalSku,
+      missingSince: mapping.missingInShopSince,
+      productId: mapping.warehouseProduct?.id ?? null,
+      sku: mapping.warehouseProduct?.sku ?? null,
+      productName: mapping.warehouseProduct?.name ?? null,
+      archived: Boolean(mapping.warehouseProduct?.archivedAt),
+    })),
+    archivedButActiveInShop: archivedButActiveInShop.map((mapping) => ({
+      mappingId: mapping.id,
+      shopId: mapping.shop.id,
+      shopName: mapping.shop.name,
+      externalProductId: mapping.externalProductId,
+      externalSku: mapping.externalSku,
+      productId: mapping.warehouseProduct?.id ?? null,
+      sku: mapping.warehouseProduct?.sku ?? null,
+      productName: mapping.warehouseProduct?.name ?? null,
+      archivedAt: mapping.warehouseProduct?.archivedAt ?? null,
+    })),
+  };
+}

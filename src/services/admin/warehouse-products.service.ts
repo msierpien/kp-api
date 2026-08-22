@@ -102,6 +102,18 @@ export interface ProductsQuery {
   isActive?: boolean;
   stockStatus?: 'available' | 'zero' | 'negative' | 'low';
   wholesaleStockStatus?: 'available' | 'unavailable' | 'missingOffer';
+  /** Produkty, ktore maja zywa oferte u tej konkretnej hurtowni. */
+  wholesaleProviderId?: string;
+  /** Stan w PrestaShop, nie u nas: active / inactive / brak pozycji w sklepie. */
+  shopStatus?: 'active' | 'inactive' | 'missing';
+  /**
+   * Produkty bez pozycji zamowienia od N miesiecy. Liczy sie po powiazanych
+   * pozycjach (warehouseProductId), wiec zamowienia sprzed mapowania sie nie
+   * licza - to filtr do zawezenia zbioru, nie dowod, ze produkt sie nie sprzedaje.
+   */
+  noSalesSinceMonths?: number;
+  /** Domyslnie 'active': zarchiwizowane nie pokazuja sie nigdzie poza Archiwum. */
+  archiveStatus?: 'active' | 'archived' | 'all';
   missingPrice?: 'purchase' | 'retail';
   stockBelow?: number;
   hasBarcode?: boolean;
@@ -195,9 +207,9 @@ function requireTenantId() {
   return tenantId;
 }
 
-type ProductsWhereQuery = Omit<ProductsQuery, 'page' | 'limit'>;
+export type ProductsWhereQuery = Omit<ProductsQuery, 'page' | 'limit'>;
 
-function buildProductsWhere(query: ProductsWhereQuery, tenantId: string | null | undefined) {
+export function buildProductsWhere(query: ProductsWhereQuery, tenantId: string | null | undefined) {
   const {
     search,
     catalogId,
@@ -205,6 +217,10 @@ function buildProductsWhere(query: ProductsWhereQuery, tenantId: string | null |
     isActive,
     stockStatus,
     wholesaleStockStatus,
+    wholesaleProviderId,
+    shopStatus,
+    noSalesSinceMonths,
+    archiveStatus,
     missingPrice,
     stockBelow,
     hasBarcode,
@@ -214,7 +230,12 @@ function buildProductsWhere(query: ProductsWhereQuery, tenantId: string | null |
   } = query;
 
   const where: any = {};
+  const and: any[] = [];
   if (tenantId) where.tenantId = tenantId;
+  // Archiwum jest domyslnie niewidoczne - tak samo jak produkt usuniety, tylko
+  // odwracalnie. Trzeba o nie poprosic wprost.
+  if (archiveStatus === 'archived') where.archivedAt = { not: null };
+  else if (archiveStatus !== 'all') where.archivedAt = null;
   if (catalogId) where.catalogId = catalogId;
   if (isActive !== undefined) where.isActive = isActive;
   if (isStockTracked !== undefined) where.isStockTracked = isStockTracked;
@@ -230,38 +251,55 @@ function buildProductsWhere(query: ProductsWhereQuery, tenantId: string | null |
       ? { some: { isActive: true } }
       : { none: { isActive: true } };
   }
+  const shopMappingFilter = {
+    isActive: true,
+    ...(shopId ? { shopId } : {}),
+  };
   if (hasShopMapping !== undefined || shopId) {
-    const shopMappingFilter = {
-      isActive: true,
-      ...(shopId ? { shopId } : {}),
-    };
     // Sam shopId oznacza "produkty powiązane z tym sklepem"
-    where.shopProductMappings = hasShopMapping === false
-      ? { none: shopMappingFilter }
-      : { some: shopMappingFilter };
+    and.push({
+      shopProductMappings: hasShopMapping === false
+        ? { none: shopMappingFilter }
+        : { some: shopMappingFilter },
+    });
   }
+  // Stan w sklepie czytamy z externalActive, czyli z tego, co ostatni import
+  // zobaczyl w PrestaShop. isActive mowi tylko, czy mapowanie zyje.
+  if (shopStatus === 'active') {
+    and.push({ shopProductMappings: { some: { ...shopMappingFilter, externalActive: true } } });
+  } else if (shopStatus === 'inactive') {
+    and.push({ shopProductMappings: { some: { ...shopMappingFilter, externalActive: false } } });
+    and.push({ shopProductMappings: { none: { ...shopMappingFilter, externalActive: true } } });
+  } else if (shopStatus === 'missing') {
+    and.push({ shopProductMappings: { none: shopMappingFilter } });
+  }
+
   const activeWholesaleMappingFilter = {
     isActive: true,
     provider: { isActive: true },
+    ...(wholesaleProviderId ? { providerId: wholesaleProviderId } : {}),
   };
   const availableWholesaleMappingFilter = {
     ...activeWholesaleMappingFilter,
     lastKnownStock: { gt: 0 },
   };
   if (wholesaleStockStatus === 'available') {
-    where.wholesaleMappings = { some: availableWholesaleMappingFilter };
+    and.push({ wholesaleMappings: { some: availableWholesaleMappingFilter } });
   } else if (wholesaleStockStatus === 'unavailable') {
-    where.AND = [
-      ...(where.AND ?? []),
-      { wholesaleMappings: { some: activeWholesaleMappingFilter } },
-      { wholesaleMappings: { none: availableWholesaleMappingFilter } },
-    ];
+    // "Hurtownia nie ma": oferta istnieje, ale nigdzie nie ma sztuk. Przy
+    // wybranej hurtowni oba warunki dotycza juz tylko jej oferty.
+    and.push({ wholesaleMappings: { some: activeWholesaleMappingFilter } });
+    and.push({ wholesaleMappings: { none: availableWholesaleMappingFilter } });
   } else if (wholesaleStockStatus === 'missingOffer') {
-    where.wholesaleMappings = { none: activeWholesaleMappingFilter };
+    and.push({ wholesaleMappings: { none: activeWholesaleMappingFilter } });
   } else if (hasWholesaleOffer !== undefined) {
-    where.wholesaleMappings = hasWholesaleOffer
-      ? { some: activeWholesaleMappingFilter }
-      : { none: activeWholesaleMappingFilter };
+    and.push({
+      wholesaleMappings: hasWholesaleOffer
+        ? { some: activeWholesaleMappingFilter }
+        : { none: activeWholesaleMappingFilter },
+    });
+  } else if (wholesaleProviderId) {
+    and.push({ wholesaleMappings: { some: activeWholesaleMappingFilter } });
   }
   if (search) {
     where.OR = [
@@ -270,6 +308,14 @@ function buildProductsWhere(query: ProductsWhereQuery, tenantId: string | null |
       { barcodes: { some: { isActive: true, ean: { contains: search, mode: 'insensitive' } } } },
     ];
   }
+
+  if (noSalesSinceMonths !== undefined && noSalesSinceMonths > 0) {
+    const since = new Date();
+    since.setMonth(since.getMonth() - noSalesSinceMonths);
+    and.push({ orderItems: { none: { order: { createdAtShop: { gte: since } } } } });
+  }
+
+  if (and.length) where.AND = [...(where.AND ?? []), ...and];
 
   return where;
 }
@@ -370,6 +416,11 @@ export interface ProductViewCountsQuery {
   search?: string;
   catalogId?: string;
   shopId?: string;
+  /**
+   * Zaweza wylacznie widok "hurtownia - do przegladu". Reszta chipow ma zostac
+   * globalna, inaczej licznik "Wszystkie" zmienialby sie przy wyborze hurtowni.
+   */
+  wholesaleProviderId?: string;
 }
 
 const PRODUCT_VIEW_QUERIES = {
@@ -380,20 +431,46 @@ const PRODUCT_VIEW_QUERIES = {
   withoutMapping: { isActive: true, isStockTracked: true, hasShopMapping: false },
   withoutWholesaleOffer: { isActive: true, isStockTracked: true, hasWholesaleOffer: false },
   wholesaleUnavailable: { isActive: true, isStockTracked: true, wholesaleStockStatus: 'unavailable' },
+  shopInactive: { isActive: true, isStockTracked: true, shopStatus: 'inactive' },
   withoutPrice: { isActive: true, isStockTracked: true, missingPrice: 'retail' },
   stockUntracked: { isStockTracked: false },
+  // Zbior do czyszczenia: hurtownia nie ma sztuk i nikt tego nie kupil od pol
+  // roku. Liczy sie tylko z wybrana hurtownia - bez niej zwraca 0.
+  archived: { archiveStatus: 'archived' },
+  providerReview: {
+    isActive: true,
+    isStockTracked: true,
+    wholesaleStockStatus: 'unavailable',
+    noSalesSinceMonths: 6,
+  },
 } satisfies Record<string, ProductsWhereQuery>;
+
+const PROVIDER_SCOPED_VIEWS = new Set<string>(['providerReview']);
 
 export type ProductViewCounts = Record<keyof typeof PRODUCT_VIEW_QUERIES, number>;
 
 export async function getProductViewCounts(query: ProductViewCountsQuery = {}): Promise<ProductViewCounts> {
   const tenantId = requireTenantId();
+  const { wholesaleProviderId, ...sharedQuery } = query;
   const viewIds = Object.keys(PRODUCT_VIEW_QUERIES) as Array<keyof typeof PRODUCT_VIEW_QUERIES>;
 
   const counts = await prisma.$transaction(
-    viewIds.map((viewId) => prisma.warehouseProduct.count({
-      where: buildProductsWhere({ ...PRODUCT_VIEW_QUERIES[viewId], ...query }, tenantId),
-    })),
+    viewIds.map((viewId) => {
+      const providerScoped = PROVIDER_SCOPED_VIEWS.has(viewId);
+      if (providerScoped && !wholesaleProviderId) {
+        return prisma.warehouseProduct.count({ where: { id: '' } });
+      }
+      return prisma.warehouseProduct.count({
+        where: buildProductsWhere(
+          {
+            ...PRODUCT_VIEW_QUERIES[viewId],
+            ...sharedQuery,
+            ...(providerScoped ? { wholesaleProviderId } : {}),
+          },
+          tenantId,
+        ),
+      });
+    }),
   );
 
   return Object.fromEntries(viewIds.map((viewId, index) => [viewId, counts[index]])) as ProductViewCounts;

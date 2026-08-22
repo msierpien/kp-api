@@ -131,6 +131,58 @@ const DESCRIPTION = `<h2>Menu weselne „Bordowa Fala”</h2>
 // --- Zdjecia produktu --------------------------------------------------
 
 /**
+ * Ile razy wiekszy od KARTY ma byc kadr danego ujecia.
+ *
+ * Menu 80 x 165 mm zajmuje na scenie zdjeciowej 33% szerokosci kadru - z
+ * miniatury w katalogu nie da sie odczytac, co jest na karcie. Kadr liczymy
+ * od naroznikow powierzchni mockupu, wiec podmiana mockupu w panelu nie
+ * wymaga tu zadnej korekty.
+ *
+ * Klucz to WARIANT, nie numer mockupu: ten szablon ma jedno ujecie i trzy
+ * warianty, wiec kadrowanie po indeksie mockupu docielo by wszystkie trzy.
+ * 1,0 = sama karta bez marginesu, brak wpisu = pelny kadr sceny.
+ */
+const PHOTO_FRAME_RATIO: Record<string, number> = {
+  'variant-5': 1.45, // okladka - karta ma byc czytelna z miniatury
+}
+
+/**
+ * Wycinek wokol karty, w proporcji ORYGINALU - wszystkie ujecia zostaja wtedy
+ * tego samego ksztaltu i galeria nie skacze.
+ *
+ * Margines liczymy w OBU osiach, a dopiero potem rozciagamy kadr do proporcji
+ * zdjecia. Liczenie samej szerokosci wystarcza dla karty lezacej, ale menu
+ * jest wyzsze niz szersze - kadr z szerokosci obcialby mu gore i dol.
+ */
+function surfaceCrop(mockup: any, width: number, height: number, ratio?: number) {
+  const corners: Array<{ x: number; y: number }> = mockup?.surfaces?.[0]?.corners ?? []
+  if (!ratio || corners.length === 0) return { x: 0, y: 0, width, height }
+
+  const xs = corners.map((corner) => corner.x)
+  const ys = corners.map((corner) => corner.y)
+  const centerX = ((Math.min(...xs) + Math.max(...xs)) / 2) * width
+  const centerY = ((Math.min(...ys) + Math.max(...ys)) / 2) * height
+
+  const wantedWidth = (Math.max(...xs) - Math.min(...xs)) * width * ratio
+  const wantedHeight = (Math.max(...ys) - Math.min(...ys)) * height * ratio
+
+  // Kadr musi objac oba wymiary, wiec rosnie ten, ktorego brakuje do proporcji.
+  const sourceRatio = width / height
+  const cropWidth = Math.min(width, Math.round(Math.max(wantedWidth, wantedHeight * sourceRatio)))
+  const cropHeight = Math.min(height, Math.round(cropWidth / sourceRatio))
+
+  const clamp = (value: number, max: number) => Math.max(0, Math.min(value, max))
+
+  return {
+    x: clamp(Math.round(centerX - cropWidth / 2), width - cropWidth),
+    y: clamp(Math.round(centerY - cropHeight / 2), height - cropHeight),
+    width: cropWidth,
+    height: cropHeight,
+  }
+}
+
+
+/**
  * Zdjecia karty: mockupy szablonu wyrenderowane realna trescia, wiec klient
  * oglada dokladnie to, co dostanie. Brak mockupow = brak zdjec, a nie blad.
  *
@@ -161,6 +213,7 @@ async function ensureProductPhotos(layout: any, force: boolean) {
   const jobs = shots.flatMap((shot) =>
     mockups.map((mockup, index) => ({
       mockup,
+      suffix: shot.suffix,
       name: `menu-80x165-${shot.suffix}-${index + 1}.jpg`,
       answers: shot.answers,
     }))
@@ -179,8 +232,11 @@ async function ensureProductPhotos(layout: any, force: boolean) {
     // PrestaShop odrzuca pliki powyzej 2000 KB, a render PNG wazy okolo 2 MB.
     const { createCanvas, loadImage } = await import('canvas')
     const image = await loadImage(png)
-    const canvas = createCanvas(image.width, image.height)
-    canvas.getContext('2d').drawImage(image as any, 0, 0)
+    const crop = surfaceCrop(mockup, image.width, image.height, PHOTO_FRAME_RATIO[job.suffix])
+    const canvas = createCanvas(crop.width, crop.height)
+    canvas
+      .getContext('2d')
+      .drawImage(image as any, crop.x, crop.y, crop.width, crop.height, 0, 0, crop.width, crop.height)
 
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(absolute, canvas.toBuffer('image/jpeg', { quality: 0.9 }))

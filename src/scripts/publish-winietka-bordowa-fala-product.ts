@@ -138,8 +138,11 @@ const PHOTO_FRAME_RATIO: Record<number, number> = {
 /**
  * Wycinek wokol karty, w proporcji ORYGINALU - obie fotografie zostaja wtedy
  * tego samego ksztaltu i galeria nie skacze. Kadr jest docinany do krawedzi
- * zdjecia, a przy okazji przesuwany do srodka, zeby przyciecie z jednej strony
- * nie zjadalo marginesu z drugiej.
+ * zdjecia.
+ *
+ * Margines liczymy w OBU osiach, a dopiero potem rozciagamy kadr do proporcji
+ * zdjecia. Sama szerokosc wystarcza dla karty lezacej, ale nie dla grafiki
+ * wyzszej niz szersza - tam kadr z szerokosci obcialby gore i dol.
  */
 function surfaceCrop(mockup: any, width: number, height: number, ratio?: number) {
   const corners: Array<{ x: number; y: number }> = mockup?.surfaces?.[0]?.corners ?? []
@@ -147,12 +150,16 @@ function surfaceCrop(mockup: any, width: number, height: number, ratio?: number)
 
   const xs = corners.map((corner) => corner.x)
   const ys = corners.map((corner) => corner.y)
-  const cardWidth = (Math.max(...xs) - Math.min(...xs)) * width
   const centerX = ((Math.min(...xs) + Math.max(...xs)) / 2) * width
   const centerY = ((Math.min(...ys) + Math.max(...ys)) / 2) * height
 
-  const cropWidth = Math.min(width, Math.round(cardWidth * ratio))
-  const cropHeight = Math.min(height, Math.round((cropWidth * height) / width))
+  const wantedWidth = (Math.max(...xs) - Math.min(...xs)) * width * ratio
+  const wantedHeight = (Math.max(...ys) - Math.min(...ys)) * height * ratio
+
+  // Kadr musi objac oba wymiary, wiec rosnie ten, ktorego brakuje do proporcji.
+  const sourceRatio = width / height
+  const cropWidth = Math.min(width, Math.round(Math.max(wantedWidth, wantedHeight * sourceRatio)))
+  const cropHeight = Math.min(height, Math.round(cropWidth / sourceRatio))
 
   const clamp = (value: number, max: number) => Math.max(0, Math.min(value, max))
 
@@ -164,15 +171,6 @@ function surfaceCrop(mockup: any, width: number, height: number, ratio?: number)
   }
 }
 
-/**
- * Zdjecia karty: mockupy szablonu wyrenderowane realna trescia, wiec klient
- * oglada dokladnie to, co dostanie. Brak mockupow = brak zdjec, a nie blad.
- *
- * Ten szablon nie ma wariantow, ma za to DWA mockupy - przod i tyl karty -
- * wiec galeria dostaje dwa ujecia. Obsluga wariantow zostaje na wypadek,
- * gdyby doszly (np. wersja z numerem stolu); przy pustej liscie wychodzi
- * jedno ujecie na mockup.
- */
 async function ensureProductPhotos(layout: any, force: boolean) {
   const mockups: any[] = layout?.mockups || []
   if (mockups.length === 0) return []

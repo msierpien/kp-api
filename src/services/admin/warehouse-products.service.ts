@@ -99,6 +99,13 @@ export interface ProductsQuery {
   search?: string;
   catalogId?: string;
   shopId?: string;
+  /**
+   * Co znaczy wybrany sklep. 'mapped' (domyslnie) zaweza liste do produktow
+   * z zywym mapowaniem do tego sklepu - wtedy pracuje sie "na jednym sklepie".
+   * 'all' zdejmuje to zawezenie, ale shopId dalej wskazuje, ktorego sklepu
+   * dotycza kolumny; sluzy do pokazania kandydatow do publikacji.
+   */
+  shopScope?: 'mapped' | 'all';
   isActive?: boolean;
   stockStatus?: 'available' | 'zero' | 'negative' | 'low';
   wholesaleStockStatus?: 'available' | 'unavailable' | 'missingOffer';
@@ -214,6 +221,7 @@ export function buildProductsWhere(query: ProductsWhereQuery, tenantId: string |
     search,
     catalogId,
     shopId,
+    shopScope,
     isActive,
     stockStatus,
     wholesaleStockStatus,
@@ -255,13 +263,15 @@ export function buildProductsWhere(query: ProductsWhereQuery, tenantId: string |
     isActive: true,
     ...(shopId ? { shopId } : {}),
   };
-  if (hasShopMapping !== undefined || shopId) {
-    // Sam shopId oznacza "produkty powiązane z tym sklepem"
+  if (hasShopMapping !== undefined) {
     and.push({
       shopProductMappings: hasShopMapping === false
         ? { none: shopMappingFilter }
         : { some: shopMappingFilter },
     });
+  } else if (shopId && shopScope !== 'all') {
+    // Sam shopId oznacza "produkty powiązane z tym sklepem"
+    and.push({ shopProductMappings: { some: shopMappingFilter } });
   }
   // Stan w sklepie czytamy z externalActive, czyli z tego, co ostatni import
   // zobaczyl w PrestaShop. isActive mowi tylko, czy mapowanie zyje.
@@ -416,6 +426,7 @@ export interface ProductViewCountsQuery {
   search?: string;
   catalogId?: string;
   shopId?: string;
+  shopScope?: 'mapped' | 'all';
   /**
    * Zaweza wylacznie widok "hurtownia - do przegladu". Reszta chipow ma zostac
    * globalna, inaczej licznik "Wszystkie" zmienialby sie przy wyborze hurtowni.

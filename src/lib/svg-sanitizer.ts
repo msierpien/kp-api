@@ -278,6 +278,44 @@ function tintElements(
         attrs = ` fill="currentColor"${attrs}`;
         touched = true;
       }
+
+      // Obrys na ksztalcie, ktory juz idzie za kolorem wiodacym.
+      //
+      // Silhouette Studio zapisuje TE SAMA sciezke raz jako grafike
+      // (wypelnienie) i raz jako linie noza - cienki obrys w umownym kolorze,
+      // np. `stroke="#FF0000" stroke-width="0.1"`. `CUT_PATH` takiego wiersza
+      // nie widzi, bo tamten wzorzec szuka obrysu BEZ wypelnienia, a tu
+      // wypelnienie jest. Zostawiony obrys wychodzi z drukarki jako czerwony
+      // wlos i nie slucha pokretla koloru wiodacego.
+      //
+      // Zamiast zgadywac, ktory hex jest "kolorem noza" (paleta warstw
+      // w Studio jest dowolna - patrz komentarz przy CUT_PATH), idziemy za
+      // znaczeniem `currentColor`: ksztalt oddany pod kolor wiodacy ma isc za
+      // nim CALY, razem z obrysem.
+      //
+      // Cena: ozdobnik swiadomie dwubarwny (bordowe wypelnienie + zlota
+      // kreska) splaszczy sie do jednego koloru. Dlatego dzieje sie to
+      // wylacznie przy `tintable`, czyli na wyrazne zyczenie, a panel pokazuje
+      // liczbe ruszonych elementow.
+      const fillFollowsTint =
+        /\bfill\s*=\s*(["'])\s*currentColor\s*\1/i.test(attrs) || /\bfill\s*:\s*currentColor/i.test(attrs);
+
+      if (fillFollowsTint) {
+        attrs = attrs.replace(/\bstroke\s*=\s*(["'])([\s\S]*?)\1/gi, (declaration, quote, color: string) => {
+          if (!isTintableColor(color)) return declaration;
+          touched = true;
+          return `stroke=${quote}currentColor${quote}`;
+        });
+
+        attrs = attrs.replace(/\bstyle\s*=\s*(["'])([\s\S]*?)\1/gi, (declaration, quote, value: string) => {
+          const next = value.replace(/\bstroke\s*:\s*([^;]+)/gi, (stroke, color: string) => {
+            if (!isTintableColor(color)) return stroke;
+            touched = true;
+            return 'stroke:currentColor';
+          });
+          return next === value ? declaration : `style=${quote}${next}${quote}`;
+        });
+      }
     }
 
     if (touched) tinted += 1;

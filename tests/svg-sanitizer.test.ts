@@ -165,3 +165,50 @@ test('slug kategorii jest bezogonkowy i stabilny', () => {
   assert.equal(slugifyCategory('Zażółć gęślą'), 'ZAZOLC_GESLA');
   assert.equal(slugifyCategory('!!!'), '');
 });
+
+test('linia noza z eksportu Silhouette idzie za kolorem wiodacym', () => {
+  // Studio zapisuje TE SAMA sciezke jako grafike (wypelnienie) i jako linie
+  // ciecia (cienki obrys w umownym kolorze). `CUT_PATH` jej nie widzi, bo tam
+  // wzorzec szuka obrysu BEZ wypelnienia - zostawiony obrys wychodzil
+  // z drukarki jako czerwony wlos gluchy na pokretlo koloru.
+  const raw = wrap(
+    '<defs><path id="p" fill="currentColor" stroke="#FF0000" stroke-width="0.1" d="M0 0"/></defs><g><use xlink:href="#p"/></g>'
+  );
+
+  const prepared = prepareSvgArtwork(sanitizeSvg(raw), { tintable: true });
+  assert.ok(prepared.svg.includes('stroke="currentColor"'), 'obrys oddany pod kolor wiodacy');
+  assert.ok(!/#FF0000/i.test(prepared.svg), 'po pliku nie zostaje slad koloru noza');
+  assert.equal(prepared.removedCutPaths, 0, 'sciezka niesie grafike, wiec nie kasujemy jej w calosci');
+  assert.equal(prepared.tintableFills, 1);
+
+  const painted = applySvgTint(prepared.svg, '#a3123a');
+  assert.ok(!/currentColor/i.test(painted), 'i wypelnienie, i obrys biora kolor warstwy');
+});
+
+test('obrys zostaje, kiedy wypelnienie nie idzie pod kolor wiodacy', () => {
+  // Biel zostaje biela (bywa swiadomym przykryciem), wiec ksztalt nie nalezy
+  // do rysunku prowadzonego kolorem wiodacym - jego obrys tez zostaje wlasny.
+  const raw = wrap('<path fill="#ffffff" stroke="#2f3437" d="M0 0"/>');
+
+  const prepared = prepareSvgArtwork(sanitizeSvg(raw), { tintable: true });
+  assert.ok(prepared.svg.includes('stroke="#2f3437"'));
+  assert.ok(prepared.svg.includes('fill="#ffffff"'));
+  assert.equal(prepared.tintableFills, 0);
+});
+
+test('czarne wypelnienie zabiera obrys ze soba pod kolor wiodacy', () => {
+  const raw = wrap('<path fill="#000000" stroke="black" d="M0 0"/>');
+
+  const prepared = prepareSvgArtwork(sanitizeSvg(raw), { tintable: true });
+  assert.ok(prepared.svg.includes('fill="currentColor"'));
+  assert.ok(prepared.svg.includes('stroke="currentColor"'));
+  assert.equal(prepared.tintableFills, 1, 'liczymy element, nie osobno wypelnienie i obrys');
+});
+
+test('bialy obrys zostaje bialy', () => {
+  // Ta sama zasada, co przy wypelnieniu: biel bywa swiadomym przykryciem.
+  const raw = wrap('<path fill="#000000" stroke="#ffffff" d="M0 0"/>');
+
+  const prepared = prepareSvgArtwork(sanitizeSvg(raw), { tintable: true });
+  assert.ok(prepared.svg.includes('stroke="#ffffff"'));
+});

@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import prisma from '../../lib/prisma';
 import { getTenantId } from '../../lib/tenant-context';
-import { buildProductsWhere, type ProductsWhereQuery } from './warehouse-products.service';
+import { resolveProductsWhere, type ProductsWhereQuery } from './warehouse-products.service';
 import { buildPrestaShopClient } from './shop-product-publication.service';
 import { addWarehouseCleanupJob } from '../queue/warehouse-cleanup.queue';
 
@@ -121,7 +121,9 @@ export async function resolveSelectionProductIds(
     return found.map((product) => product.id);
   }
 
-  const where = buildProductsWhere(selection.filters ?? {}, tenantId);
+  // Ta sama sciezka, co lista - razem z prefiltrem surowego SQL. Inaczej zbior
+  // do wyczyszczenia bylby szerszy niz to, co uzytkownik widzial na ekranie.
+  const where = await resolveProductsWhere(selection.filters ?? {}, tenantId);
   const found = await prisma.warehouseProduct.findMany({
     where,
     select: { id: true },

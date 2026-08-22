@@ -122,6 +122,26 @@ export interface ProductsQuery {
   /** Domyslnie 'active': zarchiwizowane nie pokazuja sie nigdzie poza Archiwum. */
   archiveStatus?: 'active' | 'archived' | 'all';
   missingPrice?: 'purchase' | 'retail';
+  /** Kilka hurtowni naraz; ma pierwszenstwo przed wholesaleProviderId. */
+  wholesaleProviderIds?: string[];
+  purchasePriceMin?: number;
+  purchasePriceMax?: number;
+  retailPriceMin?: number;
+  retailPriceMax?: number;
+  /** Marza w procentach liczona z ceny zakupu: (sprzedaz - zakup) / zakup. */
+  marginMin?: number;
+  marginMax?: number;
+  /** Produkt ma oferte u dokladnie jednej hurtowni albo u kilku. */
+  wholesaleOfferScope?: 'single' | 'multiple';
+  /** Produkt jest w jednym sklepie albo w kilku. */
+  shopMappingScope?: 'single' | 'multiple';
+  /** Cena w sklepie rozjechala sie z cena sprzedazy w panelu. */
+  shopPriceMismatch?: boolean;
+  hasPersonalizationTemplate?: boolean;
+  /** Sprzedane w ostatnich N dniach. */
+  soldSinceDays?: number;
+  createdFrom?: string;
+  createdTo?: string;
   stockBelow?: number;
   hasBarcode?: boolean;
   hasShopMapping?: boolean;
@@ -229,6 +249,15 @@ export function buildProductsWhere(query: ProductsWhereQuery, tenantId: string |
     shopStatus,
     noSalesSinceMonths,
     archiveStatus,
+    wholesaleProviderIds,
+    purchasePriceMin,
+    purchasePriceMax,
+    retailPriceMin,
+    retailPriceMax,
+    hasPersonalizationTemplate,
+    soldSinceDays,
+    createdFrom,
+    createdTo,
     missingPrice,
     stockBelow,
     hasBarcode,
@@ -284,10 +313,13 @@ export function buildProductsWhere(query: ProductsWhereQuery, tenantId: string |
     and.push({ shopProductMappings: { none: shopMappingFilter } });
   }
 
+  const providerIds = wholesaleProviderIds?.length
+    ? wholesaleProviderIds
+    : wholesaleProviderId ? [wholesaleProviderId] : [];
   const activeWholesaleMappingFilter = {
     isActive: true,
     provider: { isActive: true },
-    ...(wholesaleProviderId ? { providerId: wholesaleProviderId } : {}),
+    ...(providerIds.length ? { providerId: { in: providerIds } } : {}),
   };
   const availableWholesaleMappingFilter = {
     ...activeWholesaleMappingFilter,
@@ -308,7 +340,7 @@ export function buildProductsWhere(query: ProductsWhereQuery, tenantId: string |
         ? { some: activeWholesaleMappingFilter }
         : { none: activeWholesaleMappingFilter },
     });
-  } else if (wholesaleProviderId) {
+  } else if (providerIds.length) {
     and.push({ wholesaleMappings: { some: activeWholesaleMappingFilter } });
   }
   if (search) {
@@ -318,6 +350,34 @@ export function buildProductsWhere(query: ProductsWhereQuery, tenantId: string |
       { barcodes: { some: { isActive: true, ean: { contains: search, mode: 'insensitive' } } } },
     ];
   }
+
+  const priceRange = (min?: number, max?: number) => {
+    const range: Record<string, number> = {};
+    if (min !== undefined) range.gte = min;
+    if (max !== undefined) range.lte = max;
+    return Object.keys(range).length ? range : undefined;
+  };
+  const purchaseRange = priceRange(purchasePriceMin, purchasePriceMax);
+  if (purchaseRange) and.push({ purchasePrice: purchaseRange });
+  const retailRange = priceRange(retailPriceMin, retailPriceMax);
+  if (retailRange) and.push({ retailPrice: retailRange });
+
+  if (hasPersonalizationTemplate !== undefined) {
+    const withTemplate = { ...shopMappingFilter, personalizationTemplateId: { not: null } };
+    and.push({
+      shopProductMappings: hasPersonalizationTemplate ? { some: withTemplate } : { none: withTemplate },
+    });
+  }
+
+  if (soldSinceDays !== undefined && soldSinceDays > 0) {
+    const since = new Date(Date.now() - soldSinceDays * 24 * 60 * 60 * 1000);
+    and.push({ orderItems: { some: { order: { createdAtShop: { gte: since } } } } });
+  }
+
+  const createdRange: Record<string, Date> = {};
+  if (createdFrom) createdRange.gte = new Date(createdFrom);
+  if (createdTo) createdRange.lte = new Date(createdTo);
+  if (Object.keys(createdRange).length) and.push({ createdAt: createdRange });
 
   if (noSalesSinceMonths !== undefined && noSalesSinceMonths > 0) {
     const since = new Date();
@@ -401,12 +461,118 @@ function withBestWholesaleOffer<T extends ProductWithWholesaleMappings>(product:
   };
 }
 
+/**
+ * Filtry, ktorych Prisma nie wyrazi w `where`: arytmetyka miedzy kolumnami
+ * (marza) i licznosc relacji (ile hurtowni, ile sklepow). Kazdy z nich zwraca
+ * zbior id produktow, ktore potem trafiaja do zwyklego zapytania jako
+ * `id: { in }` - dzieki temu reszta filtrow, sortowanie i stronicowanie
+ * zostaja bez zmian.
+ *
+ * Zwraca null, gdy zaden taki filtr nie jest aktywny, i pusta tablice, gdy
+ * aktywny jest, ale nic nie pasuje.
+ */
+async function rawFilterProductIds(
+  query: ProductsWhereQuery,
+  tenantId: string | null | undefined,
+): Promise<string[] | null> {
+  const { marginMin, marginMax, wholesaleOfferScope, shopMappingScope, shopPriceMismatch, shopId } = query;
+  const marginActive = marginMin !== undefined || marginMax !== undefined;
+  if (!marginActive && !wholesaleOfferScope && !shopMappingScope && !shopPriceMismatch) return null;
+
+  const tenantProducts = tenantId ? Prisma.sql`AND p.tenant_id = ${tenantId}` : Prisma.empty;
+  const sets: string[][] = [];
+
+  if (marginActive) {
+    const minCondition = marginMin === undefined
+      ? Prisma.empty
+      : Prisma.sql`AND ((p.retail_price - p.purchase_price) / p.purchase_price) * 100 >= ${marginMin}`;
+    const maxCondition = marginMax === undefined
+      ? Prisma.empty
+      : Prisma.sql`AND ((p.retail_price - p.purchase_price) / p.purchase_price) * 100 <= ${marginMax}`;
+    const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT p.id FROM warehouse_products p
+      WHERE p.purchase_price IS NOT NULL AND p.purchase_price > 0 AND p.retail_price IS NOT NULL
+      ${minCondition}
+      ${maxCondition}
+      ${tenantProducts}
+    `);
+    sets.push(rows.map((row) => row.id));
+  }
+
+  if (wholesaleOfferScope) {
+    const having = wholesaleOfferScope === 'multiple'
+      ? Prisma.sql`HAVING COUNT(DISTINCT m.provider_id) > 1`
+      : Prisma.sql`HAVING COUNT(DISTINCT m.provider_id) = 1`;
+    const tenantMappings = tenantId ? Prisma.sql`AND m.tenant_id = ${tenantId}` : Prisma.empty;
+    const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT m.warehouse_product_id AS id
+      FROM wholesale_product_mappings m
+      JOIN wholesale_providers wp ON wp.id = m.provider_id AND wp.is_active
+      WHERE m.is_active AND m.warehouse_product_id IS NOT NULL
+      ${tenantMappings}
+      GROUP BY m.warehouse_product_id
+      ${having}
+    `);
+    sets.push(rows.map((row) => row.id));
+  }
+
+  if (shopMappingScope) {
+    const having = shopMappingScope === 'multiple'
+      ? Prisma.sql`HAVING COUNT(DISTINCT m.shop_id) > 1`
+      : Prisma.sql`HAVING COUNT(DISTINCT m.shop_id) = 1`;
+    const tenantMappings = tenantId ? Prisma.sql`AND m.tenant_id = ${tenantId}` : Prisma.empty;
+    const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT m.warehouse_product_id AS id
+      FROM shop_product_mappings m
+      WHERE m.is_active AND m.warehouse_product_id IS NOT NULL
+      ${tenantMappings}
+      GROUP BY m.warehouse_product_id
+      ${having}
+    `);
+    sets.push(rows.map((row) => row.id));
+  }
+
+  if (shopPriceMismatch) {
+    const tenantMappings = tenantId ? Prisma.sql`AND m.tenant_id = ${tenantId}` : Prisma.empty;
+    const shopCondition = shopId ? Prisma.sql`AND m.shop_id = ${shopId}` : Prisma.empty;
+    const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT DISTINCT m.warehouse_product_id AS id
+      FROM shop_product_mappings m
+      JOIN warehouse_products p ON p.id = m.warehouse_product_id
+      WHERE m.is_active
+        AND m.external_price IS NOT NULL
+        AND p.retail_price IS NOT NULL
+        AND m.external_price IS DISTINCT FROM p.retail_price
+      ${tenantMappings}
+      ${shopCondition}
+    `);
+    sets.push(rows.map((row) => row.id));
+  }
+
+  // Filtry lacza sie przez AND, wiec bierzemy czesc wspolna.
+  return sets.reduce((acc, ids) => {
+    const current = new Set(ids);
+    return acc.filter((id) => current.has(id));
+  });
+}
+
+/**
+ * Sklada `where` listy produktow razem z prefiltrem surowego SQL. Uzywac
+ * wszedzie tam, gdzie zapytanie moze zawierac filtry z rawFilterProductIds.
+ */
+export async function resolveProductsWhere(query: ProductsWhereQuery, tenantId: string | null | undefined) {
+  const where = buildProductsWhere(query, tenantId);
+  const rawIds = await rawFilterProductIds(query, tenantId);
+  if (rawIds === null) return where;
+  return { ...where, id: { in: rawIds } };
+}
+
 export async function getProducts(query: ProductsQuery = {}) {
   const tenantId = requireTenantId();
   const { page = 1, limit = 50, shopId } = query;
   const skip = (page - 1) * limit;
 
-  const where = buildProductsWhere(query, tenantId);
+  const where = await resolveProductsWhere(query, tenantId);
 
   const [data, total] = await Promise.all([
     prisma.warehouseProduct.findMany({
@@ -422,7 +588,23 @@ export async function getProducts(query: ProductsQuery = {}) {
   return { data: data.map(withBestWholesaleOffer), total, page, limit, totalPages: Math.ceil(total / limit) };
 }
 
-export interface ProductViewCountsQuery {
+export interface ProductViewCountsQuery extends Pick<
+  ProductsQuery,
+  | 'wholesaleProviderIds'
+  | 'purchasePriceMin'
+  | 'purchasePriceMax'
+  | 'retailPriceMin'
+  | 'retailPriceMax'
+  | 'marginMin'
+  | 'marginMax'
+  | 'wholesaleOfferScope'
+  | 'shopMappingScope'
+  | 'shopPriceMismatch'
+  | 'hasPersonalizationTemplate'
+  | 'soldSinceDays'
+  | 'createdFrom'
+  | 'createdTo'
+> {
   search?: string;
   catalogId?: string;
   shopId?: string;
@@ -465,21 +647,26 @@ export async function getProductViewCounts(query: ProductViewCountsQuery = {}): 
   const { wholesaleProviderId, ...sharedQuery } = query;
   const viewIds = Object.keys(PRODUCT_VIEW_QUERIES) as Array<keyof typeof PRODUCT_VIEW_QUERIES>;
 
+  // Prefiltr surowego SQL liczymy raz: definicje widokow go nie uzywaja, wiec
+  // dla wszystkich jest ten sam zbior id z filtrow ustawionych przez uzytkownika.
+  const rawIds = await rawFilterProductIds(sharedQuery, tenantId);
+
   const counts = await prisma.$transaction(
     viewIds.map((viewId) => {
       const providerScoped = PROVIDER_SCOPED_VIEWS.has(viewId);
       if (providerScoped && !wholesaleProviderId) {
         return prisma.warehouseProduct.count({ where: { id: '' } });
       }
+      const where = buildProductsWhere(
+        {
+          ...PRODUCT_VIEW_QUERIES[viewId],
+          ...sharedQuery,
+          ...(providerScoped ? { wholesaleProviderId } : {}),
+        },
+        tenantId,
+      );
       return prisma.warehouseProduct.count({
-        where: buildProductsWhere(
-          {
-            ...PRODUCT_VIEW_QUERIES[viewId],
-            ...sharedQuery,
-            ...(providerScoped ? { wholesaleProviderId } : {}),
-          },
-          tenantId,
-        ),
+        where: rawIds === null ? where : { ...where, id: { in: rawIds } },
       });
     }),
   );

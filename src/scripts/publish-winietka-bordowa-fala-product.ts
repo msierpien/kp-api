@@ -122,6 +122,49 @@ const DESCRIPTION = `<h2>Winietka na stół „Bordowa Fala”</h2>
 // --- Zdjecia produktu --------------------------------------------------
 
 /**
+ * Ile razy szerszy od KARTY ma byc kadr danego ujecia.
+ *
+ * Winietka 105 x 50 mm zajmuje na scenie zdjeciowej niecala polowe szerokosci
+ * i ledwie czwarta czesc wysokosci - w pelnym kadrze ginie miedzy talerzem
+ * a serwetka. Kadr liczymy od naroznikow powierzchni mockupu, wiec zmiana
+ * mockupu w panelu nie wymaga tu zadnej korekty.
+ *
+ * 1,0 = sama karta bez marginesu. Brak wpisu = pelny kadr sceny.
+ */
+const PHOTO_FRAME_RATIO: Record<number, number> = {
+  0: 1.45, // Ujecie 1 - okladka, karta ma byc czytelna z miniatury
+}
+
+/**
+ * Wycinek wokol karty, w proporcji ORYGINALU - obie fotografie zostaja wtedy
+ * tego samego ksztaltu i galeria nie skacze. Kadr jest docinany do krawedzi
+ * zdjecia, a przy okazji przesuwany do srodka, zeby przyciecie z jednej strony
+ * nie zjadalo marginesu z drugiej.
+ */
+function surfaceCrop(mockup: any, width: number, height: number, ratio?: number) {
+  const corners: Array<{ x: number; y: number }> = mockup?.surfaces?.[0]?.corners ?? []
+  if (!ratio || corners.length === 0) return { x: 0, y: 0, width, height }
+
+  const xs = corners.map((corner) => corner.x)
+  const ys = corners.map((corner) => corner.y)
+  const cardWidth = (Math.max(...xs) - Math.min(...xs)) * width
+  const centerX = ((Math.min(...xs) + Math.max(...xs)) / 2) * width
+  const centerY = ((Math.min(...ys) + Math.max(...ys)) / 2) * height
+
+  const cropWidth = Math.min(width, Math.round(cardWidth * ratio))
+  const cropHeight = Math.min(height, Math.round((cropWidth * height) / width))
+
+  const clamp = (value: number, max: number) => Math.max(0, Math.min(value, max))
+
+  return {
+    x: clamp(Math.round(centerX - cropWidth / 2), width - cropWidth),
+    y: clamp(Math.round(centerY - cropHeight / 2), height - cropHeight),
+    width: cropWidth,
+    height: cropHeight,
+  }
+}
+
+/**
  * Zdjecia karty: mockupy szablonu wyrenderowane realna trescia, wiec klient
  * oglada dokladnie to, co dostanie. Brak mockupow = brak zdjec, a nie blad.
  *
@@ -152,6 +195,7 @@ async function ensureProductPhotos(layout: any, force: boolean) {
   const jobs = shots.flatMap((shot) =>
     mockups.map((mockup, index) => ({
       mockup,
+      index,
       name: `winietka-bordowa-fala-${shot.suffix}-${index + 1}.jpg`,
       answers: shot.answers,
     }))
@@ -170,8 +214,11 @@ async function ensureProductPhotos(layout: any, force: boolean) {
     // PrestaShop odrzuca pliki powyzej 2000 KB, a render PNG wazy okolo 2 MB.
     const { createCanvas, loadImage } = await import('canvas')
     const image = await loadImage(png)
-    const canvas = createCanvas(image.width, image.height)
-    canvas.getContext('2d').drawImage(image as any, 0, 0)
+    const crop = surfaceCrop(mockup, image.width, image.height, PHOTO_FRAME_RATIO[job.index])
+    const canvas = createCanvas(crop.width, crop.height)
+    canvas
+      .getContext('2d')
+      .drawImage(image as any, crop.x, crop.y, crop.width, crop.height, 0, 0, crop.width, crop.height)
 
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(absolute, canvas.toBuffer('image/jpeg', { quality: 0.9 }))
